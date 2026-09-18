@@ -1,0 +1,25 @@
+# Secretos y configuración local
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Datos y logs locales
+*.log
+data/*.db
+
+# Docker / Postgres
+pgdata/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
