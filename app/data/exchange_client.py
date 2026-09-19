@@ -121,12 +121,20 @@ def fetch_candles(
     timeframe: str,
     limit: int = 100,
     since: datetime | None = None,
+    exchange: ccxt.binance | None = None,
 ) -> list[Candle]:
     """Descarga hasta `limit` velas de `symbol` en `timeframe` desde Binance mainnet.
 
     `since`, si se pasa, debe ser un `datetime` con tzinfo (UTC recomendado);
     de lo contrario se interpretaría con ambigüedad de zona horaria, lo cual
     contradice la sección 15.3 del plan (timestamps en UTC explícito).
+
+    `exchange`, si se pasa, se reutiliza en vez de crear un cliente ccxt
+    nuevo. Importa para un backfill que hace muchas llamadas paginadas
+    seguidas: el rate-limiting interno de ccxt (`enableRateLimit`) lleva la
+    cuenta por instancia, así que crear una instancia nueva en cada llamada
+    lo dejaría sin efecto y arriesgaría un 429 de Binance a mitad de un
+    backfill grande.
     """
     _validate_symbol(symbol)
     _validate_timeframe(timeframe)
@@ -137,7 +145,7 @@ def fetch_candles(
 
     since_ms = int(since.timestamp() * 1000) if since is not None else None
 
-    exchange = get_exchange()
+    exchange = exchange if exchange is not None else get_exchange()
     raw = exchange.fetch_ohlcv(
         _to_ccxt_symbol(symbol),
         timeframe=timeframe,
