@@ -41,6 +41,18 @@ class Settings(BaseSettings):
         "ej. postgresql+psycopg://user:pass@localhost:5432/crypto_trading",
     )
 
+    # --- Opcional: solo la usan los tests, nunca la aplicación en marcha ---
+    test_database_url: str | None = Field(
+        default=None,
+        description="Cadena de conexión a la base de datos de PRUEBAS, "
+        "completamente separada de `database_url` para que los tests de "
+        "integración nunca lean ni escriban sobre datos reales. Si no se "
+        "define, `tests/conftest.py` la deriva automáticamente de "
+        "`database_url` agregando el sufijo `_test` al nombre de la base "
+        "(ver ese módulo para el porqué: un bug real donde los tests "
+        "colisionaron con velas ya backfillizadas de verdad).",
+    )
+
     # --- Binance: no se usa todavía en este entregable (Fase 1 en adelante) ---
     binance_api_key: str | None = Field(default=None)
     binance_api_secret: str | None = Field(default=None)

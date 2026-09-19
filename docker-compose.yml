@@ -11,6 +11,10 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # Crea además `crypto_trading_test` (base de pruebas, separada de la
+      # real) la primera vez que se inicializa el volumen — ver
+      # docker/init-test-db.sql y tests/conftest.py.
+      - ./docker/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U crypto -d crypto_trading"]
       interval: 5s

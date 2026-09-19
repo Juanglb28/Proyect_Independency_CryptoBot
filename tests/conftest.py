@@ -6,22 +6,63 @@ from collections.abc import Iterator
 
 import pytest
 from sqlalchemy import event
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.db.session import get_engine
+
+
+def _resolve_test_database_url(settings: Settings) -> str:
+    """Devuelve la URL de la base de datos de PRUEBAS, nunca la de la
+    aplicación real.
+
+    Bug real encontrado al correr los tests contra datos reales ya
+    backfillizados (2026-09-19): `db_engine` apuntaba directamente a
+    `settings.database_url` — la misma base que usa la app en marcha. Con
+    la base vacía esto era inofensivo, pero en cuanto existieron velas
+    reales de producción, los tests que cuentan filas por símbolo/temporalidad
+    (`db_session.query(Vela).filter_by(...).count()`) empezaron a contar
+    también las reales, y un test con una fecha fija (`test_schema_idempotency.py`)
+    chocó con una vela real ya existente en esa misma fecha — la restricción
+    única hizo exactamente lo que debía, pero contra la base equivocada.
+
+    La base de pruebas debe ser una base de datos completamente distinta,
+    nunca la misma con una tabla vaciada a mitad de la suite: eso arriesgaría
+    borrar datos reales por un bug en un test. Si `TEST_DATABASE_URL` está
+    definida, se usa tal cual (útil en CI con una base de test dedicada);
+    si no, se deriva de `DATABASE_URL` agregando el sufijo `_test` al nombre
+    de la base, así no hace falta ninguna variable de entorno nueva para el
+    caso común (ver README, sección "Tests", para el comando que crea esa
+    base una vez).
+    """
+    if settings.test_database_url:
+        return settings.test_database_url
+
+    url = make_url(settings.database_url)
+    if url.database is None:
+        raise ValueError(
+            "DATABASE_URL no incluye un nombre de base de datos; no se puede "
+            "derivar una base de pruebas. Define TEST_DATABASE_URL explícitamente."
+        )
+    # `str(url)` enmascara la contraseña (`***`) por seguridad en logs/repr —
+    # necesitamos la real para poder conectarnos.
+    return url.set(database=f"{url.database}_test").render_as_string(hide_password=False)
 
 
 @pytest.fixture(scope="session")
 def db_engine():
-    """Engine de SQLAlchemy contra la base de datos real de pruebas.
+    """Engine de SQLAlchemy contra la base de datos de PRUEBAS — NUNCA la
+    base de datos real de la aplicación (ver `_resolve_test_database_url`).
 
-    Requiere que `docker compose up -d` (o equivalente) esté corriendo y que
-    `alembic upgrade head` ya se haya aplicado — exactamente el flujo que
-    describe el README.
+    Requiere que exista la base de pruebas (por defecto `<nombre>_test`) y
+    que `alembic upgrade head` ya se haya aplicado sobre ELLA, no solo sobre
+    la base real — ver el README, sección "Tests".
     """
     settings = get_settings()
-    return get_engine(settings)
+    test_url = _resolve_test_database_url(settings)
+    test_settings = settings.model_copy(update={"database_url": test_url})
+    return get_engine(test_settings)
 
 
 @pytest.fixture()

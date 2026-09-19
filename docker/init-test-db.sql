@@ -1,0 +1,14 @@
+-- Crea la base de datos de PRUEBAS además de la real (`crypto_trading`,
+-- creada por POSTGRES_DB en docker-compose.yml).
+--
+-- Los tests de integración nunca deben correr contra la misma base que usa
+-- la aplicación real: un test que cuenta filas por símbolo/temporalidad, o
+-- que usa una fecha fija de ejemplo, puede colisionar con datos reales ya
+-- backfillizados (bug real encontrado el 2026-09-19 — ver
+-- tests/conftest.py::_resolve_test_database_url).
+--
+-- Postgres solo ejecuta los scripts de /docker-entrypoint-initdb.d/ la
+-- PRIMERA vez que se crea el volumen de datos. Si ya tienes el contenedor
+-- corriendo desde antes de este archivo, esto no se aplica solo — crea la
+-- base manualmente una vez (ver README, sección "Tests").
+CREATE DATABASE crypto_trading_test OWNER crypto;

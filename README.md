@@ -155,12 +155,43 @@ internet (trabaja solo con lo que ya está en la base de datos).
 pytest
 ```
 
-Requiere que `docker compose up -d` y `alembic upgrade head` ya se hayan
-ejecutado — los tests de integración corren contra la base de datos real,
-no contra un mock (aislados unos de otros mediante una transacción externa
-que se revierte al final de cada test, incluso si el código bajo prueba
-hizo `commit()`). Los tests de integración de `exchange_client` además
-requieren salida a internet hacia `api.binance.com` (sin API key).
+Los tests de integración corren contra Postgres real, no contra un mock —
+pero contra una base de datos **separada** de la que usa la aplicación
+(`crypto_trading_test`, no `crypto_trading`), para que nunca lean ni
+escriban sobre datos verdaderos (bug real encontrado el 2026-09-19: antes de
+esto, los tests corrían contra la misma base que ya tenía velas reales
+backfillizadas, y algunos empezaron a fallar por contar o chocar con esas
+filas reales — ver `tests/conftest.py::_resolve_test_database_url`).
+
+**Máquina limpia:** `docker compose up -d` ya crea ambas bases
+automáticamente (ver `docker/init-test-db.sql`) — solo falta aplicar las
+migraciones a las dos:
+
+```bash
+alembic upgrade head
+DATABASE_URL=postgresql+psycopg://crypto:crypto@localhost:5432/crypto_trading_test alembic upgrade head
+```
+
+(en PowerShell: `$env:DATABASE_URL="postgresql+psycopg://crypto:crypto@localhost:5432/crypto_trading_test"; alembic upgrade head`
+— y no olvides volver a abrir una terminal nueva o repetir `alembic upgrade head`
+sin la variable después, para no dejarla pisando tu `DATABASE_URL` real en esa sesión de shell.)
+
+**Si ya tenías el contenedor corriendo desde antes** (como es probablemente
+tu caso): el script de inicialización solo corre la primera vez que se crea
+el volumen, así que hay que crear la base de pruebas a mano, una sola vez:
+
+```bash
+docker exec -it crypto_trading_postgres psql -U crypto -d crypto_trading -c "CREATE DATABASE crypto_trading_test OWNER crypto;"
+```
+
+y después aplicar las migraciones a esa base con el comando de arriba.
+
+Una vez que la base de pruebas exista y tenga las migraciones aplicadas,
+`pytest` la usa automáticamente — no hace falta tocar `.env` (los tests
+aislados unos de otros mediante una transacción externa que se revierte al
+final de cada test, incluso si el código bajo prueba hizo `commit()`). Los
+tests de integración de `exchange_client` además requieren salida a
+internet hacia `api.binance.com` (sin API key).
 
 ## Estructura del proyecto
 
