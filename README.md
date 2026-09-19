@@ -78,6 +78,23 @@ Debe imprimir `OK: Conexión OK. Extensión timescaledb instalada.` y salir
 con código 0. Si falla, la causa más común es que el contenedor de Postgres
 todavía no terminó de arrancar, o que `alembic upgrade head` no se ejecutó.
 
+## Descargar velas reales (Fase 0 del plan)
+
+```bash
+python -m app.main fetch-candles BTCUSDT 1d 100
+```
+
+Descarga velas reales desde **Binance mainnet** (endpoint público de solo
+lectura, sin API key) y las imprime en la terminal. Todavía no las guarda
+en la base de datos — eso es el siguiente bloque (ingesta completa e
+idempotente). Solo acepta símbolos de la whitelist explícita
+(`app/domain/symbols.py`, sección 21 del plan) y las temporalidades `1h`,
+`4h`, `12h`, `1d` (sección 6.1 del plan); cualquier otro valor falla con un
+mensaje claro en vez de intentar adivinar.
+
+No requiere Docker ni la base de datos levantada — solo salida a internet
+hacia `api.binance.com`.
+
 ## Tests
 
 ```bash
@@ -86,13 +103,14 @@ pytest
 
 Requiere que `docker compose up -d` y `alembic upgrade head` ya se hayan
 ejecutado — los tests de integración corren contra la base de datos real,
-no contra un mock.
+no contra un mock. Los tests de integración de `exchange_client` además
+requieren salida a internet hacia `api.binance.com` (sin API key).
 
 ## Estructura del proyecto
 
 ```text
 app/
-├── main.py              # punto de entrada (comando healthcheck)
+├── main.py              # punto de entrada (comandos healthcheck, fetch-candles)
 ├── config.py             # configuración tipada (pydantic-settings)
 ├── logging_config.py     # logging estructurado en JSON
 ├── db/
@@ -101,13 +119,17 @@ app/
 │   └── models/            # velas, indicadores, eventos, ciclos_analisis
 ├── repositories/
 │   └── health.py          # health check de base de datos
-├── domain/, data/, ai/, execution/, results/, orchestration/, ui/
+├── domain/
+│   └── symbols.py         # whitelist explícita de símbolos operables (sección 21)
+├── data/
+│   └── exchange_client.py # cliente mínimo de Binance mainnet (solo velas, solo lectura)
+├── ai/, execution/, results/, orchestration/, ui/
 │   # paquetes reservados por la arquitectura del plan (sección 15.1),
 │   # todavía vacíos: se irán poblando fase a fase.
 migrations/                # Alembic
 tests/
-├── unit/                  # no requieren base de datos
-└── integration/           # requieren Postgres real (docker compose)
+├── unit/                  # no requieren red ni base de datos
+└── integration/           # requieren Postgres real y/o red hacia Binance
 ```
 
 La estructura completa de directorios (incluyendo los paquetes aún vacíos)
@@ -134,22 +156,31 @@ puede y no puede hacer cada capa.
   `timescaledb`, tablas `velas` (hipertabla), `indicadores`, `eventos`,
   `ciclos_analisis`.
 - Health check de base de datos (conexión + extensión TimescaleDB).
-- Tests unitarios (configuración) y de integración (conexión a la base de
-  datos, idempotencia de la restricción única de `velas`).
+- Whitelist explícita de 20 símbolos (`app/domain/symbols.py`, sección 21
+  del plan): las 20 principales criptomonedas por market cap con par spot
+  USDT activo en Binance, excluyendo stablecoins y activos deslistados.
+- Cliente mínimo de Binance mainnet de solo lectura (`app/data/exchange_client.py`,
+  vía `ccxt`): descarga velas reales, sin API key, sin ejecutar órdenes.
+  Comando `python -m app.main fetch-candles`.
+- Tests unitarios (configuración, validaciones del cliente de Binance,
+  dispatch de `main`) y de integración (conexión a la base de datos,
+  idempotencia de la restricción única de `velas`, descarga real de velas).
 
 ## Qué NO está implementado
 
 Deliberadamente fuera de alcance de este entregable (sección 29 del master
 prompt — "no sobreimplementar"):
 
-- Ingesta de velas desde Binance.
+- Ingesta persistente de velas (guardar en la tabla `velas` de forma
+  incremental e idempotente) — `fetch-candles` hoy solo imprime, no guarda.
 - Cálculo de indicadores técnicos.
 - Catálogo de eventos y correlación histórica.
 - Agentes de IA (interviewer, cuantitativo, eventos, auditor, consolidador).
-- Motor de ejecución, órdenes, posiciones y monitoreo.
+- Motor de ejecución, órdenes, posiciones y monitoreo — ninguna credencial
+  de Binance se usa todavía; el cliente de velas no la necesita.
 - Cálculo de resultados y métricas de performance.
 - Interfaz Streamlit.
-- Cualquier conexión a Binance, Anthropic o Telegram.
+- Cualquier conexión a Anthropic o Telegram.
 
 ## Cómo verificar que el entorno funciona (resumen)
 

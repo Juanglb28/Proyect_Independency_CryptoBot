@@ -11,6 +11,13 @@ dependencies = [
     "psycopg[binary]>=3.1,<4.0",
     "pydantic>=2.6,<3.0",
     "pydantic-settings>=2.2,<3.0",
+    # ccxt: cliente de Binance para la capa `data` (secciones 9 y 15.10 del
+    # plan lo nombran explícitamente como el cliente previsto: "Cliente de
+    # Binance/ccxt"). Se prefiere sobre llamadas REST manuales porque ya
+    # resuelve firmado de peticiones autenticadas (necesario en fases
+    # posteriores), límites de tasa y parseo de OHLCV de forma madura y
+    # probada, evitando reimplementar esa lógica a mano.
+    "ccxt>=4.5,<5.0",
 ]
 
 [project.optional-dependencies]
