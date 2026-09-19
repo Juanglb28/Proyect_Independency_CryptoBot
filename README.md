@@ -117,6 +117,38 @@ probar rápido con una ventana o un subconjunto más chicos primero.
 Requiere Docker levantado y la migración aplicada (guarda en la base de
 datos), además de salida a internet hacia `api.binance.com`.
 
+## Cálculo de indicadores (Paso 4 del plan)
+
+```bash
+python -m app.main calculate-indicators BTCUSDT 1d
+```
+
+Lee las velas ya guardadas de `symbol`/`timeframe` (no descarga nada de
+Binance — corre primero el backfill si hace falta), calcula los indicadores
+deterministas de la sección 6.1 del plan y los guarda en la tabla
+`indicadores`:
+
+- RSI-14 y ATR-14 (método de Wilder), en cualquier temporalidad.
+- Medias móviles SMA-90/120/180, en cualquier temporalidad.
+- Volumen relativo (volumen de la vela ÷ SMA-30 de volumen), en cualquier
+  temporalidad.
+- Distancia al ATH y al máximo de 90 días — **solo** en velas diarias
+  (`1d`), tal como fija la sección 6.1.
+
+Imprime el último valor de cada indicador para poder compararlo a mano
+contra TradingView — la Fase 1 del plan exige esa validación manual antes
+de seguir avanzando ("Hecho cuando: tus números coinciden con
+TradingView"). Es idempotente igual que el backfill de velas: recalcular
+sobre las mismas velas no duplica ningún valor.
+
+**Limitación conocida y documentada** (no un bug): "distancia al ATH" usa
+el máximo dentro de la ventana de velas efectivamente ingerida (~2 años),
+no el máximo histórico real desde que el activo empezó a cotizar — ver el
+docstring de `app/data/indicator_calculator.py` para el detalle.
+
+Requiere Docker levantado y la migración aplicada. No necesita salida a
+internet (trabaja solo con lo que ya está en la base de datos).
+
 ## Tests
 
 ```bash
@@ -144,11 +176,13 @@ app/
 ├── domain/
 │   └── symbols.py         # whitelist explícita de símbolos operables (sección 21)
 ├── data/
-│   ├── exchange_client.py   # cliente mínimo de Binance mainnet (velas, solo lectura)
-│   └── candle_ingestion.py  # paginación + backfill idempotente hacia `velas`
+│   ├── exchange_client.py     # cliente mínimo de Binance mainnet (velas, solo lectura)
+│   ├── candle_ingestion.py    # paginación + backfill idempotente hacia `velas`
+│   └── indicator_calculator.py  # RSI/ATR/SMA/volumen relativo/distancia a máximos (deterministas)
 ├── repositories/
 │   ├── health.py          # health check de base de datos
-│   └── candles.py         # persistencia idempotente de velas (ON CONFLICT DO NOTHING)
+│   ├── candles.py         # persistencia + lectura idempotente de velas
+│   └── indicators.py      # persistencia idempotente de indicadores
 ├── ai/, execution/, results/, orchestration/, ui/
 │   # paquetes reservados por la arquitectura del plan (sección 15.1),
 │   # todavía vacíos: se irán poblando fase a fase.
@@ -195,11 +229,20 @@ puede y no puede hacer cada capa.
   guarda en `velas` con `INSERT ... ON CONFLICT DO NOTHING`, así que un
   reintento tras un corte nunca duplica una vela. Comando
   `python -m scripts.backfill_candles`.
+- Cálculo determinista de indicadores (`app/data/indicator_calculator.py`
+  + `app/repositories/indicators.py`, sección 6.1 del plan): RSI-14 y
+  ATR-14 (método de Wilder), SMA-90/120/180, volumen relativo, y en
+  diaria además distancia al ATH y al máximo de 90 días. Comando
+  `python -m app.main calculate-indicators`. Falta todavía la validación
+  manual contra TradingView (Fase 1 del plan) y el cálculo masivo sobre
+  los 20 símbolos históricos.
 - Tests unitarios (configuración, validaciones del cliente de Binance,
   dispatch de `main`, lógica de paginación del backfill con una fuente
-  falsa) y de integración (conexión a la base de datos, idempotencia de
-  la restricción única de `velas`, descarga real de velas, backfill
-  completo incluyendo reintento sin duplicación).
+  falsa, fórmulas de indicadores contra casos calculados a mano) y de
+  integración (conexión a la base de datos, idempotencia de las
+  restricciones únicas de `velas` e `indicadores`, descarga real de
+  velas, backfill completo incluyendo reintento sin duplicación,
+  pipeline completo de cálculo de indicadores).
 
 ## Qué NO está implementado
 
@@ -208,7 +251,12 @@ prompt — "no sobreimplementar"):
 
 - Actualización incremental programada (correr el backfill solo, sin un
   scheduler; APScheduler queda para cuando exista el orquestador).
-- Cálculo de indicadores técnicos.
+- Validación manual de indicadores contra TradingView (`scripts/verify_indicators.py`
+  todavía no existe) y cálculo masivo de indicadores sobre todo el
+  histórico ya ingerido — ambos son el siguiente bloque.
+- Fórmula del pre-filtro que combina los indicadores (la sección 6.1 del
+  plan la deja explícitamente pendiente "hasta ver estos valores
+  corriendo con datos reales").
 - Catálogo de eventos y correlación histórica.
 - Agentes de IA (interviewer, cuantitativo, eventos, auditor, consolidador).
 - Motor de ejecución, órdenes, posiciones y monitoreo — ninguna credencial

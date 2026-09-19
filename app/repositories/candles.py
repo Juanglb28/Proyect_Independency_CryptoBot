@@ -8,6 +8,7 @@ eso vive en `app/data/candle_ingestion.py`.
 
 from __future__ import annotations
 
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -56,3 +57,39 @@ def save_candles(session: Session, candles: list[Candle]) -> int:
     inserted_count = len(result.fetchall())
     session.flush()
     return inserted_count
+
+
+def get_candles(session: Session, symbol: str, timeframe: str) -> list[Candle]:
+    """Lee todas las velas guardadas de `symbol`/`timeframe`, ordenadas
+    ascendentemente por `open_time`.
+
+    El cálculo de indicadores (`app/data/indicator_calculator.py`) exige
+    ese orden: es el mismo orden en que ocurrió el mercado, y ningún
+    indicador puede calcularse usando datos que en ese instante todavía no
+    existían (sección 15 del plan, look-ahead bias).
+
+    Devuelve `Candle` (el mismo TypedDict de `exchange_client.py`), no el
+    modelo ORM `Vela`: así `app/data/indicator_calculator.py`, que consume
+    este resultado, no necesita importar SQLAlchemy — igual que
+    `candle_ingestion.py` ya mantiene la capa `data` sin depender de la
+    capa de persistencia.
+    """
+    statement = (
+        select(Vela)
+        .where(Vela.symbol == symbol, Vela.timeframe == timeframe)
+        .order_by(Vela.open_time.asc())
+    )
+    rows = session.execute(statement).scalars().all()
+    return [
+        Candle(
+            symbol=row.symbol,
+            timeframe=row.timeframe,
+            open_time=row.open_time,
+            open=row.open,
+            high=row.high,
+            low=row.low,
+            close=row.close,
+            volume=row.volume,
+        )
+        for row in rows
+    ]
