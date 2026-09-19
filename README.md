@@ -149,6 +149,19 @@ docstring de `app/data/indicator_calculator.py` para el detalle.
 Requiere Docker levantado y la migración aplicada. No necesita salida a
 internet (trabaja solo con lo que ya está en la base de datos).
 
+### Cálculo masivo (los 20 símbolos históricos)
+
+```bash
+python -m scripts.calculate_indicators
+```
+
+Corre `calculate-indicators` internamente para las 80 combinaciones
+(20 símbolos x 4 temporalidades), sobre las velas que ya dejó el backfill.
+Como el backfill, hace `commit()` después de cada combinación — no al
+final de todas —, así que un corte a mitad de camino no pierde el progreso
+y volver a correrlo no duplica nada. Una combinación sin velas guardadas
+todavía se reporta como "sin velas guardadas" en vez de fallar.
+
 ## Tests
 
 ```bash
@@ -209,7 +222,8 @@ app/
 ├── data/
 │   ├── exchange_client.py     # cliente mínimo de Binance mainnet (velas, solo lectura)
 │   ├── candle_ingestion.py    # paginación + backfill idempotente hacia `velas`
-│   └── indicator_calculator.py  # RSI/ATR/SMA/volumen relativo/distancia a máximos (deterministas)
+│   ├── indicator_calculator.py  # RSI/ATR/SMA/volumen relativo/distancia a máximos (deterministas, puro)
+│   └── indicator_pipeline.py    # orquesta el cálculo sobre muchas combinaciones + persistencia
 ├── repositories/
 │   ├── health.py          # health check de base de datos
 │   ├── candles.py         # persistencia + lectura idempotente de velas
@@ -219,7 +233,8 @@ app/
 │   # todavía vacíos: se irán poblando fase a fase.
 migrations/                # Alembic
 scripts/
-└── backfill_candles.py    # CLI: backfill histórico completo
+├── backfill_candles.py     # CLI: backfill histórico completo
+└── calculate_indicators.py # CLI: cálculo masivo de indicadores
 tests/
 ├── unit/                  # no requieren red ni base de datos
 └── integration/           # requieren Postgres real y/o red hacia Binance
@@ -261,12 +276,14 @@ puede y no puede hacer cada capa.
   reintento tras un corte nunca duplica una vela. Comando
   `python -m scripts.backfill_candles`.
 - Cálculo determinista de indicadores (`app/data/indicator_calculator.py`
-  + `app/repositories/indicators.py`, sección 6.1 del plan): RSI-14 y
-  ATR-14 (método de Wilder), SMA-90/120/180, volumen relativo, y en
-  diaria además distancia al ATH y al máximo de 90 días. Comando
-  `python -m app.main calculate-indicators`. Falta todavía la validación
-  manual contra TradingView (Fase 1 del plan) y el cálculo masivo sobre
-  los 20 símbolos históricos.
+  + `app/data/indicator_pipeline.py` + `app/repositories/indicators.py`,
+  sección 6.1 del plan): RSI-14 y ATR-14 (método de Wilder),
+  SMA-90/120/180, volumen relativo, y en diaria además distancia al ATH y
+  al máximo de 90 días. Comando `python -m app.main calculate-indicators`
+  para un símbolo/temporalidad, `python -m scripts.calculate_indicators`
+  para las 80 combinaciones. SMA-90 validado a mano contra TradingView
+  (BTC/USDT diario, 2026-09-19) dentro del margen esperado por comparar
+  contra una vela todavía sin cerrar.
 - Tests unitarios (configuración, validaciones del cliente de Binance,
   dispatch de `main`, lógica de paginación del backfill con una fuente
   falsa, fórmulas de indicadores contra casos calculados a mano) y de
@@ -282,9 +299,9 @@ prompt — "no sobreimplementar"):
 
 - Actualización incremental programada (correr el backfill solo, sin un
   scheduler; APScheduler queda para cuando exista el orquestador).
-- Validación manual de indicadores contra TradingView (`scripts/verify_indicators.py`
-  todavía no existe) y cálculo masivo de indicadores sobre todo el
-  histórico ya ingerido — ambos son el siguiente bloque.
+- Un script formal de validación (`scripts/verify_indicators.py`) que
+  automatice la comparación contra una fuente externa — por ahora la
+  validación contra TradingView es manual, comando por comando.
 - Fórmula del pre-filtro que combina los indicadores (la sección 6.1 del
   plan la deja explícitamente pendiente "hasta ver estos valores
   corriendo con datos reales").
