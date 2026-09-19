@@ -69,7 +69,10 @@ def upgrade() -> None:
     sa.Column('close', sa.Numeric(precision=30, scale=12), nullable=False),
     sa.Column('volume', sa.Numeric(precision=30, scale=12), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-    sa.PrimaryKeyConstraint('id', name=op.f('pk_velas')),
+    # PK compuesta (id, open_time): TimescaleDB exige que toda columna única,
+    # incluida la primary key, incluya la columna de partición ('open_time').
+    # Ver comentario en app/db/models/candles.py.
+    sa.PrimaryKeyConstraint('id', 'open_time', name=op.f('pk_velas')),
     sa.UniqueConstraint('symbol', 'timeframe', 'open_time', name='uq_velas_symbol_timeframe_open_time')
     )
     # ### end Alembic commands ###

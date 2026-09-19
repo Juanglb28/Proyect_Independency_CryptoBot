@@ -11,6 +11,16 @@ duplicar velas.
 Todos los timestamps son TIMESTAMPTZ en UTC (sección 15.3); todos los precios
 y volúmenes son NUMERIC, nunca float, para no perder precisión en cálculos
 financieros posteriores.
+
+Clave primaria compuesta `(id, open_time)`: requisito de TimescaleDB, no una
+elección de diseño de negocio. `create_hypertable()` exige que toda columna
+única (incluida la primary key) incluya la columna de partición
+(`open_time`); una PK de solo `id` hace que la conversión a hipertable falle
+con "cannot create a unique index without the column open_time (used in
+partitioning)". `id` sigue siendo único en la práctica porque lo genera una
+secuencia, pero esa unicidad ya no está reforzada por un constraint propio
+(ninguna otra tabla referencia `velas.id` por FK todavía, así que no hay
+impacto). Ver documentación de TimescaleDB sobre hypertables con PK/UNIQUE.
 """
 
 from __future__ import annotations
@@ -32,7 +42,7 @@ class Vela(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     symbol: Mapped[str] = mapped_column(nullable=False)
     timeframe: Mapped[str] = mapped_column(nullable=False)
-    open_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    open_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True, nullable=False)
 
     open: Mapped[float] = mapped_column(Numeric(30, 12), nullable=False)
     high: Mapped[float] = mapped_column(Numeric(30, 12), nullable=False)
