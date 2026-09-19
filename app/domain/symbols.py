@@ -11,7 +11,7 @@ commit explícito y revisable, no una variable de entorno.
 
 Selección (confirmada con el usuario el 2026-09-19): las 20 principales
 criptomonedas por capitalización de mercado que tienen un par spot activo
-contra USDT en Binance, excluyendo:
+contra USDT en **Binance.com (global)**, excluyendo:
 
 - Stablecoins (USDT, USDC, USDS, DAI, USDE): son la moneda de cotización,
   no un prospecto de inversión.
@@ -21,8 +21,21 @@ contra USDT en Binance, excluyendo:
 - Monero (XMR): deslistado de Binance en febrero de 2024 por presión
   regulatoria sobre monedas de privacidad; sigue deslistado.
 
-Ranking de referencia: CoinGecko (consultado 2026-09-19). Confirmación de
-pares USDT activos en Binance: binance.com/en/trade/<SYMBOL>_USDT.
+Ranking de referencia: CoinGecko / CoinMarketCap (consultado 2026-09-19).
+Confirmación de pares USDT activos en Binance: binance.com/en/trade/<SYMBOL>_USDT.
+
+CORRECCIÓN (2026-09-19, post primer backfill real): la selección original
+incluía HYPEUSDT (Hyperliquid). El primer backfill completo contra Binance
+mainnet falló con `ccxt.base.errors.BadSymbol: binance does not have market
+symbol HYPE/USDT` — HYPE nunca se listó en el spot de Binance.com; solo
+existe en **Binance.US** (exchange legalmente distinto, geo-restringido a
+EE.UU., con su propio API y mercados) y en Binance Futures (derivados,
+fuera de alcance de este proyecto — sección 2 del plan, solo spot). La
+investigación original confundió "listado en algún Binance" con "listado
+en el spot de Binance.com", que es la fuente real que usa
+`exchange_client.py`. Confirmado con el usuario: se reemplaza HYPEUSDT por
+SUIUSDT (Sui), siguiente por market cap con par SUI/USDT activo y
+verificado en el spot de Binance.com.
 
 Esta lista fija SOLO qué símbolos puede tocar el sistema. No implica que
 todos entren a cada ciclo de análisis (eso lo decide el prefiltro, sección
@@ -40,7 +53,7 @@ ALLOWED_SYMBOLS: tuple[str, ...] = (
     "TRXUSDT",
     "ZECUSDT",
     "DOGEUSDT",
-    "HYPEUSDT",
+    "SUIUSDT",
     "LINKUSDT",
     "ADAUSDT",
     "XLMUSDT",
