@@ -184,6 +184,36 @@ coincide con una fuente externa. Esa comparación sigue siendo manual,
 símbolo por símbolo, porque TradingView no ofrece una API pública estable
 para automatizarla.
 
+## Catálogo de eventos y análisis (Paso 5 del plan)
+
+```bash
+python -m scripts.seed_events              # carga/actualiza el catálogo desde data/events/*.json
+python -m scripts.seed_events --dry-run    # valida el catálogo sin tocar la base de datos
+python -m scripts.calculate_event_analysis # calcula analisis_eventos para todo el catálogo cargado
+```
+
+`eventos` es un catálogo **curado manualmente** (sección 3 del plan: "40-60
+eventos fechados"), no generado por código — ver `data/events/README.md`
+para el formato exacto de los archivos JSON de catálogo. `seed_events.py`
+hace upsert por `external_id`: corregir un evento en el archivo (una fecha,
+una fuente) y volver a correr el comando aplica la corrección en vez de
+duplicar la fila.
+
+`calculate_event_analysis` (`app/data/event_analyzer.py` +
+`app/data/event_pipeline.py` + `app/repositories/event_analysis.py`)
+calcula, para cada evento y cada símbolo de su `scope` (o los 20 de la
+whitelist si el evento es `"GLOBAL"`), el cambio porcentual de precio entre
+el día del evento y `evento ± {7, 1, 3, 7, 30}` días — a partir de velas
+diarias ya guardadas, no de Binance. Un evento más antiguo que el
+historial de velas ingerido (~2 años) se reporta como "sin velas" en vez de
+inventar un valor. Es idempotente, igual que indicadores.
+
+**Lo que esto NO incluye todavía**: la definición estadística de "evento
+comparable" que usa el Agente 3 (analista de eventos) — la sección 17 del
+plan la deja explícitamente pendiente hasta tener el catálogo real
+corriendo con datos. `analisis_eventos` es el insumo para esa definición,
+no la definición en sí.
+
 ## Tests
 
 ```bash
@@ -238,25 +268,35 @@ app/
 ├── db/
 │   ├── base.py            # Base declarativa de SQLAlchemy
 │   ├── session.py         # engine y fábrica de sesiones
-│   └── models/            # velas, indicadores, eventos, ciclos_analisis
+│   └── models/            # velas, indicadores, eventos, analisis_eventos, ciclos_analisis
 ├── domain/
 │   └── symbols.py         # whitelist explícita de símbolos operables (sección 21)
 ├── data/
 │   ├── exchange_client.py     # cliente mínimo de Binance mainnet (velas, solo lectura)
 │   ├── candle_ingestion.py    # paginación + backfill idempotente hacia `velas`
 │   ├── indicator_calculator.py  # RSI/ATR/SMA/volumen relativo/distancia a máximos (deterministas, puro)
-│   └── indicator_pipeline.py    # orquesta el cálculo sobre muchas combinaciones + persistencia
+│   ├── indicator_pipeline.py    # orquesta el cálculo sobre muchas combinaciones + persistencia
+│   ├── indicator_verification.py # recalcula vs. persistido + invariantes matemáticos
+│   ├── event_analyzer.py        # % de cambio de precio en ventanas alrededor de un evento (determinista, puro)
+│   └── event_pipeline.py        # orquesta el cálculo sobre todo el catálogo + persistencia
 ├── repositories/
 │   ├── health.py          # health check de base de datos
 │   ├── candles.py         # persistencia + lectura idempotente de velas
-│   └── indicators.py      # persistencia idempotente de indicadores
+│   ├── indicators.py      # persistencia idempotente de indicadores
+│   ├── events.py          # persistencia con upsert del catálogo de eventos
+│   └── event_analysis.py  # persistencia idempotente de analisis_eventos
 ├── ai/, execution/, results/, orchestration/, ui/
 │   # paquetes reservados por la arquitectura del plan (sección 15.1),
 │   # todavía vacíos: se irán poblando fase a fase.
 migrations/                # Alembic
 scripts/
-├── backfill_candles.py     # CLI: backfill histórico completo
-└── calculate_indicators.py # CLI: cálculo masivo de indicadores
+├── backfill_candles.py         # CLI: backfill histórico completo
+├── calculate_indicators.py     # CLI: cálculo masivo de indicadores
+├── verify_indicators.py        # CLI: verificación de integridad de indicadores
+├── seed_events.py              # CLI: carga/actualiza el catálogo de eventos
+└── calculate_event_analysis.py # CLI: cálculo masivo de analisis_eventos
+data/
+└── events/                # catálogo de eventos (*.json) — ver data/events/README.md
 tests/
 ├── unit/                  # no requieren red ni base de datos
 └── integration/           # requieren Postgres real y/o red hacia Binance
@@ -316,14 +356,26 @@ puede y no puede hacer cada capa.
   comparación manual contra TradingView (sigue siendo manual, ver punto
   anterior) — es un chequeo de integridad distinto y complementario, de
   solo lectura.
+- Catálogo de eventos y su análisis (`app/data/event_analyzer.py` +
+  `app/data/event_pipeline.py` + `app/repositories/events.py` +
+  `app/repositories/event_analysis.py`, sección 6/15.10 del plan, Paso 5):
+  esquema (`eventos` con upsert idempotente por `external_id`,
+  `analisis_eventos`), carga desde `data/events/*.json`
+  (`python -m scripts.seed_events`) y cálculo del cambio porcentual de
+  precio en las ventanas ±{7, 1, 3, 7, 30} días alrededor de cada evento
+  (`python -m scripts.calculate_event_analysis`). El catálogo en sí (qué
+  eventos reales) todavía no está cargado — ver "Qué NO está implementado".
 - Tests unitarios (configuración, validaciones del cliente de Binance,
   dispatch de `main`, lógica de paginación del backfill con una fuente
-  falsa, fórmulas de indicadores contra casos calculados a mano, lógica de
-  verificación contra discrepancias simuladas) y de integración (conexión
-  a la base de datos, idempotencia de las restricciones únicas de `velas`
-  e `indicadores`, descarga real de velas, backfill completo incluyendo
-  reintento sin duplicación, pipeline completo de cálculo de indicadores,
-  verificación de indicadores contra corrupción/borrado real en Postgres).
+  falsa, fórmulas de indicadores y de análisis de eventos contra casos
+  calculados a mano, lógica de verificación contra discrepancias simuladas,
+  validación del formato del catálogo de eventos) y de integración
+  (conexión a la base de datos, idempotencia de las restricciones únicas de
+  `velas`, `indicadores` y `analisis_eventos`, upsert de `eventos` por
+  `external_id`, descarga real de velas, backfill completo incluyendo
+  reintento sin duplicación, pipelines completos de indicadores y de
+  análisis de eventos, verificación de indicadores contra
+  corrupción/borrado real en Postgres).
 
 ## Qué NO está implementado
 
@@ -340,7 +392,12 @@ prompt — "no sobreimplementar"):
 - Fórmula del pre-filtro que combina los indicadores (la sección 6.1 del
   plan la deja explícitamente pendiente "hasta ver estos valores
   corriendo con datos reales").
-- Catálogo de eventos y correlación histórica.
+- El catálogo real de eventos (`data/events/*.json` sigue vacío: el
+  esquema, la carga y el cálculo ya existen, pero ningún evento verdadero
+  se ha investigado ni cargado todavía).
+- La definición estadística de "evento comparable" que usará el Agente 3 —
+  sección 17 del plan: explícitamente pendiente hasta tener el catálogo
+  real. `analisis_eventos` es el insumo, no esa definición.
 - Agentes de IA (interviewer, cuantitativo, eventos, auditor, consolidador).
 - Motor de ejecución, órdenes, posiciones y monitoreo — ninguna credencial
   de Binance se usa todavía; ni el cliente de velas ni el backfill la
