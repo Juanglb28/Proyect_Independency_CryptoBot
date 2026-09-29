@@ -231,6 +231,52 @@ plan la deja explícitamente pendiente hasta tener el catálogo real
 corriendo con datos. `analisis_eventos` es el insumo para esa definición,
 no la definición en sí.
 
+## Pre-filtro determinista (Paso 6.1 del plan)
+
+```bash
+python -m scripts.inspect_prefilter_inputs  # distribución real de indicadores (solo lectura)
+python -m scripts.run_prefilter             # puntúa los 20 símbolos y muestra los candidatos del día
+```
+
+`app/data/prefilter.py` (cálculo puro) + `app/data/prefilter_pipeline.py`
+(lee velas/indicadores diarios reales) calculan un puntaje 0-100 por
+símbolo combinando tendencia (promedio %-precio-vs-SMA 90/120/180),
+volumen relativo y distancia al máximo de 90 días, con normalización
+absoluta de límites fijos y pesos iguales (decisiones confirmadas con el
+usuario tras ver la distribución real de datos — sección 6.1/17 del plan).
+`app/domain/rules/scoring.py` fija los umbrales `SCORE_MINIMO_PREFILTRO=45`
+y `MAX_CANDIDATOS_PREFILTRO=5` (sección 19). Un símbolo con cualquier dato
+faltante no recibe un puntaje inventado (sección P3): se reporta aparte.
+Todavía no persiste nada (`factores`/`propuestas` son del Paso 7).
+
+## Agentes de IA (Paso 6 del plan)
+
+```bash
+python -m scripts.run_agent_demo  # llamada real al Auditor con datos de ejemplo — consume API de pago
+```
+
+`app/ai/client.py` (cliente delgado sobre el SDK oficial de Anthropic,
+con el prompt de sistema marcado para prompt caching) + `app/ai/schemas.py`
+(schemas Pydantic que reproducen exactamente el JSON de "SALIDA" de cada
+prompt) + `app/ai/prompts/*.py` (texto verbatim de la sección 7.2 del plan)
++ `app/ai/agents/{quantitative,events,auditor}.py` implementan tres de los
+cinco agentes: Analista cuantitativo y Analista de eventos (Sonnet 5.5),
+Auditor de datos (Haiku 4.5). Cada llamada válida queda registrada en
+`llamadas_ia` (`app/repositories/ai_calls.py`) con tokens y costo
+estimado. Los agentes no reciben ninguna herramienta de ejecución ni
+importan nada de `app.execution`/`app.data.exchange_client` (P2/P4 del
+plan). El bloque DATOS de cada llamada lo arma quien invoca al agente —
+construirlo a partir de datos reales de la base es responsabilidad del
+Paso 7 (orquestación), todavía no implementado.
+
+**Diferido deliberadamente**: el Agente 1 (Entrevistador) es conversacional
+multi-turno y su perfil de salida no tiene tabla asignada en el plan —
+se construirá junto con Streamlit (Paso 10). El Agente 5 (Consolidador)
+tiene prompt y modelo (Opus 5.5) pero el plan nunca llegó a especificar
+su JSON de "SALIDA" (a diferencia de los otros cuatro) — inventar esa
+forma ahora arriesgaría definir a ciegas las columnas de `propuestas`
+(Paso 7); queda pendiente hasta que se defina explícitamente.
+
 ## Tests
 
 ```bash
@@ -380,8 +426,19 @@ puede y no puede hacer cada capa.
   `analisis_eventos`), carga desde `data/events/*.json`
   (`python -m scripts.seed_events`) y cálculo del cambio porcentual de
   precio en las ventanas ±{7, 1, 3, 7, 30} días alrededor de cada evento
-  (`python -m scripts.calculate_event_analysis`). El catálogo en sí (qué
-  eventos reales) todavía no está cargado — ver "Qué NO está implementado".
+  (`python -m scripts.calculate_event_analysis`). El catálogo real
+  (`data/events/catalogo_v1.json`, 43 eventos investigados y verificados)
+  ya está cargado y calculado (636 filas en `analisis_eventos`).
+- Pre-filtro determinista (`app/data/prefilter.py` +
+  `app/data/prefilter_pipeline.py`, sección 6.1/17 del plan, Paso 6.1):
+  puntaje 0-100 por símbolo a partir de tendencia, volumen relativo y
+  distancia al máximo de 90 días, con normalización absoluta y umbrales
+  fijos (`app/domain/rules/scoring.py`). Comando
+  `python -m scripts.run_prefilter`.
+- Agentes de IA — Analista cuantitativo, Analista de eventos y Auditor de
+  datos (`app/ai/`, sección 7/15.10 del plan, Paso 6): cliente Anthropic,
+  schemas Pydantic de contrato, prompts verbatim y registro de auditoría
+  en `llamadas_ia`. Ver "Agentes de IA (Paso 6 del plan)" más arriba.
 - Tests unitarios (configuración, validaciones del cliente de Binance,
   dispatch de `main`, lógica de paginación del backfill con una fuente
   falsa, fórmulas de indicadores y de análisis de eventos contra casos
@@ -406,16 +463,15 @@ prompt — "no sobreimplementar"):
   interna (recalculado vs. persistido, invariantes matemáticos), no vuelve
   a comparar contra TradingView; esa parte sigue siendo manual porque no
   hay una API pública estable de TradingView para automatizarla.
-- Fórmula del pre-filtro que combina los indicadores (la sección 6.1 del
-  plan la deja explícitamente pendiente "hasta ver estos valores
-  corriendo con datos reales").
-- El catálogo real de eventos (`data/events/*.json` sigue vacío: el
-  esquema, la carga y el cálculo ya existen, pero ningún evento verdadero
-  se ha investigado ni cargado todavía).
 - La definición estadística de "evento comparable" que usará el Agente 3 —
-  sección 17 del plan: explícitamente pendiente hasta tener el catálogo
-  real. `analisis_eventos` es el insumo, no esa definición.
-- Agentes de IA (interviewer, cuantitativo, eventos, auditor, consolidador).
+  sección 17 del plan: explícitamente pendiente hasta explorarla con el
+  catálogo real ya cargado (Fase 2). `analisis_eventos` es el insumo, no
+  esa definición.
+- Agente 1 (Entrevistador, conversacional — diferido a Paso 10/Streamlit) y
+  Agente 5 (Consolidador — su JSON de salida no está definido en el plan,
+  ver "Agentes de IA (Paso 6 del plan)" más arriba). Tampoco existe todavía
+  la orquestación que arma el bloque DATOS de cada agente a partir de datos
+  reales de la base (Paso 7).
 - Motor de ejecución, órdenes, posiciones y monitoreo — ninguna credencial
   de Binance se usa todavía; ni el cliente de velas ni el backfill la
   necesitan.

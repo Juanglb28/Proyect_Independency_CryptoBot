@@ -18,6 +18,12 @@ dependencies = [
     # posteriores), límites de tasa y parseo de OHLCV de forma madura y
     # probada, evitando reimplementar esa lógica a mano.
     "ccxt>=4.5,<5.0",
+    # anthropic: SDK oficial para los agentes de interpretación (sección 5
+    # del plan: "IA: SDK oficial de Anthropic — soporte nativo de prompt
+    # caching y salida estructurada"). Ya decidido en el plan, no hay
+    # alternativa a evaluar: es el cliente oficial del proveedor elegido, con
+    # mantenimiento activo de Anthropic y sin dependencias pesadas propias.
+    "anthropic>=0.40,<1.0",
 ]
 
 [project.optional-dependencies]
