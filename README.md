@@ -162,6 +162,28 @@ final de todas —, así que un corte a mitad de camino no pierde el progreso
 y volver a correrlo no duplica nada. Una combinación sin velas guardadas
 todavía se reporta como "sin velas guardadas" en vez de fallar.
 
+### Verificación de indicadores
+
+```bash
+python -m scripts.verify_indicators
+```
+
+Chequeo de integridad, de solo lectura: para cada combinación,
+recalcula los indicadores a partir de las velas guardadas y compara ese
+resultado contra lo que realmente quedó en la tabla `indicadores` (detecta
+filas perdidas, corrompidas, o calculadas con una versión vieja del código
+y nunca recalculadas), y además valida invariantes matemáticos que deben
+cumplirse siempre: RSI entre 0 y 100, ATR y volumen relativo no negativos,
+distancia al máximo/ATH nunca positiva. Termina con código de salida 1 si
+encuentra alguna discrepancia.
+
+**No reemplaza la validación manual contra TradingView** (la del comando
+`calculate-indicators` de arriba): esta verificación es interna —
+recalculado vs. persistido — y no tiene forma de saber si la fórmula en sí
+coincide con una fuente externa. Esa comparación sigue siendo manual,
+símbolo por símbolo, porque TradingView no ofrece una API pública estable
+para automatizarla.
+
 ## Tests
 
 ```bash
@@ -284,13 +306,24 @@ puede y no puede hacer cada capa.
   para las 80 combinaciones. SMA-90 validado a mano contra TradingView
   (BTC/USDT diario, 2026-09-19) dentro del margen esperado por comparar
   contra una vela todavía sin cerrar.
+- Verificación formal de indicadores (`app/data/indicator_verification.py`,
+  secciones 22/23 del plan): recalcula los indicadores de cada combinación
+  a partir de las velas guardadas y los compara contra lo persistido en
+  `indicadores` (detecta filas perdidas, corrompidas o calculadas con
+  código viejo), más invariantes matemáticos (RSI en [0, 100], ATR y
+  volumen relativo no negativos, distancia al máximo/ATH nunca positiva).
+  Comando `python -m scripts.verify_indicators`. No reemplaza la
+  comparación manual contra TradingView (sigue siendo manual, ver punto
+  anterior) — es un chequeo de integridad distinto y complementario, de
+  solo lectura.
 - Tests unitarios (configuración, validaciones del cliente de Binance,
   dispatch de `main`, lógica de paginación del backfill con una fuente
-  falsa, fórmulas de indicadores contra casos calculados a mano) y de
-  integración (conexión a la base de datos, idempotencia de las
-  restricciones únicas de `velas` e `indicadores`, descarga real de
-  velas, backfill completo incluyendo reintento sin duplicación,
-  pipeline completo de cálculo de indicadores).
+  falsa, fórmulas de indicadores contra casos calculados a mano, lógica de
+  verificación contra discrepancias simuladas) y de integración (conexión
+  a la base de datos, idempotencia de las restricciones únicas de `velas`
+  e `indicadores`, descarga real de velas, backfill completo incluyendo
+  reintento sin duplicación, pipeline completo de cálculo de indicadores,
+  verificación de indicadores contra corrupción/borrado real en Postgres).
 
 ## Qué NO está implementado
 
@@ -299,9 +332,11 @@ prompt — "no sobreimplementar"):
 
 - Actualización incremental programada (correr el backfill solo, sin un
   scheduler; APScheduler queda para cuando exista el orquestador).
-- Un script formal de validación (`scripts/verify_indicators.py`) que
-  automatice la comparación contra una fuente externa — por ahora la
-  validación contra TradingView es manual, comando por comando.
+- Comparación automatizada contra TradingView u otra fuente externa —
+  `scripts/verify_indicators.py` sí existe, pero verifica integridad
+  interna (recalculado vs. persistido, invariantes matemáticos), no vuelve
+  a comparar contra TradingView; esa parte sigue siendo manual porque no
+  hay una API pública estable de TradingView para automatizarla.
 - Fórmula del pre-filtro que combina los indicadores (la sección 6.1 del
   plan la deja explícitamente pendiente "hasta ver estos valores
   corriendo con datos reales").

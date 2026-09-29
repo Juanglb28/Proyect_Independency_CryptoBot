@@ -8,6 +8,7 @@ de negocio). No calcula nada — eso vive en
 
 from __future__ import annotations
 
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -81,3 +82,30 @@ def save_indicators(session: Session, rows: list[IndicatorRow]) -> int:
 
     session.flush()
     return inserted_count
+
+
+def get_indicators(session: Session, symbol: str, timeframe: str) -> list[IndicatorRow]:
+    """Lee todos los indicadores ya guardados de `symbol`/`timeframe`.
+
+    Igual que `repositories/candles.py::get_candles`, devuelve el mismo tipo
+    (`IndicatorRow`) que produce el cálculo puro en vez del modelo ORM
+    `Indicador`, para que quien consuma esto (la verificación en
+    `app/data/indicator_verification.py`) pueda comparar ambas listas
+    directamente sin importar SQLAlchemy.
+    """
+    statement = (
+        select(Indicador)
+        .where(Indicador.symbol == symbol, Indicador.timeframe == timeframe)
+        .order_by(Indicador.calculated_at.asc(), Indicador.indicator_name.asc())
+    )
+    rows = session.execute(statement).scalars().all()
+    return [
+        IndicatorRow(
+            symbol=row.symbol,
+            timeframe=row.timeframe,
+            calculated_at=row.calculated_at,
+            indicator_name=row.indicator_name,
+            value=row.value,
+        )
+        for row in rows
+    ]
