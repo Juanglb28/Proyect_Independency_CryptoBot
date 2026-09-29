@@ -1,0 +1,389 @@
+[
+  {
+    "external_id": "bitcoin-halving-2012",
+    "event_date": "2012-11-28",
+    "event_type": "HALVING",
+    "description": "Primer halving de Bitcoin: la recompensa por bloque baja de 50 a 25 BTC.",
+    "severity": "media",
+    "source": "https://www.kraken.com/learn/bitcoin-halving-history",
+    "scope": "BTCUSDT"
+  },
+  {
+    "external_id": "mt-gox-bankruptcy-2014",
+    "event_date": "2014-02-28",
+    "event_type": "QUIEBRA_EXCHANGE",
+    "description": "Mt. Gox, entonces el mayor exchange de bitcoin del mundo, se declara en quiebra tras perder aproximadamente 850,000 BTC de clientes.",
+    "severity": "alta",
+    "source": "https://time.com/archive/7025063/mt-gox-bitcoin-bankruptcy/",
+    "scope": "GLOBAL"
+  },
+  {
+    "external_id": "bitcoin-halving-2016",
+    "event_date": "2016-07-09",
+    "event_type": "HALVING",
+    "description": "Segundo halving de Bitcoin: la recompensa por bloque baja de 25 a 12.5 BTC.",
+    "severity": "media",
+    "source": "https://www.kraken.com/learn/bitcoin-halving-history",
+    "scope": "BTCUSDT"
+  },
+  {
+    "external_id": "bitcoin-halving-2020",
+    "event_date": "2020-05-11",
+    "event_type": "HALVING",
+    "description": "Tercer halving de Bitcoin: la recompensa por bloque baja de 12.5 a 6.25 BTC.",
+    "severity": "media",
+    "source": "https://www.kraken.com/learn/bitcoin-halving-history",
+    "scope": "BTCUSDT"
+  },
+  {
+    "external_id": "microstrategy-first-btc-purchase",
+    "event_date": "2020-08-11",
+    "event_type": "ADOPCION_INSTITUCIONAL",
+    "description": "MicroStrategy anuncia su primera compra de bitcoin (21,454 BTC) como activo de reserva de tesorería, la primera empresa cotizada en hacerlo a esa escala.",
+    "severity": "media",
+    "source": "https://www.sec.gov/Archives/edgar/data/1050446/000119312520215604/d921849dex991.htm",
+    "scope": "BTCUSDT"
+  },
+  {
+    "external_id": "sec-sues-ripple",
+    "event_date": "2020-12-22",
+    "event_type": "REGULACION",
+    "description": "La SEC demanda a Ripple Labs y a dos de sus ejecutivos, alegando la venta no registrada de 2,000 millones de dólares en XRP.",
+    "severity": "alta",
+    "source": "https://en.wikipedia.org/wiki/Ripple_Labs",
+    "scope": "XRPUSDT"
+  },
+  {
+    "external_id": "tesla-btc-purchase-2021",
+    "event_date": "2021-02-08",
+    "event_type": "ADOPCION_INSTITUCIONAL",
+    "description": "Tesla anuncia la compra de 1,500 millones de dólares en bitcoin y su intención de aceptarlo como método de pago.",
+    "severity": "alta",
+    "source": "https://www.cnbc.com/2021/02/08/tesla-buys-1point5-billion-in-bitcoin.html",
+    "scope": "BTCUSDT"
+  },
+  {
+    "external_id": "coinbase-nasdaq-listing",
+    "event_date": "2021-04-14",
+    "event_type": "ADOPCION_INSTITUCIONAL",
+    "description": "Coinbase debuta en el Nasdaq mediante listado directo (ticker COIN), el primer gran exchange cripto en cotizar en bolsa en EE. UU.",
+    "severity": "alta",
+    "source": "https://www.cnbc.com/2021/04/14/coinbase-to-debut-on-nasdaq-in-direct-listing.html",
+    "scope": "GLOBAL"
+  },
+  {
+    "external_id": "dogecoin-musk-snl",
+    "event_date": "2021-05-08",
+    "event_type": "OTRO",
+    "description": "Elon Musk presenta Saturday Night Live y bromea sobre Dogecoin; el precio de DOGE cae con fuerza tras la emisión.",
+    "severity": "media",
+    "source": "https://www.cnbc.com/2021/05/08/dogecoin-price-plummets-as-elon-musk-hosts-saturday-night-live-.html",
+    "scope": "DOGEUSDT"
+  },
+  {
+    "external_id": "poly-network-hack",
+    "event_date": "2021-08-10",
+    "event_type": "HACKEO_EXCHANGE",
+    "description": "Poly Network sufre un exploit de aproximadamente 600 millones de dólares, uno de los mayores hackeos DeFi hasta la fecha (la mayor parte de los fondos fue devuelta por el atacante).",
+    "severity": "alta",
+    "source": "https://www.coindesk.com/markets/2021/08/10/cross-chain-defi-site-poly-network-hacked-hundreds-of-millions-potentially-lost",
+    "scope": "GLOBAL"
+  },
+  {
+    "external_id": "el-salvador-bitcoin-legal-tender",
+    "event_date": "2021-09-07",
+    "event_type": "REGULACION",
+    "description": "El Salvador se convierte en el primer país del mundo en adoptar bitcoin como moneda de curso legal.",
+    "severity": "media",
+    "source": "https://www.coindesk.com/policy/2021/09/07/bitcoin-now-legal-tender-in-el-salvador-marking-world-first",
+    "scope": "BTCUSDT"
+  },
+  {
+    "external_id": "china-mining-trading-ban-2021",
+    "event_date": "2021-09-24",
+    "event_type": "REGULACION",
+    "description": "China intensifica su represión y declara ilegales todas las transacciones con criptomonedas, tras haber expulsado previamente a los mineros del país.",
+    "severity": "alta",
+    "source": "https://www.coindesk.com/policy/2021/09/24/china-tightens-crypto-mining-crackdown-bans-trading",
+    "scope": "GLOBAL"
+  },
+  {
+    "external_id": "bitcoin-ath-nov-2021",
+    "event_date": "2021-11-10",
+    "event_type": "OTRO",
+    "description": "Bitcoin alcanza un máximo histórico cercano a 69,000 USD (no superado hasta marzo de 2024).",
+    "severity": "media",
+    "source": "https://www.aljazeera.com/economy/2021/11/10/bitcoin-flirts-with-69000-on-heels-of-surging-inflation-news",
+    "scope": "BTCUSDT"
+  },
+  {
+    "external_id": "ronin-network-hack",
+    "event_date": "2022-03-29",
+    "event_type": "HACKEO_EXCHANGE",
+    "description": "El puente Ronin (usado por el juego Axie Infinity) sufre un exploit de aproximadamente 625 millones de dólares, uno de los mayores hackeos cripto de la historia.",
+    "severity": "alta",
+    "source": "https://www.coindesk.com/tech/2022/03/29/axie-infinitys-ronin-network-suffers-625m-exploit",
+    "scope": "GLOBAL"
+  },
+  {
+    "external_id": "terra-luna-ust-collapse",
+    "event_date": "2022-05-09",
+    "event_type": "CRISIS_MERCADO",
+    "description": "La stablecoin algorítmica TerraUSD (UST) comienza a perder su paridad con el dólar, desencadenando el colapso de Terra/LUNA y una crisis de contagio en todo el mercado cripto.",
+    "severity": "alta",
+    "source": "https://en.wikipedia.org/wiki/Terra_(blockchain)",
+    "scope": "GLOBAL"
+  },
+  {
+    "external_id": "celsius-pauses-withdrawals",
+    "event_date": "2022-06-12",
+    "event_type": "QUIEBRA_EXCHANGE",
+    "description": "La plataforma de préstamos cripto Celsius Network pausa todos los retiros citando \"condiciones extremas de mercado\"; se declararía en quiebra el mes siguiente.",
+    "severity": "alta",
+    "source": "https://techcrunch.com/2022/06/12/crypto-lender-celsius-pauses-withdrawals-transfers-citing-extreme-market-conditions/",
+    "scope": "GLOBAL"
+  },
+  {
+    "external_id": "three-arrows-capital-bankruptcy",
+    "event_date": "2022-07-01",
+    "event_type": "QUIEBRA_EXCHANGE",
+    "description": "El fondo de cobertura cripto Three Arrows Capital (3AC) se declara en bancarrota (Chapter 15) tras el colapso de Terra/LUNA.",
+    "severity": "alta",
+    "source": "https://www.coindesk.com/business/2022/07/01/three-arrows-capital-files-for-bankruptcy-in-new-york-tied-to-british-virgin-islands-proceeding",
+    "scope": "GLOBAL"
+  },
+  {
+    "external_id": "voyager-digital-bankruptcy",
+    "event_date": "2022-07-06",
+    "event_type": "QUIEBRA_EXCHANGE",
+    "description": "El bróker cripto Voyager Digital se declara en bancarrota (Chapter 11) tras su exposición a Three Arrows Capital.",
+    "severity": "media",
+    "source": "https://techcrunch.com/2022/07/06/crypto-broker-voyager-digital-files-for-bankruptcy/",
+    "scope": "GLOBAL"
+  },
+  {
+    "external_id": "ethereum-merge",
+    "event_date": "2022-09-15",
+    "event_type": "EVENTO_RED",
+    "description": "Ethereum completa \"The Merge\", su transición de Proof of Work a Proof of Stake.",
+    "severity": "alta",
+    "source": "https://www.bloomberg.com/news/articles/2022-09-15/ethereum-completes-long-awaited-energy-saving-merge-upgrade",
+    "scope": "ETHUSDT"
+  },
+  {
+    "external_id": "ftx-collapse",
+    "event_date": "2022-11-11",
+    "event_type": "QUIEBRA_EXCHANGE",
+    "description": "FTX, uno de los mayores exchanges cripto del mundo, se declara en bancarrota (Chapter 11) en medio de acusaciones de uso indebido de fondos de clientes.",
+    "severity": "alta",
+    "source": "https://www.npr.org/2022/11/11/1136166792/cryptocurrency-exchange-ftx-files-for-chapter-11-bankruptcy",
+    "scope": "GLOBAL"
+  },
+  {
+    "external_id": "genesis-bankruptcy",
+    "event_date": "2023-01-20",
+    "event_type": "QUIEBRA_EXCHANGE",
+    "description": "Genesis Global Capital, unidad de préstamos cripto de Digital Currency Group, se declara en bancarrota tras el colapso de FTX.",
+    "severity": "media",
+    "source": "https://www.coindesk.com/business/2023/01/20/genesis-global-files-for-bankruptcy-protection",
+    "scope": "GLOBAL"
+  },
+  {
+    "external_id": "silvergate-shutdown",
+    "event_date": "2023-03-08",
+    "event_type": "QUIEBRA_EXCHANGE",
+    "description": "Silvergate Bank, banco clave para la liquidez de exchanges cripto, anuncia su liquidación voluntaria.",
+    "severity": "alta",
+    "source": "https://www.cnbc.com/2023/03/08/silvergate-shutting-down-operations-and-liquidating-bank.html",
+    "scope": "GLOBAL"
+  },
+  {
+    "external_id": "sec-sues-binance",
+    "event_date": "2023-06-05",
+    "event_type": "REGULACION",
+    "description": "La SEC demanda a Binance y a su fundador Changpeng Zhao (CZ) por 13 cargos relacionados con valores no registrados.",
+    "severity": "alta",
+    "source": "https://www.npr.org/2023/06/05/1180132574/sec-ftx-binance-cz-changpeng-zhao-crypto-exchanges",
+    "scope": "GLOBAL"
+  },
+  {
+    "external_id": "sec-sues-coinbase",
+    "event_date": "2023-06-06",
+    "event_type": "REGULACION",
+    "description": "La SEC demanda a Coinbase alegando que opera como bolsa de valores, corredor y cámara de compensación no registrados.",
+    "severity": "alta",
+    "source": "https://techcrunch.com/2023/06/06/after-binance-us-sec-sues-coinbase-for-securities-laws-violations/",
+    "scope": "GLOBAL"
+  },
+  {
+    "external_id": "blackrock-files-spot-btc-etf",
+    "event_date": "2023-06-15",
+    "event_type": "REGULACION",
+    "description": "BlackRock, la mayor gestora de activos del mundo, presenta ante la SEC una solicitud de ETF spot de bitcoin.",
+    "severity": "media",
+    "source": "https://www.cnbc.com/2023/06/15/blackrock-files-for-spot-bitcoin-etf-with-coinbase-as-a-crypto-custodian.html",
+    "scope": "BTCUSDT"
+  },
+  {
+    "external_id": "ripple-xrp-partial-ruling",
+    "event_date": "2023-07-13",
+    "event_type": "REGULACION",
+    "description": "La jueza Analisa Torres falla que las ventas de XRP en exchanges públicos no constituyeron una oferta de valores no registrada, una victoria parcial para Ripple.",
+    "severity": "alta",
+    "source": "https://www.nysd.uscourts.gov/sites/default/files/2023-07/SEC%20vs%20Ripple%207-13-23.pdf",
+    "scope": "XRPUSDT"
+  },
+  {
+    "external_id": "grayscale-wins-gbtc-lawsuit",
+    "event_date": "2023-08-29",
+    "event_type": "REGULACION",
+    "description": "La Corte de Apelaciones del Circuito de D.C. falla unánimemente a favor de Grayscale contra la SEC, anulando el rechazo de la conversión de GBTC en un ETF spot de bitcoin y despejando el camino regulatorio hacia los ETFs spot.",
+    "severity": "alta",
+    "source": "https://www.ropesgray.com/en/insights/alerts/2023/09/court-grants-victory-to-grayscale",
+    "scope": "BTCUSDT"
+  },
+  {
+    "external_id": "cz-guilty-plea",
+    "event_date": "2023-11-21",
+    "event_type": "REGULACION",
+    "description": "Changpeng Zhao (CZ) se declara culpable de cargos federales de lavado de dinero y renuncia como CEO de Binance; la compañía paga más de 4,000 millones de dólares en penalidades.",
+    "severity": "alta",
+    "source": "https://www.npr.org/2023/11/21/1214466415/binance-cz-changpeng-zhao-pleads-guilty-settlement-crypto-doj",
+    "scope": "GLOBAL"
+  },
+  {
+    "external_id": "sec-approves-spot-btc-etf",
+    "event_date": "2024-01-10",
+    "event_type": "APROBACION_ETF",
+    "description": "La SEC aprueba 11 ETFs spot de bitcoin para cotizar en EE. UU., incluyendo productos de BlackRock y Fidelity.",
+    "severity": "alta",
+    "source": "https://www.bloomberg.com/news/articles/2024-01-10/spot-bitcoin-etfs-approved-to-launch-in-us-by-gensler-s-sec",
+    "scope": "BTCUSDT"
+  },
+  {
+    "external_id": "bitcoin-halving-2024",
+    "event_date": "2024-04-20",
+    "event_type": "HALVING",
+    "description": "Cuarto halving de Bitcoin: la recompensa por bloque baja de 6.25 a 3.125 BTC (bloque 840,000).",
+    "severity": "media",
+    "source": "https://www.kraken.com/learn/bitcoin-halving-history",
+    "scope": "BTCUSDT"
+  },
+  {
+    "external_id": "sec-approves-spot-eth-etf",
+    "event_date": "2024-07-22",
+    "event_type": "APROBACION_ETF",
+    "description": "La SEC aprueba ETFs spot de Ethereum, que comienzan a cotizar en EE. UU. los días siguientes.",
+    "severity": "alta",
+    "source": "https://www.bloomberg.com/news/articles/2024-07-22/sec-said-to-approve-spot-ether-etfs-in-latest-crypto-milestone",
+    "scope": "ETHUSDT"
+  },
+  {
+    "external_id": "fed-rate-cut-sept-2024",
+    "event_date": "2024-09-18",
+    "event_type": "MACROECONOMICO",
+    "description": "La Reserva Federal de EE. UU. recorta su tasa de interés en 50 puntos básicos, el primer recorte de su ciclo de flexibilización.",
+    "severity": "media",
+    "source": "https://www.cnbc.com/2024/09/18/fed-cuts-rates-september-2024-.html",
+    "scope": "GLOBAL"
+  },
+  {
+    "external_id": "trump-strategic-bitcoin-reserve",
+    "event_date": "2025-03-06",
+    "event_type": "REGULACION",
+    "description": "El presidente Trump firma una orden ejecutiva estableciendo una Reserva Estratégica de Bitcoin y un depósito de otros activos digitales para el gobierno de EE. UU.",
+    "severity": "alta",
+    "source": "https://www.whitehouse.gov/fact-sheets/2025/03/fact-sheet-president-donald-j-trump-establishes-the-strategic-bitcoin-reserve-and-u-s-digital-asset-stockpile/",
+    "scope": "BTCUSDT"
+  },
+  {
+    "external_id": "coinbase-joins-sp500",
+    "event_date": "2025-05-12",
+    "event_type": "ADOPCION_INSTITUCIONAL",
+    "description": "S&P Dow Jones Indices anuncia que Coinbase se unirá al índice S&P 500, reemplazando a Discover Financial, la primera empresa cripto pura en entrar al índice.",
+    "severity": "alta",
+    "source": "https://www.cnbc.com/2025/05/12/coinbase-joining-sp-500-replacing-discover-financial.html",
+    "scope": "GLOBAL"
+  },
+  {
+    "external_id": "clarity-act-house-passage",
+    "event_date": "2025-07-17",
+    "event_type": "REGULACION",
+    "description": "La Cámara de Representantes de EE. UU. aprueba el CLARITY Act (H.R. 3633, \"Digital Asset Market Clarity Act\"), la primera gran ley de estructura de mercado cripto, con voto bipartidista de 294 a 134.",
+    "severity": "alta",
+    "source": "https://dondavis.house.gov/media/press-releases/us-house-representatives-pass-clarity-act-bipartisan-support",
+    "scope": "GLOBAL"
+  },
+  {
+    "external_id": "genius-act-signed",
+    "event_date": "2025-07-18",
+    "event_type": "REGULACION",
+    "description": "El presidente Trump firma el GENIUS Act, la primera ley federal de EE. UU. que establece un marco regulatorio para las stablecoins de pago.",
+    "severity": "alta",
+    "source": "https://www.whitehouse.gov/fact-sheets/2025/07/fact-sheet-president-donald-j-trump-signs-genius-act-into-law/",
+    "scope": "GLOBAL"
+  },
+  {
+    "external_id": "ripple-sec-case-ends",
+    "event_date": "2025-08-07",
+    "event_type": "REGULACION",
+    "description": "La SEC y Ripple ponen fin oficialmente a su litigio de cinco años en torno a XRP, tras retirar conjuntamente sus apelaciones cruzadas.",
+    "severity": "alta",
+    "source": "https://www.coindesk.com/policy/2025/08/07/sec-s-long-running-case-against-ripple-officially-over",
+    "scope": "XRPUSDT"
+  },
+  {
+    "external_id": "sec-generic-listing-standards-crypto-etf",
+    "event_date": "2025-09-17",
+    "event_type": "APROBACION_ETF",
+    "description": "La SEC aprueba estándares genéricos de cotización para ETPs cripto y de materias primas, acelerando el camino de aprobación para ETFs spot de altcoins, y aprueba el mismo día el fondo cripto de gran capitalización de Grayscale.",
+    "severity": "alta",
+    "source": "https://www.coindesk.com/policy/2025/09/17/sec-makes-spot-crypto-etf-listing-process-easier-approves-grayscale-s-large-cap-crypto-fund",
+    "scope": "GLOBAL"
+  },
+  {
+    "external_id": "zcash-cypherpunk-treasury",
+    "event_date": "2025-11-12",
+    "event_type": "ADOPCION_INSTITUCIONAL",
+    "description": "Tyler Winklevoss presenta Cypherpunk Technologies, una empresa que cotiza en Nasdaq (CYPH) respaldada por los hermanos Winklevoss con una estrategia de tesorería corporativa centrada en acumular Zcash (ZEC).",
+    "severity": "alta",
+    "source": "https://www.theblock.co/post/378582/winklevoss-backed-cypherpunk-targets-5-zcash-supply-58-million-treasury-seed",
+    "scope": "ZECUSDT"
+  },
+  {
+    "external_id": "cardano-cme-futures-launch",
+    "event_date": "2026-02-09",
+    "event_type": "APROBACION_ETF",
+    "description": "CME lanza futuros regulados de Cardano (ADA), iniciando el período de seis meses de negociación que la SEC exige como criterio de elegibilidad de un activo para el mecanismo simplificado de listado genérico de ETPs.",
+    "severity": "media",
+    "source": "https://www.mexc.com/news/1142312",
+    "scope": "ADAUSDT"
+  },
+  {
+    "external_id": "grayscale-withdraws-cardano-etf",
+    "event_date": "2026-08-07",
+    "event_type": "REGULACION",
+    "description": "Grayscale retira ante la SEC (Form RW) sus solicitudes de ETF spot para Cardano, Hedera y Polkadot, apenas dos días antes de que ADA alcanzara el umbral de elegibilidad regulatoria. No implica un rechazo de la SEC: es una decisión propia de Grayscale de no continuar con esos productos.",
+    "severity": "media",
+    "source": "https://en.cryptonomist.ch/2026/08/10/cardano-etf-withdrawal/",
+    "scope": "ADAUSDT"
+  },
+  {
+    "external_id": "cardano-ada-etf-eligibility",
+    "event_date": "2026-08-09",
+    "event_type": "APROBACION_ETF",
+    "description": "ADA completa el período de seis meses de negociación de futuros regulados en CME y pasa a ser elegible para el mecanismo de listado genérico de ETPs, sin necesidad de una aprobación individual 19b-4 de la SEC por producto. A la fecha de este catálogo (sept. 2026) siguen activas solicitudes de Bitwise, Canary Capital, VanEck y 21Shares para un ETF spot de ADA, pero no existe una fecha límite legal de aprobación/rechazo bajo este mecanismo ni un ETF spot de ADA lanzado todavía.",
+    "severity": "alta",
+    "source": "https://crypto.news/grayscale-killed-three-altcoin-etfs-cardano-eligible/",
+    "scope": "ADAUSDT"
+  },
+  {
+    "external_id": "clarity-act-senate-cloture-fails",
+    "event_date": "2026-09-15",
+    "event_type": "REGULACION",
+    "description": "La moción de cloture del CLARITY Act fracasa en el Senado de EE. UU. por 49 a 50 votos, estancando la ley de estructura de mercado cripto; el mercado cripto cae durante la sesión.",
+    "severity": "alta",
+    "source": "https://www.coindesk.com/policy/2026/09/15/crypto-clarity-act-flames-out-in-failed-u-s-senate-vote",
+    "scope": "GLOBAL"
+  }
+]

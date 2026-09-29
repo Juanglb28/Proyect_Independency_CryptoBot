@@ -199,6 +199,23 @@ hace upsert por `external_id`: corregir un evento en el archivo (una fecha,
 una fuente) y volver a correr el comando aplica la corrección en vez de
 duplicar la fila.
 
+`data/events/catalogo_v1.json` contiene la primera versión del catálogo:
+43 eventos (2012-11-28 a 2026-09-15) investigados y verificados uno por uno
+con fuente pública citada — halvings de Bitcoin, quiebras/hackeos de
+exchanges (Mt. Gox, FTX, Celsius, 3AC, Ronin, Poly Network, Silvergate,
+Genesis, Voyager), demandas y decisiones regulatorias (SEC vs. Ripple/
+Binance/Coinbase, caso Grayscale-GBTC, CLARITY Act, GENIUS Act), adopción
+institucional (MicroStrategy, Tesla, Coinbase, Reserva Estratégica de
+Bitcoin de EE. UU., Cypherpunk/Zcash) y aprobaciones/elegibilidad de ETFs
+spot (BTC, ETH, y el proceso en curso de ADA bajo los estándares genéricos
+de listado de 2025). No fue generado por un LLM sin supervisión: cada fecha
+fue confirmada por al menos una fuente antes de incluirse, y ninguna fecha o
+cifra especulativa (p. ej. una fecha límite de decisión de la SEC que no es
+legalmente vinculante) se incluyó como si fuera un hecho consumado. Sigue
+por debajo del techo de 60 eventos del plan — queda explícitamente abierto a
+ampliarse (más eventos específicos de altcoins de la whitelist, más crisis
+macro) sin que eso bloquee el uso del catálogo actual.
+
 `calculate_event_analysis` (`app/data/event_analyzer.py` +
 `app/data/event_pipeline.py` + `app/repositories/event_analysis.py`)
 calcula, para cada evento y cada símbolo de su `scope` (o los 20 de la
