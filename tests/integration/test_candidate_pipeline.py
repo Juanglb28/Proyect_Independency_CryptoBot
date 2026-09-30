@@ -1,9 +1,10 @@
-"""Tests de las funciones que arman los bloques DATOS reales en
-scripts/run_agent_demo_full_cycle.py — la parte con lógica real (leer la
-base, detectar datos faltantes) del script de humo del Paso 6. El propio
-`main()` (que hace 4 llamadas reales a la API de Anthropic) no se prueba
-aquí, igual que `scripts/run_agent_demo.py` tampoco tiene test — ver su
-docstring.
+"""Tests de app.orchestration.candidate_pipeline — las funciones que arman
+los bloques DATOS reales de cada agente a partir de la base de datos
+(Paso 7). Trasladadas junto con el código desde
+`scripts/run_agent_demo_full_cycle.py` (Paso 6), donde se verificaron por
+primera vez. El propio `daily_cycle.py` (llamadas reales a la API de
+Anthropic) no se prueba aquí, igual que `scripts/run_agent_demo.py` tampoco
+tiene test — ver su docstring.
 """
 
 from __future__ import annotations
@@ -20,11 +21,11 @@ from app.repositories.candles import save_candles
 from app.repositories.event_analysis import save_event_analysis
 from app.repositories.events import EventoInput, get_events, save_events
 from app.repositories.indicators import save_indicators
-from scripts.run_agent_demo_full_cycle import (
-    _pick_symbol,
+from app.orchestration.candidate_pipeline import (
     build_datos_analista_cuantitativo,
     build_datos_analista_eventos,
     build_datos_auditor,
+    pick_symbol,
 )
 
 
@@ -57,21 +58,21 @@ def _seed_full_daily_indicators(symbol: str, open_time: datetime) -> list[Indica
 
 
 # ---------------------------------------------------------------------------
-# _pick_symbol
+# pick_symbol
 # ---------------------------------------------------------------------------
 
 
 def test_pick_symbol_returns_the_requested_symbol_when_valid(db_session):
-    assert _pick_symbol(db_session, "AVAXUSDT") == "AVAXUSDT"
+    assert pick_symbol(db_session, "AVAXUSDT") == "AVAXUSDT"
 
 
 def test_pick_symbol_uppercases_the_requested_symbol(db_session):
-    assert _pick_symbol(db_session, "avaxusdt") == "AVAXUSDT"
+    assert pick_symbol(db_session, "avaxusdt") == "AVAXUSDT"
 
 
 def test_pick_symbol_rejects_a_symbol_outside_the_whitelist(db_session):
     with pytest.raises(SystemExit):
-        _pick_symbol(db_session, "DOGECOINUSDT")
+        pick_symbol(db_session, "DOGECOINUSDT")
 
 
 # ---------------------------------------------------------------------------

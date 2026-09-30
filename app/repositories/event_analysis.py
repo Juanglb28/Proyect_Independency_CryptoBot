@@ -86,8 +86,8 @@ def get_event_analysis_for_symbol(session: Session, symbol: str) -> list[Analisi
     para cada evento, así que esta consulta ya viene filtrada por alcance
     sin necesitar volver a interpretar `eventos.scope` aquí).
 
-    Usado por `scripts/run_agent_demo_full_cycle.py` para armar el bloque
-    DATOS real del Agente 3 (Analista de eventos)."""
+    Usado por `app/orchestration/candidate_pipeline.py` para armar el
+    bloque DATOS real del Agente 3 (Analista de eventos)."""
     statement = (
         select(AnalisisEvento)
         .where(AnalisisEvento.symbol == symbol)
