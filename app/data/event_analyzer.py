@@ -29,6 +29,23 @@ ningún dato real distinto dentro de esa ventana — un hueco de datos, no una
 ventana de cero cambio), la combinación se declara dato faltante: se omite
 la fila en vez de insertar un `0%` engañoso (sección P3 del plan, cero
 datos inventados).
+
+BUG REAL encontrado corriendo `scripts/run_agent_demo_full_cycle.py` contra
+datos reales (2026-09-30): un evento cuya fecha es reciente puede tener una
+ventana futura (`event_date + offset` posterior a la última vela diaria
+ingerida — ya sea porque el evento pasó hace pocos días, o porque el
+backfill está desactualizado). `_closest_close_on_or_before` no tenía tope
+superior, así que devolvía la vela más reciente disponible como si fuera el
+precio de esa fecha futura, sin marcarlo como incompleto — dos ventanas
+distintas (p. ej. +7 y +30 días) podían terminar con el mismo `window_date`
+y el mismo `price_change_pct`, lo cual el propio Agente 3 detectó como una
+anomalía en una corrida real. Decisión del usuario (2026-09-30): una
+ventana cuya fecha objetivo todavía no tiene ninguna vela real ingerida se
+omite (dato faltante), nunca se sustituye por la vela más reciente
+disponible — ver el chequeo `target > ultima_vela_disponible` en
+`calculate_event_analysis`. Volver a correr
+`scripts/calculate_event_analysis.py` más adelante, cuando el historial de
+velas ya cubra esa fecha, sí calculará la fila.
 """
 
 from __future__ import annotations
@@ -135,9 +152,18 @@ def calculate_event_analysis(
     if reference_price == 0:
         return []
 
+    ultima_vela_disponible = sorted_dates[-1]
+
     rows: list[EventAnalysisRow] = []
     for offset in WINDOW_OFFSETS_DAYS:
         target = event_date + timedelta(days=offset)
+        if target > ultima_vela_disponible:
+            # La ventana todavía no ocurrió en el historial de velas
+            # ingerido (evento reciente, o backfill desactualizado) — ver
+            # el docstring del módulo. Nunca se reutiliza la vela más
+            # reciente disponible como si fuera el precio de esta fecha
+            # futura.
+            continue
         found = _closest_close_on_or_before(sorted_dates, closes, target)
         if found is None:
             continue

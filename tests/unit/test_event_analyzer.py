@@ -79,7 +79,10 @@ def test_calculate_event_analysis_matches_hand_computed_percentages():
     rows = calculate_event_analysis(uuid.uuid4(), event_date, "BTCUSDT", candles)
 
     by_offset = {r.window_offset_days: r for r in rows}
-    assert set(by_offset) == set(WINDOW_OFFSETS_DAYS)
+    # +30 (día 50) se sale del historial (solo hay velas hasta el día 39):
+    # se omite, no se rellena con el cierre más reciente disponible — ver
+    # test_window_beyond_the_last_available_candle_is_declared_missing.
+    assert set(by_offset) == set(WINDOW_OFFSETS_DAYS) - {30}
     # referencia: día 20, close=120
     assert by_offset[-7].reference_price == D(120)
     assert by_offset[-7].window_price == D(113)  # día 13
@@ -90,10 +93,38 @@ def test_calculate_event_analysis_matches_hand_computed_percentages():
     assert by_offset[3].window_price == D(123)
     assert by_offset[7].window_price == D(127)
 
-    # +30 se sale del historial (solo hay 40 días, día 0..39): usa el cierre
-    # más reciente disponible (día 39), no lo inventa ni lo omite.
-    assert by_offset[30].window_date == (start + timedelta(days=39)).date()
-    assert by_offset[30].window_price == D(139)
+
+def test_window_beyond_the_last_available_candle_is_declared_missing():
+    """Bug real (2026-09-30): un evento reciente puede tener una ventana
+    (p. ej. +30 días) cuya fecha todavía no tiene ninguna vela real
+    ingerida. Antes del fix, `_closest_close_on_or_before` reutilizaba en
+    silencio la vela más reciente disponible como si fuera el precio de esa
+    fecha futura — el Agente 3, en una corrida real, detectó esto como una
+    anomalía (dos ventanas distintas con el mismo cambio porcentual)."""
+    start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    candles = _daily_candles("BTCUSDT", start, n=40)  # días 0..39
+    event_date = (start + timedelta(days=20)).date()  # +30 -> día 50, fuera de rango
+
+    rows = calculate_event_analysis(uuid.uuid4(), event_date, "BTCUSDT", candles)
+
+    assert 30 not in {r.window_offset_days for r in rows}
+
+
+def test_two_different_windows_never_collapse_to_the_same_future_candle():
+    """Antes del fix, dos ventanas cuya fecha objetivo cae después de la
+    última vela disponible (p. ej. +7 y +30, con solo 25 días de historial
+    tras el evento) resolvían ambas a la MISMA vela más reciente, dando el
+    mismo price_change_pct para las dos — exactamente la anomalía real que
+    detectó el Agente 3. Ahora ambas se omiten."""
+    start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    candles = _daily_candles("BTCUSDT", start, n=26)  # días 0..25
+    event_date = (start + timedelta(days=20)).date()  # +7 -> día 27, +30 -> día 50
+
+    rows = calculate_event_analysis(uuid.uuid4(), event_date, "BTCUSDT", candles)
+
+    offsets_presentes = {r.window_offset_days for r in rows}
+    assert 7 not in offsets_presentes
+    assert 30 not in offsets_presentes
 
 
 def test_event_older_than_all_available_candles_is_declared_missing():

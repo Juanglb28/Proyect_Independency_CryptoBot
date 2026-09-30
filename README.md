@@ -222,8 +222,15 @@ calcula, para cada evento y cada símbolo de su `scope` (o los 20 de la
 whitelist si el evento es `"GLOBAL"`), el cambio porcentual de precio entre
 el día del evento y `evento ± {7, 1, 3, 7, 30}` días — a partir de velas
 diarias ya guardadas, no de Binance. Un evento más antiguo que el
-historial de velas ingerido (~2 años) se reporta como "sin velas" en vez de
-inventar un valor. Es idempotente, igual que indicadores.
+historial de velas ingerido (~2 años), o una ventana cuya fecha todavía no
+tiene ninguna vela real ingerida (evento reciente, o backfill
+desactualizado — bug real encontrado el 2026-09-30 corriendo
+`run_agent_demo_full_cycle.py`, el Agente 3 detectó por su cuenta que dos
+ventanas distintas daban el mismo cambio porcentual), se reporta como "sin
+velas"/dato faltante en vez de inventar un valor o reutilizar la vela más
+reciente disponible. Es idempotente, igual que indicadores; volver a
+correr `calculate_event_analysis` más adelante sí completa las ventanas
+que antes estaban fuera de rango.
 
 **Lo que esto NO incluye todavía**: la definición estadística de "evento
 comparable" que usa el Agente 3 (analista de eventos) — la sección 17 del
