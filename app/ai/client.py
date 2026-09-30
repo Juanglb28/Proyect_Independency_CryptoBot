@@ -32,7 +32,9 @@ logger = logging.getLogger(__name__)
 
 
 class AgentResponseError(Exception):
-    """El modelo respondió, pero el texto no es JSON válido.
+    """El modelo respondió, pero el texto no es JSON válido — o la
+    respuesta se cortó antes de terminar (ver `call_agent` sobre
+    `stop_reason == "max_tokens"`).
 
     Deliberadamente NO se intenta "reparar" ni rellenar con un valor por
     defecto (sección P3 del plan: cero datos inventados) — quien llama debe
@@ -84,6 +86,25 @@ def call_agent(
     )
 
     raw_text = "".join(block.text for block in response.content if block.type == "text")
+
+    if response.stop_reason == "max_tokens":
+        # BUG REAL encontrado corriendo scripts/run_daily_cycle.py contra la
+        # API real (2026-09-30): con varios candidatos, la respuesta del
+        # Consolidador puede necesitar más de max_tokens=4096 y el modelo la
+        # corta a mitad de una cadena — json.JSONDecoder la reporta como
+        # "Unterminated string", un mensaje que no deja claro que la causa
+        # real fue quedarse sin espacio, no un JSON mal formado. Se detecta
+        # aquí, ANTES de intentar parsear, para que el error sea diagnosticable
+        # de inmediato (sección 24 del plan: contexto suficiente para
+        # diagnosticar) — nunca se intenta "cerrar" el JSON truncado a mano,
+        # eso sería inventar el resto de la respuesta (P3 del plan).
+        raise AgentResponseError(
+            f"La respuesta de '{model}' se cortó por alcanzar max_tokens={max_tokens} "
+            f"({response.usage.output_tokens} tokens de salida generados) antes de "
+            "terminar el JSON. Quien llama debe pasar un max_tokens mayor para este "
+            "agente — nunca se completa el JSON a mano.\n"
+            f"Texto recibido (últimos 300 caracteres): {raw_text[-300:]!r}"
+        )
 
     return AgentCallResult(
         raw_text=raw_text,

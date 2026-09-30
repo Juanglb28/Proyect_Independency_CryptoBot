@@ -20,7 +20,7 @@ from decimal import Decimal
 import pytest
 
 from app.ai.agents._runner import AgentValidationError
-from app.ai.agents.consolidator import run_consolidador
+from app.ai.agents.consolidator import MAX_TOKENS_CONSOLIDADOR, run_consolidador
 from app.ai.client import AgentCallResult
 from app.config import Settings
 from app.repositories.events import EventoInput, save_events
@@ -30,8 +30,10 @@ def _settings() -> Settings:
     return Settings(database_url="postgresql+psycopg://x:x@localhost/x", anthropic_api_key="sk-test")
 
 
-def _patch_call_agent(monkeypatch, raw_text: str, input_tokens=200, output_tokens=150):
+def _patch_call_agent(monkeypatch, raw_text: str, input_tokens=200, output_tokens=150, capture: list | None = None):
     def fake_call_agent(settings, *, model, system_prompt, user_content, max_tokens=4096):
+        if capture is not None:
+            capture.append(max_tokens)
         return AgentCallResult(raw_text=raw_text, input_tokens=input_tokens, output_tokens=output_tokens)
 
     monkeypatch.setattr("app.ai.agents._runner.call_agent", fake_call_agent)
@@ -178,6 +180,33 @@ def test_run_consolidador_raises_key_error_when_calidad_datos_missing_for_a_symb
             datos={},
             calidad_datos_por_simbolo={"AVAXUSDT": Decimal(70)},
         )
+
+
+def test_run_consolidador_pasa_su_propio_max_tokens_al_llamar_al_agente(monkeypatch, db_session):
+    # Bug real (2026-09-30): con el default de run_json_agent (4096), una
+    # corrida real con varios candidatos cortó la respuesta del Consolidador
+    # a mitad de un JSON. Este test no reproduce la API real — solo confirma
+    # que run_consolidador de verdad propaga MAX_TOKENS_CONSOLIDADOR hacia
+    # call_agent, en vez de quedarse con el default de 4096 pensado para los
+    # agentes de un solo símbolo (2, 3 y 4).
+    respuesta = {
+        "recomendacion": "invertir",
+        "razon_no_invertir": None,
+        "opciones": [_opcion()],
+        "confianza_global": "media",
+    }
+    capturado: list[int] = []
+    _patch_call_agent(monkeypatch, json.dumps(respuesta), capture=capturado)
+    _patch_save_llamada_ia(monkeypatch)
+
+    run_consolidador(
+        db_session,
+        _settings(),
+        datos={"candidatos": ["AVAXUSDT"]},
+        calidad_datos_por_simbolo={"AVAXUSDT": Decimal(70)},
+    )
+
+    assert capturado == [MAX_TOKENS_CONSOLIDADOR]
 
 
 def test_run_consolidador_accepts_no_invertir_with_no_opciones(monkeypatch, db_session):

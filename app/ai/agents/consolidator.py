@@ -37,6 +37,20 @@ from app.repositories.events import get_existing_external_ids
 
 AGENTE = "consolidador"
 
+MAX_TOKENS_CONSOLIDADOR = 16_000
+"""Muy por encima del default de `run_json_agent` (4096) a propósito: a
+diferencia de los agentes 2/3/4 (un símbolo por llamada), la salida del
+Consolidador crece con la cantidad de candidatos (hasta 5, cada uno con
+tesis/invalidación/escenario adverso en texto libre). `max_tokens` es un
+TOPE, no un gasto garantizado — no cuesta más pedir de más si el modelo
+genera menos — así que no hay motivo para dejarlo ajustado.
+
+BUG REAL (2026-09-30): con el default de 4096, una corrida real de
+`scripts/run_daily_cycle.py` con varios candidatos cortó la respuesta del
+Consolidador a mitad de una cadena JSON (`stop_reason="max_tokens"`,
+detectado ahora explícitamente en `app.ai.client.call_agent`), lo que
+marcó el ciclo entero como fallido después de haber pagado esa llamada."""
+
 
 @dataclass(frozen=True)
 class OpcionConsolidadaEvaluada:
@@ -97,6 +111,7 @@ def run_consolidador(
         schema=ConsolidadorOutput,
         ciclo_id=ciclo_id,
         extra_validate=extra_validate,
+        max_tokens=MAX_TOKENS_CONSOLIDADOR,
     )
 
     output: ConsolidadorOutput = agent_result.output  # type: ignore[assignment]

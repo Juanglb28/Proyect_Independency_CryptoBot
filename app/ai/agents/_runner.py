@@ -69,6 +69,7 @@ def run_json_agent(
     schema: type[SchemaT],
     ciclo_id: uuid.UUID | None = None,
     extra_validate: Callable[[SchemaT], None] | None = None,
+    max_tokens: int = 4096,
 ) -> AgentRunResult:
     """Llama al modelo, valida su respuesta contra `schema` y persiste el
     registro de auditoría. Propaga `AgentResponseError` (JSON inválido) o
@@ -82,7 +83,14 @@ def run_json_agent(
     hacer solo (por ejemplo, que un id referenciado exista realmente en la
     base de datos). Debe lanzar `AgentValidationError` si algo no es
     válido; una respuesta que falla aquí tampoco se persiste, igual que
-    una que falla el schema."""
+    una que falla el schema.
+
+    `max_tokens` por defecto (4096) alcanza de sobra a los agentes que
+    analizan UN símbolo por llamada (2, 3, 4). El Consolidador, cuya
+    salida crece con la cantidad de candidatos que recibe, pasa un valor
+    mayor explícitamente — ver `app.ai.agents.consolidator` (bug real,
+    2026-09-30: con varios candidatos la respuesta se cortaba a mitad de
+    JSON con el valor por defecto)."""
     user_content = json.dumps(datos, ensure_ascii=False, default=str)
 
     call_result = call_agent(
@@ -90,6 +98,7 @@ def run_json_agent(
         model=modelo,
         system_prompt=system_prompt,
         user_content=user_content,
+        max_tokens=max_tokens,
     )
 
     parsed = parse_agent_json(call_result.raw_text)
