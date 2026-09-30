@@ -21,11 +21,14 @@ propia respuesta.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 
 import anthropic
 
 from app.config import Settings
+
+logger = logging.getLogger(__name__)
 
 
 class AgentResponseError(Exception):
@@ -93,11 +96,25 @@ def parse_agent_json(raw_text: str) -> dict:
     """Extrae y parsea el JSON de la respuesta de un agente.
 
     Los prompts piden explícitamente "Solo JSON, sin texto adicional", pero
-    los modelos a veces envuelven la respuesta en una cerca de código
-    (```json ... ```) de todas formas — se tolera ÚNICAMENTE ese envoltorio
-    superficial, nunca un intento de "adivinar" JSON a partir de texto
-    libre. Cualquier otra cosa es un `AgentResponseError`, no un valor de
-    relleno (sección P3 del plan).
+    los modelos a veces no lo respetan al pie de la letra. Se toleran DOS
+    envoltorios superficiales, nunca un intento de "adivinar" JSON a partir
+    de texto libre:
+
+    1. Una cerca de código (```json ... ```) alrededor de todo el bloque.
+    2. Texto adicional DESPUÉS del objeto JSON ya completo (visto en la
+       práctica: Haiku 4.5 respondiendo al Auditor con el JSON completo y
+       luego una nota aparte). Se parsea solo el primer valor JSON válido
+       (`json.JSONDecoder.raw_decode`, no una expresión regular) y el resto
+       se descarta — pero se registra en el log, nunca en silencio, porque
+       indica que el modelo no está siguiendo el prompt y conviene poder
+       verlo si se repite.
+
+    Cualquier otra cosa (JSON incompleto, texto libre sin estructura) sigue
+    siendo un `AgentResponseError`, no un valor de relleno (sección P3 del
+    plan). El error incluye un fragmento de la respuesta cruda para poder
+    diagnosticarlo sin tener que reproducir la llamada (y sin haber perdido
+    ya el crédito de esa llamada, que si el JSON no parsea nunca llega a
+    persistirse en `llamadas_ia` — ver `app/ai/agents/_runner.py`).
     """
     text = raw_text.strip()
     if text.startswith("```"):
@@ -107,9 +124,20 @@ def parse_agent_json(raw_text: str) -> dict:
         text = text.strip()
 
     try:
-        parsed = json.loads(text)
+        parsed, end = json.JSONDecoder().raw_decode(text)
     except json.JSONDecodeError as exc:
-        raise AgentResponseError(f"La respuesta del agente no es JSON válido: {exc}") from exc
+        raise AgentResponseError(
+            f"La respuesta del agente no es JSON válido: {exc}\n"
+            f"Texto recibido (primeros 500 caracteres): {raw_text[:500]!r}"
+        ) from exc
+
+    resto = text[end:].strip()
+    if resto:
+        logger.warning(
+            "El agente devolvió texto adicional después del JSON; se ignoró "
+            "(el prompt pide 'solo JSON, sin texto adicional'): %r",
+            resto[:500],
+        )
 
     if not isinstance(parsed, dict):
         raise AgentResponseError(

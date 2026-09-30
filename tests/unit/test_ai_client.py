@@ -44,6 +44,23 @@ def test_parse_agent_json_raises_when_top_level_is_not_an_object():
         parse_agent_json("[1, 2, 3]")
 
 
+def test_parse_agent_json_ignores_trailing_text_after_a_complete_json_object(caplog):
+    # Visto en la práctica: Haiku 4.5 respondiendo al Auditor con el JSON
+    # completo y luego una nota aparte, a pesar de que el prompt pide "solo
+    # JSON, sin texto adicional".
+    raw = '{"a": 1}\n\nNota: esto no debería estar aquí.'
+    with caplog.at_level("WARNING"):
+        parsed = parse_agent_json(raw)
+
+    assert parsed == {"a": 1}
+    assert "texto adicional" in caplog.text
+
+
+def test_parse_agent_json_raises_on_invalid_json_includes_raw_text_snippet():
+    with pytest.raises(AgentResponseError, match="esto no es json"):
+        parse_agent_json("esto no es json")
+
+
 def test_call_agent_raises_clear_error_without_api_key():
     settings = _settings(anthropic_api_key=None)
     with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
