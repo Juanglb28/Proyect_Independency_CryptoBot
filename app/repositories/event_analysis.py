@@ -76,3 +76,21 @@ def get_event_analysis(session: Session, evento_id) -> list[AnalisisEvento]:
         .order_by(AnalisisEvento.symbol.asc(), AnalisisEvento.window_offset_days.asc())
     )
     return list(session.execute(statement).scalars().all())
+
+
+def get_event_analysis_for_symbol(session: Session, symbol: str) -> list[AnalisisEvento]:
+    """Lo mismo que `get_event_analysis`, pero por símbolo en vez de por
+    evento — todas las ventanas ya calculadas de TODOS los eventos que
+    incluyen a `symbol` en su alcance (`calculate_event_analysis` solo
+    calcula filas para los símbolos que `resolve_scope_symbols` resuelve
+    para cada evento, así que esta consulta ya viene filtrada por alcance
+    sin necesitar volver a interpretar `eventos.scope` aquí).
+
+    Usado por `scripts/run_agent_demo_full_cycle.py` para armar el bloque
+    DATOS real del Agente 3 (Analista de eventos)."""
+    statement = (
+        select(AnalisisEvento)
+        .where(AnalisisEvento.symbol == symbol)
+        .order_by(AnalisisEvento.evento_id.asc(), AnalisisEvento.window_offset_days.asc())
+    )
+    return list(session.execute(statement).scalars().all())

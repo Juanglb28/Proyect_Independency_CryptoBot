@@ -253,6 +253,7 @@ Todavía no persiste nada (`factores`/`propuestas` son del Paso 7).
 
 ```bash
 python -m scripts.run_agent_demo  # llamada real al Auditor con datos de ejemplo — consume API de pago
+python -m scripts.run_agent_demo_full_cycle  # los 4 agentes en secuencia con datos REALES de un símbolo — consume API de pago
 ```
 
 `app/ai/client.py` (cliente delgado sobre el SDK oficial de Anthropic,
@@ -288,6 +289,19 @@ multiplicador, y compara el resultado contra `SCORE_MINIMO_ENTRADA=55`
 cada `fuentes` citada exista realmente en el catálogo de eventos
 (`app/repositories/events.py::get_existing_external_ids`) — nunca acepta
 un id inventado por el modelo (P3 del plan).
+
+**`scripts/run_agent_demo_full_cycle.py` — los 4 agentes en secuencia con
+datos reales**: elige el mejor candidato del pre-filtro de hoy (o el símbolo
+que se le pase con `--simbolo`), arma el bloque DATOS de cada agente leyendo
+`velas`/`indicadores`/`eventos`/`analisis_eventos` YA calculados en la base
+real (nunca inventa un valor — un dato ausente se declara como faltante), y
+corre los 4 agentes de verdad en su orden de dependencia. Sirve para
+verificar el tubo completo con datos reales antes de comprometerse al
+esquema de persistencia del Paso 7; no persiste nada en
+`factores`/`propuestas`/`ciclos_analisis`. Las funciones que arman cada
+bloque DATOS están testeadas contra Postgres real
+(`tests/integration/test_run_agent_demo_full_cycle.py`); el propio `main()`
+(4 llamadas reales y pagas a la API) no, igual que `run_agent_demo.py`.
 
 **Diferido deliberadamente**: el Agente 1 (Entrevistador) es conversacional
 multi-turno y su perfil de salida no tiene tabla asignada en el plan —
