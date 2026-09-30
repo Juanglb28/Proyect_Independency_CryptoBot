@@ -14,7 +14,9 @@ implementado" más abajo.
 
 ## Requisitos
 
-- Python 3.11 o superior
+- Python 3.11 o superior (solo si vas a instalar el venv nativo — ver
+  "Ejecutar comandos dentro de Docker" más abajo para la alternativa que
+  solo necesita Docker)
 - Docker y Docker Compose
 - Git
 
@@ -27,6 +29,50 @@ python3 -m venv .venv
 source .venv/bin/activate   # en Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 ```
+
+**Windows con Smart App Control activado:** si `pip install` o cualquier
+comando de este README falla con `ImportError: DLL load failed... Una
+directiva de Control de aplicaciones bloqueó este archivo`, no es un
+paquete roto ni una versión de Python incorrecta — es Smart App Control
+bloqueando las extensiones compiladas (`.pyd`) sin firma reconocida que
+`psycopg`, `pydantic-core` y `SQLAlchemy` instalan (confirmado en la
+práctica: pasa con cualquiera de los tres, en un venv nuevo, sin importar
+la versión de Python). Con Smart App Control en "Activado" (no
+"Evaluación"), Windows no permite desactivarlo sin reinstalar el sistema.
+Salta directamente a "Ejecutar comandos dentro de Docker" — evita el
+problema de raíz en vez de perseguirlo paquete por paquete, porque Smart
+App Control gobierna ejecutables de Windows, no lo que corre dentro de un
+contenedor Linux.
+
+## Ejecutar comandos dentro de Docker (alternativa al venv nativo)
+
+Todo comando `python -m ...` o `pytest` de este README tiene un
+equivalente que corre dentro de Linux, vía el servicio `app` de
+`docker-compose.yml`, sin instalar nada en el sistema operativo del
+desarrollador:
+
+```bash
+docker compose up -d                                  # levanta postgres + app (app queda inactivo, listo para usarse)
+docker compose run --rm app <comando>                  # corre <comando> dentro del contenedor y lo descarta al terminar
+```
+
+Por ejemplo:
+
+| Nativo (venv)                              | Docker                                                  |
+|---------------------------------------------|----------------------------------------------------------|
+| `alembic upgrade head`                      | `docker compose run --rm app alembic upgrade head`        |
+| `pytest`                                    | `docker compose run --rm app pytest`                      |
+| `python -m app.main healthcheck`            | `docker compose run --rm app python -m app.main healthcheck` |
+| `python -m scripts.run_daily_cycle`         | `docker compose run --rm app python -m scripts.run_daily_cycle` |
+
+El repo completo se monta como volumen dentro del contenedor (ver
+Dockerfile), así que los cambios de código se reflejan sin reconstruir la
+imagen — solo agregar o cambiar una dependencia en `pyproject.toml`
+requiere `docker compose build app` antes de volver a correr algo.
+
+Este camino no reemplaza el venv nativo — es una alternativa completa: no
+hace falta instalar Python en el sistema ni crear un `.venv` si vas a usar
+siempre `docker compose run`.
 
 ## Configuración
 
@@ -51,6 +97,10 @@ vacío.
 ```bash
 docker compose up -d
 ```
+
+Esto también levanta el contenedor `app` (queda inactivo — ver "Ejecutar
+comandos dentro de Docker"); si solo quieres Postgres, usa
+`docker compose up -d postgres`.
 
 Espera a que el healthcheck del contenedor esté en estado `healthy`:
 
@@ -504,7 +554,12 @@ puede y no puede hacer cada capa.
 ## Qué está implementado
 
 - Repositorio Git, `pyproject.toml`, entorno Python 3.11+.
-- Docker Compose con PostgreSQL 16 + TimescaleDB.
+- Docker Compose con PostgreSQL 16 + TimescaleDB, y un servicio `app`
+  (Dockerfile propio) para correr cualquier comando del proyecto dentro de
+  Linux sin instalar nada en el sistema del desarrollador — ver "Ejecutar
+  comandos dentro de Docker". Se agregó tras encontrar en la práctica que
+  Smart App Control de Windows 11 bloquea las extensiones compiladas de
+  psycopg/pydantic-core/SQLAlchemy sin importar la versión de Python.
 - Configuración tipada con `pydantic-settings`, que falla explícitamente si
   falta `DATABASE_URL`.
 - Logging estructurado en JSON (sin dependencias nuevas), con protección
@@ -621,11 +676,23 @@ prompt — "no sobreimplementar"):
 
 ## Cómo verificar que el entorno funciona (resumen)
 
+Con venv nativo:
+
 ```bash
 docker compose up -d
 alembic upgrade head
 python -m app.main healthcheck
 pytest
+```
+
+O, sin instalar Python en el sistema (ver "Ejecutar comandos dentro de
+Docker" — necesario en Windows con Smart App Control activado):
+
+```bash
+docker compose up -d
+docker compose run --rm app alembic upgrade head
+docker compose run --rm app python -m app.main healthcheck
+docker compose run --rm app pytest
 ```
 
 Una máquina limpia debe poder ejecutar estos cuatro comandos, en orden,

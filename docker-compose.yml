@@ -21,5 +21,36 @@ services:
       timeout: 5s
       retries: 10
 
+  app:
+    # Corre la app dentro de Linux en vez del Python nativo del sistema —
+    # ver Dockerfile y README ("Ejecutar comandos dentro de Docker") sobre
+    # el bloqueo real de Smart App Control en Windows con las extensiones
+    # compiladas de psycopg/pydantic-core/SQLAlchemy.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: crypto_trading_app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Dentro de la red de docker-compose, el otro contenedor se alcanza
+      # por el nombre del servicio ("postgres"), no por "localhost" — se
+      # sobrescribe aquí el valor de .env, que asume Postgres expuesto en
+      # localhost:5432 (el caso de correr fuera de Docker).
+      DATABASE_URL: postgresql+psycopg://crypto:crypto@postgres:5432/crypto_trading
+    volumes:
+      # Monta el repo completo: los cambios de código se reflejan sin
+      # reconstruir la imagen. Solo agregar/cambiar una dependencia en
+      # pyproject.toml requiere `docker compose build app`.
+      - .:/app
+    working_dir: /app
+    # No hace nada por sí solo (no es un proceso de fondo real — sección 6
+    # del plan): se mantiene vivo para poder correr comandos puntuales con
+    # `docker compose run --rm app <comando>`.
+    command: ["tail", "-f", "/dev/null"]
+
 volumes:
   pgdata:
