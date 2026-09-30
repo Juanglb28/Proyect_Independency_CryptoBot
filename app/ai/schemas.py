@@ -9,24 +9,28 @@ No se renombra nada a inglés ni se "mejora" la forma del JSON: cambiar esto
 aquí sin cambiar el prompt real haría que la validación rechazara
 respuestas correctas del modelo.
 
-TODO — DECISIÓN PENDIENTE: el Agente 5 (Consolidador) no tiene un schema
-aquí. La sección 7.2 del plan describe su prompt (prohibiciones, esquema de
-ponderación, "tres opciones... y dos opciones adicionales", cada una con
-"un escenario adverso concreto") pero, a diferencia de los Agentes 2/3/4,
-nunca llega a mostrar un bloque JSON de salida explícito. Inventar esa
-forma ahora — nombres de campo para cada "opción", cómo se representa el
-score final, el escenario adverso, etc. — sería precisamente el tipo de
-decisión arbitraria escondida en el código que el proyecto prohíbe
-(sección 30/15.11), más aún porque esa forma probablemente determina
-directamente las columnas de `propuestas` y el `decision_snapshot` (Paso 7,
-secciones 6 y 14). Queda pendiente hasta que se defina explícitamente.
+El Agente 5 (Consolidador) sí tiene schema (`ConsolidadorOutput`, más
+abajo), diseñado junto con el usuario el 2026-09-29 porque la sección 7.2
+del plan describe su prompt (prohibiciones, esquema de ponderación, "tres
+opciones... y dos opciones adicionales") pero nunca llega a mostrar un
+bloque JSON de "SALIDA" explícito como sí tienen los Agentes 2/3/4.
+
+Decisión clave de ese diseño (P1 del plan: "el código calcula, la IA
+interpreta"): el agente NUNCA calcula `puntaje_base` ni `puntaje_ponderado`
+— solo entrega su juicio cualitativo de cada categoría como un número
+0-100 (`OpcionConsolidada`). La combinación con los pesos fijos y el
+multiplicador de calidad de datos la hace
+`app.domain.rules.scoring.calculate_consolidated_score`, código
+determinista y testeado — ver ese módulo para el porqué (incluye una
+contradicción real detectada en la sección 7.2 del plan entre su tabla de
+ponderación y su descripción textual, resuelta con el usuario).
 """
 
 from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class _AgentOutputBase(BaseModel):
@@ -94,3 +98,71 @@ class AuditorOutput(_AgentOutputBase):
     calidad_global: Literal["suficiente", "limitada", "insuficiente"]
     penalizacion_confianza_pct: float
     bloqueantes: list[str]
+
+
+# ---------------------------------------------------------------------------
+# Agente 5 — Consolidador
+# ---------------------------------------------------------------------------
+
+
+class EscenarioAdversoConsolidado(_AgentOutputBase):
+    descripcion: str
+    desencadenante: str
+    probabilidad_relativa: Literal["baja", "media", "alta"]
+
+
+class OpcionConsolidada(_AgentOutputBase):
+    """Una opción del Consolidador. Los cuatro campos `*_momentum`/
+    `*_liquidez`/`*_rangos_ath`/`*_eventos` son el JUICIO del agente sobre
+    cada categoría (0-100) — no un puntaje ya ponderado. `puntaje_base` y
+    `puntaje_ponderado` NO existen en este schema a propósito: los calcula
+    `app.domain.rules.scoring.calculate_consolidated_score` después de
+    validar esta respuesta, nunca el agente."""
+
+    simbolo: str
+    categoria: Literal["principal", "menor_riesgo"]
+    horizonte: Literal["corto", "medio", "largo"]
+    nivel_riesgo: Literal["bajo", "medio", "alto"]
+
+    tendencia_momentum: float = Field(ge=0, le=100)
+    volumen_liquidez: float = Field(ge=0, le=100)
+    posicion_rangos_ath: float = Field(ge=0, le=100)
+    contexto_eventos: float = Field(ge=0, le=100)
+
+    tesis: str
+    invalidacion: str
+    escenario_adverso: EscenarioAdversoConsolidado
+    comentario_chartista: str | None
+    fuentes: list[str]
+    """`external_id` de eventos reales del catálogo (`eventos.external_id`,
+    p. ej. "ripple-sec-case-ends") que sustentan la tesis — nunca un id
+    inventado para datos de mercado (no existe ese tipo de evidencia
+    direccionable todavía). `app.ai.agents.consolidator` verifica cada uno
+    contra la base de datos antes de aceptar la respuesta."""
+
+
+class ConsolidadorOutput(_AgentOutputBase):
+    recomendacion: Literal["invertir", "no_invertir"]
+    razon_no_invertir: str | None
+    opciones: list[OpcionConsolidada] = Field(max_length=5)
+    """Máximo 5 (sección 7.2/19 del plan: hasta 3 "principal" + hasta 2
+    "menor_riesgo"). Puede tener menos, o ninguna — "no fuerces cinco
+    opciones para llenar un formato" (prompt del agente)."""
+    confianza_global: Literal["alta", "media", "baja"]
+
+    @model_validator(mode="after")
+    def _validar_coherencia(self) -> "ConsolidadorOutput":
+        if self.recomendacion == "no_invertir" and not self.razon_no_invertir:
+            raise ValueError('"razon_no_invertir" es obligatorio cuando recomendacion es "no_invertir"')
+        if self.recomendacion == "invertir" and not self.opciones:
+            raise ValueError('recomendacion "invertir" sin ninguna opción en "opciones" es incoherente')
+
+        principales = [o for o in self.opciones if o.categoria == "principal"]
+        menor_riesgo = [o for o in self.opciones if o.categoria == "menor_riesgo"]
+        if len(principales) > 3:
+            raise ValueError(f'máximo 3 opciones "principal" (sección 7.2 del plan), llegaron {len(principales)}')
+        if len(menor_riesgo) > 2:
+            raise ValueError(
+                f'máximo 2 opciones "menor_riesgo" (sección 7.2 del plan), llegaron {len(menor_riesgo)}'
+            )
+        return self

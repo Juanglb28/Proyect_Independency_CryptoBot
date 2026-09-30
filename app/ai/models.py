@@ -12,14 +12,6 @@ la API de Anthropic en esa fecha (platform.claude.com/docs/en/models/overview):
 - Consolidador (Agente 5): Opus 5.5 — el que pondera y decide, el rol más
   exigente de los cinco.
 
-TODO — DECISIÓN PENDIENTE: el Agente 5 (Consolidador) no tiene todavía un
-esquema de salida definido en el plan (ver `app/ai/schemas.py` — sección
-7.2 solo describe su prompt y sus prohibiciones, sin un bloque "SALIDA"
-como sí tienen los Agentes 2/3/4). Por eso `MODEL_CONSOLIDADOR` se deja
-fijado aquí (ya fue una decisión explícita del usuario) pero todavía no se
-usa en ningún `app/ai/agents/consolidator.py` — construirlo ahora
-obligaría a inventar esa estructura de salida.
-
 Precios verificados en la misma fuente el 2026-09-29 (USD por millón de
 tokens, entrada/salida). Si Anthropic cambia precios, estas constantes
 quedan desactualizadas: `cost_usd` en `llamadas_ia` es una cifra de

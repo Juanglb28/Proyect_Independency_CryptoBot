@@ -7,7 +7,12 @@ respuestas".
 import pytest
 from pydantic import ValidationError
 
-from app.ai.schemas import AnalistaCuantitativoOutput, AnalistaEventosOutput, AuditorOutput
+from app.ai.schemas import (
+    AnalistaCuantitativoOutput,
+    AnalistaEventosOutput,
+    AuditorOutput,
+    ConsolidadorOutput,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -174,3 +179,144 @@ def test_auditor_rejects_invalid_calidad_global_value():
     }
     with pytest.raises(ValidationError):
         AuditorOutput.model_validate(payload)
+
+
+# ---------------------------------------------------------------------------
+# Agente 5 — Consolidador
+# ---------------------------------------------------------------------------
+
+
+def _opcion_consolidada(**overrides) -> dict:
+    defaults = dict(
+        simbolo="AVAXUSDT",
+        categoria="principal",
+        horizonte="corto",
+        nivel_riesgo="medio",
+        tendencia_momentum=82,
+        volumen_liquidez=82,
+        posicion_rangos_ath=82,
+        contexto_eventos=82,
+        tesis="tendencia consistente en 4 temporalidades con volumen relativo alto",
+        invalidacion="pérdida persistente de momentum relativo acompañada de deterioro de liquidez",
+        escenario_adverso={
+            "descripcion": "reversión brusca tras agotamiento de la tendencia",
+            "desencadenante": "caída de volumen relativo por debajo de 1x",
+            "probabilidad_relativa": "media",
+        },
+        comentario_chartista=None,
+        fuentes=[],
+    )
+    defaults.update(overrides)
+    return defaults
+
+
+def test_consolidador_accepts_a_well_formed_response():
+    payload = {
+        "recomendacion": "invertir",
+        "razon_no_invertir": None,
+        "opciones": [_opcion_consolidada()],
+        "confianza_global": "media",
+    }
+    output = ConsolidadorOutput.model_validate(payload)
+    assert output.opciones[0].simbolo == "AVAXUSDT"
+    assert output.opciones[0].tendencia_momentum == 82
+
+
+def test_consolidador_rejects_sub_score_outside_0_100():
+    payload = {
+        "recomendacion": "invertir",
+        "razon_no_invertir": None,
+        "opciones": [_opcion_consolidada(tendencia_momentum=101)],
+        "confianza_global": "media",
+    }
+    with pytest.raises(ValidationError):
+        ConsolidadorOutput.model_validate(payload)
+
+
+def test_consolidador_rejects_unexpected_extra_field():
+    # El agente nunca debe entregar un puntaje ya combinado — eso lo
+    # calcula app.domain.rules.scoring, nunca el modelo (P1 del plan).
+    payload = {
+        "recomendacion": "invertir",
+        "razon_no_invertir": None,
+        "opciones": [_opcion_consolidada(puntaje_ponderado=57.4)],
+        "confianza_global": "media",
+    }
+    with pytest.raises(ValidationError):
+        ConsolidadorOutput.model_validate(payload)
+
+
+def test_consolidador_requires_razon_no_invertir_when_recommending_no_invertir():
+    payload = {
+        "recomendacion": "no_invertir",
+        "razon_no_invertir": None,
+        "opciones": [],
+        "confianza_global": "alta",
+    }
+    with pytest.raises(ValidationError):
+        ConsolidadorOutput.model_validate(payload)
+
+
+def test_consolidador_rejects_invertir_recommendation_with_no_opciones():
+    payload = {
+        "recomendacion": "invertir",
+        "razon_no_invertir": None,
+        "opciones": [],
+        "confianza_global": "alta",
+    }
+    with pytest.raises(ValidationError):
+        ConsolidadorOutput.model_validate(payload)
+
+
+def test_consolidador_accepts_no_invertir_with_no_opciones():
+    payload = {
+        "recomendacion": "no_invertir",
+        "razon_no_invertir": "ningún candidato supera el umbral mínimo de entrada",
+        "opciones": [],
+        "confianza_global": "alta",
+    }
+    output = ConsolidadorOutput.model_validate(payload)
+    assert output.opciones == []
+
+
+def test_consolidador_rejects_more_than_three_opciones_principal():
+    payload = {
+        "recomendacion": "invertir",
+        "razon_no_invertir": None,
+        "opciones": [
+            _opcion_consolidada(simbolo=f"SYM{i}USDT", categoria="principal") for i in range(4)
+        ],
+        "confianza_global": "media",
+    }
+    with pytest.raises(ValidationError):
+        ConsolidadorOutput.model_validate(payload)
+
+
+def test_consolidador_rejects_more_than_two_opciones_menor_riesgo():
+    payload = {
+        "recomendacion": "invertir",
+        "razon_no_invertir": None,
+        "opciones": [
+            _opcion_consolidada(simbolo=f"SYM{i}USDT", categoria="menor_riesgo") for i in range(3)
+        ],
+        "confianza_global": "media",
+    }
+    with pytest.raises(ValidationError):
+        ConsolidadorOutput.model_validate(payload)
+
+
+def test_consolidador_rejects_more_than_five_opciones_total():
+    payload = {
+        "recomendacion": "invertir",
+        "razon_no_invertir": None,
+        "opciones": [
+            _opcion_consolidada(simbolo=f"P{i}USDT", categoria="principal") for i in range(3)
+        ]
+        + [
+            _opcion_consolidada(simbolo=f"M{i}USDT", categoria="menor_riesgo") for i in range(2)
+        ]
+        + [_opcion_consolidada(simbolo="EXTRAUSDT", categoria="menor_riesgo")],
+        "confianza_global": "media",
+    }
+    with pytest.raises(ValidationError):
+        ConsolidadorOutput.model_validate(payload)

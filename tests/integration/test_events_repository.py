@@ -5,7 +5,7 @@ app/repositories/events.py)."""
 
 from datetime import date
 
-from app.repositories.events import EventoInput, get_events, save_events
+from app.repositories.events import EventoInput, get_events, get_existing_external_ids, save_events
 
 
 def _event(**overrides) -> EventoInput:
@@ -59,6 +59,21 @@ def test_save_events_upserts_corrections_by_external_id(db_session):
 
 def test_save_events_with_empty_list_is_a_no_op(db_session):
     assert save_events(db_session, []) == 0
+
+
+def test_get_existing_external_ids_returns_only_ids_present_in_catalog(db_session):
+    # Usado por app/ai/agents/consolidator.py para verificar que "fuentes"
+    # del Consolidador nunca referencie un evento inventado (sección P3 del
+    # plan).
+    save_events(db_session, [_event(external_id="real-event")])
+
+    encontrados = get_existing_external_ids(db_session, {"real-event", "evento-inventado"})
+
+    assert encontrados == {"real-event"}
+
+
+def test_get_existing_external_ids_with_empty_set_is_a_no_op(db_session):
+    assert get_existing_external_ids(db_session, set()) == set()
 
 
 def test_get_events_orders_by_date(db_session):

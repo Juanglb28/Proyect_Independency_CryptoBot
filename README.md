@@ -258,24 +258,40 @@ python -m scripts.run_agent_demo  # llamada real al Auditor con datos de ejemplo
 `app/ai/client.py` (cliente delgado sobre el SDK oficial de Anthropic,
 con el prompt de sistema marcado para prompt caching) + `app/ai/schemas.py`
 (schemas Pydantic que reproducen exactamente el JSON de "SALIDA" de cada
-prompt) + `app/ai/prompts/*.py` (texto verbatim de la sección 7.2 del plan)
-+ `app/ai/agents/{quantitative,events,auditor}.py` implementan tres de los
-cinco agentes: Analista cuantitativo y Analista de eventos (Sonnet 5.5),
-Auditor de datos (Haiku 4.5). Cada llamada válida queda registrada en
-`llamadas_ia` (`app/repositories/ai_calls.py`) con tokens y costo
-estimado. Los agentes no reciben ninguna herramienta de ejecución ni
-importan nada de `app.execution`/`app.data.exchange_client` (P2/P4 del
-plan). El bloque DATOS de cada llamada lo arma quien invoca al agente —
-construirlo a partir de datos reales de la base es responsabilidad del
-Paso 7 (orquestación), todavía no implementado.
+prompt) + `app/ai/prompts/*.py` + `app/ai/agents/*.py` implementan los
+cuatro agentes no conversacionales: Analista cuantitativo y Analista de
+eventos (Sonnet 5.5), Auditor de datos (Haiku 4.5) y Consolidador (Opus
+5.5). Cada llamada válida queda registrada en `llamadas_ia`
+(`app/repositories/ai_calls.py`) con tokens y costo estimado. Los agentes
+no reciben ninguna herramienta de ejecución ni importan nada de
+`app.execution`/`app.data.exchange_client` (P2/P4 del plan). El bloque
+DATOS de cada llamada lo arma quien invoca al agente — construirlo a
+partir de datos reales de la base es responsabilidad del Paso 7
+(orquestación), todavía no implementado.
+
+**Consolidador (Agente 5) — diseño co-construido con el usuario el
+2026-09-29**: el plan (sección 7.2) nunca llegó a especificar su JSON de
+"SALIDA" (a diferencia de los otros tres) y su tabla de ponderación
+contradice su propia descripción textual (una tabla aditiva de 5
+categorías sumando 100% frente a una calidad de datos descrita como
+multiplicador del puntaje final — dos modelos matemáticos incompatibles).
+Se resolvió a favor del modelo multiplicativo, reforzando P1 ("el código
+calcula, la IA interpreta"): el agente entrega solo su juicio 0-100 de
+cuatro categorías (`tendencia_momentum`/`volumen_liquidez`/
+`posicion_rangos_ath`/`contexto_eventos`) por opción — nunca un puntaje ya
+combinado. `app/domain/rules/scoring.py::calculate_consolidated_score`
+(código determinista y testeado, `tests/unit/test_scoring_consolidador.py`)
+combina esas cuatro categorías con los pesos fijos 30/20/20/30, aplica la
+calidad de datos del Auditor (no la juzga el Consolidador) como
+multiplicador, y compara el resultado contra `SCORE_MINIMO_ENTRADA=55`
+(sección 19 del plan). `app/ai/agents/consolidator.py` además verifica que
+cada `fuentes` citada exista realmente en el catálogo de eventos
+(`app/repositories/events.py::get_existing_external_ids`) — nunca acepta
+un id inventado por el modelo (P3 del plan).
 
 **Diferido deliberadamente**: el Agente 1 (Entrevistador) es conversacional
 multi-turno y su perfil de salida no tiene tabla asignada en el plan —
-se construirá junto con Streamlit (Paso 10). El Agente 5 (Consolidador)
-tiene prompt y modelo (Opus 5.5) pero el plan nunca llegó a especificar
-su JSON de "SALIDA" (a diferencia de los otros cuatro) — inventar esa
-forma ahora arriesgaría definir a ciegas las columnas de `propuestas`
-(Paso 7); queda pendiente hasta que se defina explícitamente.
+se construirá junto con Streamlit (Paso 10).
 
 ## Tests
 
@@ -435,10 +451,14 @@ puede y no puede hacer cada capa.
   distancia al máximo de 90 días, con normalización absoluta y umbrales
   fijos (`app/domain/rules/scoring.py`). Comando
   `python -m scripts.run_prefilter`.
-- Agentes de IA — Analista cuantitativo, Analista de eventos y Auditor de
-  datos (`app/ai/`, sección 7/15.10 del plan, Paso 6): cliente Anthropic,
-  schemas Pydantic de contrato, prompts verbatim y registro de auditoría
-  en `llamadas_ia`. Ver "Agentes de IA (Paso 6 del plan)" más arriba.
+- Agentes de IA — los cuatro no conversacionales: Analista cuantitativo,
+  Analista de eventos, Auditor de datos y Consolidador (`app/ai/`, sección
+  7/15.10 del plan, Paso 6): cliente Anthropic, schemas Pydantic de
+  contrato, prompts y registro de auditoría en `llamadas_ia`. El
+  Consolidador además calcula su puntaje ponderado en código determinista
+  (`app/domain/rules/scoring.py::calculate_consolidated_score`) y valida
+  que sus fuentes citadas existan en el catálogo de eventos. Ver "Agentes
+  de IA (Paso 6 del plan)" más arriba.
 - Tests unitarios (configuración, validaciones del cliente de Binance,
   dispatch de `main`, lógica de paginación del backfill con una fuente
   falsa, fórmulas de indicadores y de análisis de eventos contra casos
@@ -467,17 +487,16 @@ prompt — "no sobreimplementar"):
   sección 17 del plan: explícitamente pendiente hasta explorarla con el
   catálogo real ya cargado (Fase 2). `analisis_eventos` es el insumo, no
   esa definición.
-- Agente 1 (Entrevistador, conversacional — diferido a Paso 10/Streamlit) y
-  Agente 5 (Consolidador — su JSON de salida no está definido en el plan,
-  ver "Agentes de IA (Paso 6 del plan)" más arriba). Tampoco existe todavía
-  la orquestación que arma el bloque DATOS de cada agente a partir de datos
-  reales de la base (Paso 7).
+- Agente 1 (Entrevistador, conversacional — diferido a Paso 10/Streamlit).
+  Tampoco existe todavía la orquestación que arma el bloque DATOS de cada
+  agente a partir de datos reales de la base, ni la persistencia de
+  `propuestas` a partir de lo que devuelve el Consolidador (Paso 7).
 - Motor de ejecución, órdenes, posiciones y monitoreo — ninguna credencial
   de Binance se usa todavía; ni el cliente de velas ni el backfill la
   necesitan.
 - Cálculo de resultados y métricas de performance.
 - Interfaz Streamlit.
-- Cualquier conexión a Anthropic o Telegram.
+- Conexión a Telegram.
 
 ## Cómo verificar que el entorno funciona (resumen)
 

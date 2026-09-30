@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TypeVar
 
@@ -67,13 +68,21 @@ def run_json_agent(
     datos: dict,
     schema: type[SchemaT],
     ciclo_id: uuid.UUID | None = None,
+    extra_validate: Callable[[SchemaT], None] | None = None,
 ) -> AgentRunResult:
     """Llama al modelo, valida su respuesta contra `schema` y persiste el
     registro de auditoría. Propaga `AgentResponseError` (JSON inválido) o
     `AgentValidationError` (JSON válido pero con forma incorrecta) en vez
     de devolver un resultado parcial — quien orquesta el ciclo decide qué
     hacer ante una interpretación fallida (sección P3 del plan: nunca
-    sustituir un dato faltante por un supuesto)."""
+    sustituir un dato faltante por un supuesto).
+
+    `extra_validate`, si se pasa, corre DESPUÉS de la validación de
+    schema y ANTES de persistir — para chequeos que Pydantic no puede
+    hacer solo (por ejemplo, que un id referenciado exista realmente en la
+    base de datos). Debe lanzar `AgentValidationError` si algo no es
+    válido; una respuesta que falla aquí tampoco se persiste, igual que
+    una que falla el schema."""
     user_content = json.dumps(datos, ensure_ascii=False, default=str)
 
     call_result = call_agent(
@@ -91,6 +100,9 @@ def run_json_agent(
         raise AgentValidationError(
             f"La respuesta de '{agente}' no cumple el schema {schema.__name__}: {exc}"
         ) from exc
+
+    if extra_validate is not None:
+        extra_validate(output)
 
     cost_usd = calculate_cost_usd(modelo, call_result.input_tokens, call_result.output_tokens)
 

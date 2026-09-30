@@ -92,6 +92,21 @@ def save_events(session: Session, events: list[EventoInput]) -> int:
     return len(incoming_ids - existing_ids)
 
 
+def get_existing_external_ids(session: Session, external_ids: set[str]) -> set[str]:
+    """De `external_ids`, devuelve el subconjunto que existe realmente en
+    el catálogo. Usado por `app/ai/agents/consolidator.py` para verificar
+    que el campo "fuentes" del Consolidador solo referencie eventos reales
+    del catálogo, nunca un id inventado por el modelo (sección P3 del
+    plan)."""
+    if not external_ids:
+        return set()
+    return set(
+        session.execute(
+            select(Evento.external_id).where(Evento.external_id.in_(external_ids))
+        ).scalars()
+    )
+
+
 def get_events(session: Session) -> list[Evento]:
     """Lee todo el catálogo, ordenado por fecha. Devuelve el modelo ORM
     directamente (a diferencia de `get_candles`/`get_indicators`): aquí no
