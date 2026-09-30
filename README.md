@@ -425,6 +425,60 @@ internas, igual que `test_consolidator_agent.py`):
 completo con 2 candidatos, exclusión parcial/total por calidad
 insuficiente, fallo de un agente).
 
+**Fix real (2026-09-30):** con 5 candidatos en un ciclo real, la respuesta
+del Consolidador se cortó por `max_tokens` insuficiente (`stop_reason` no
+se revisaba antes de intentar parsear el JSON). Ver `app/ai/client.py`
+(detección explícita de truncamiento) y
+`app/ai/agents/consolidator.py::MAX_TOKENS_CONSOLIDADOR`.
+
+## Tarea diaria programada (Windows)
+
+El ciclo diario no necesita que ninguna IA lo arranque ni lo supervise —
+es un script determinista (principio P2 del plan). Se registra en el
+**Programador de tareas de Windows** nativo, no como una tarea programada
+de un asistente de IA, para que corra todos los días sin depender de que
+una sesión de Claude esté abierta y vinculada a esta máquina a esa hora.
+
+`scripts/run_daily_cycle.ps1` es el wrapper que Task Scheduler ejecuta:
+levanta los contenedores (por si Docker Desktop se reinició) y corre el
+ciclo dentro del contenedor `app`, con la salida guardada en
+`logs/daily_cycle_<fecha>.log` (no se sube a git — ver `.gitignore`).
+
+Registrar la tarea (PowerShell, una sola vez):
+
+```powershell
+schtasks /create /tn "CryptoTradingPlatform_DailyCycle" /sc daily /st 09:00 /tr "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"D:\Trabajo\Plataforma_de_Trading\crypto-trading-platform\scripts\run_daily_cycle.ps1`""
+```
+
+Ajusta `/st 09:00` a la hora que prefieras — el mercado cripto opera 24/7,
+así que no hay una hora "correcta"; solo debe ser constante entre ciclos
+para no sesgar la comparación de indicadores diarios. Verificar que quedó
+registrada:
+
+```powershell
+schtasks /query /tn "CryptoTradingPlatform_DailyCycle"
+```
+
+Correr manualmente sin esperar al horario (útil para probar que quedó bien
+configurada):
+
+```powershell
+schtasks /run /tn "CryptoTradingPlatform_DailyCycle"
+```
+
+**Costo estimado:** ~$0.49 USD por ciclo con candidatos reales (sección 4.3
+del plan proyecta 12-20 llamadas diarias, por debajo de 8 USD/mes) — 30
+días de ciclos completos rondan los 15 USD/mes.
+
+**Qué valor tiene acumular esto antes de que exista Paso 8:** cada
+`decision_snapshot` congela el contexto real en su momento (correcto para
+trazabilidad), pero mientras no exista ejecución paper, ninguna propuesta
+acumulada ahora se convierte después en una posición — su precio de
+entrada queda obsoleto para cuando la ejecución esté lista. El valor de
+correr esto ya es de calibración (con qué frecuencia el score supera 55,
+qué tan seguido el Consolidador recomienda no invertir, estabilidad del
+costo por ciclo), no un backlog de operaciones por ejecutar retroactivamente.
+
 ## Tests
 
 ```bash
