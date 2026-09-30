@@ -54,15 +54,15 @@ def _propuesta_row(ciclo_id, symbol: str = "BTCUSDT", supera: bool = True) -> Pr
 
 def test_create_avanzar_y_finalizar_ciclo(db_session):
     started_at = datetime.now(timezone.utc)
-    ciclo_id = create_ciclo(db_session, started_at=started_at, status=EstadoCiclo.INGEST)
+    ciclo_id = create_ciclo(db_session, started_at=started_at, status=EstadoCiclo.PREFILTER)
 
     ciclo = get_ciclo(db_session, ciclo_id)
     assert ciclo is not None
-    assert ciclo.status == EstadoCiclo.INGEST
+    assert ciclo.status == EstadoCiclo.PREFILTER
     assert ciclo.finished_at is None
 
-    avanzar_ciclo(db_session, ciclo_id, EstadoCiclo.PREFILTER)
-    assert get_ciclo(db_session, ciclo_id).status == EstadoCiclo.PREFILTER
+    avanzar_ciclo(db_session, ciclo_id, EstadoCiclo.EVENT_CORRELATION)
+    assert get_ciclo(db_session, ciclo_id).status == EstadoCiclo.EVENT_CORRELATION
 
     finalizar_ciclo(
         db_session,

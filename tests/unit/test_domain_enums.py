@@ -3,15 +3,13 @@
 from app.domain.enums import EstadoCiclo
 
 
-def test_estado_ciclo_tiene_exactamente_las_ocho_etapas_de_analisis():
-    # Deliberadamente NO incluye RISK_VALIDATION en adelante (Paso 8/9) —
-    # ver el docstring de EstadoCiclo. Este test falla a propósito si
-    # alguien agrega una etapa de ejecución aquí sin la decisión explícita
-    # que eso requiere (sección 30 del master prompt).
+def test_estado_ciclo_tiene_exactamente_las_cinco_etapas_de_analisis():
+    # Deliberadamente NO incluye INGEST/VALIDATE_DATA/CALCULATE_INDICATORS
+    # (procesos separados y manuales, ver README) ni RISK_VALIDATION en
+    # adelante (Paso 8/9) — ver el docstring de EstadoCiclo. Este test
+    # falla a propósito si alguien agrega una etapa sin código real que la
+    # transite (sección 30 del master prompt).
     assert [e.value for e in EstadoCiclo] == [
-        "INGEST",
-        "VALIDATE_DATA",
-        "CALCULATE_INDICATORS",
         "PREFILTER",
         "EVENT_CORRELATION",
         "AI_ANALYSIS",
