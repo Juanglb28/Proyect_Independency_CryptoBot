@@ -298,21 +298,82 @@ cada `fuentes` citada exista realmente en el catálogo de eventos
 un id inventado por el modelo (P3 del plan).
 
 **`scripts/run_agent_demo_full_cycle.py` — los 4 agentes en secuencia con
-datos reales**: elige el mejor candidato del pre-filtro de hoy (o el símbolo
-que se le pase con `--simbolo`), arma el bloque DATOS de cada agente leyendo
-`velas`/`indicadores`/`eventos`/`analisis_eventos` YA calculados en la base
-real (nunca inventa un valor — un dato ausente se declara como faltante), y
-corre los 4 agentes de verdad en su orden de dependencia. Sirve para
-verificar el tubo completo con datos reales antes de comprometerse al
-esquema de persistencia del Paso 7; no persiste nada en
-`factores`/`propuestas`/`ciclos_analisis`. Las funciones que arman cada
-bloque DATOS están testeadas contra Postgres real
-(`tests/integration/test_run_agent_demo_full_cycle.py`); el propio `main()`
-(4 llamadas reales y pagas a la API) no, igual que `run_agent_demo.py`.
+datos reales, UN símbolo, sin persistir**: elige el mejor candidato del
+pre-filtro de hoy (o el símbolo que se le pase con `--simbolo`) y corre los
+4 agentes de verdad sobre él, usando la misma lógica de armado de DATOS que
+`app/orchestration/candidate_pipeline.py` (ver más abajo). Sigue sin
+persistir nada en `factores`/`propuestas`/`ciclos_analisis` — para eso está
+`scripts/run_daily_cycle.py`. Útil para inspeccionar la salida cruda de un
+agente sobre un símbolo puntual sin gastar en los otros candidatos del día.
 
 **Diferido deliberadamente**: el Agente 1 (Entrevistador) es conversacional
 multi-turno y su perfil de salida no tiene tabla asignada en el plan —
 se construirá junto con Streamlit (Paso 10).
+
+## Orquestación del ciclo diario (Paso 7 del plan)
+
+```bash
+python -m scripts.run_daily_cycle  # ciclo real completo — consume API de pago si hay candidatos
+```
+
+`app/orchestration/candidate_pipeline.py` arma el bloque DATOS de cada
+agente para un símbolo leyendo `velas`/`indicadores`/`eventos`/
+`analisis_eventos` YA calculados en la base (nunca los recalcula — ver más
+abajo por qué la ingesta y el cálculo de indicadores quedan fuera de este
+paso). `app/orchestration/daily_cycle.py::run_daily_cycle` es el
+orquestador real: corre el pre-filtro, evalúa a la vez a TODOS los
+candidatos que devuelve (hasta `MAX_CANDIDATOS_PREFILTRO=5`, no uno a la
+vez como el script de humo del Paso 6), llama a los 4 agentes por
+candidato en su orden real de dependencia, calcula el score de cada opción
+del Consolidador en código (`app/domain/rules/scoring.py`, nunca el LLM) y
+persiste todo con trazabilidad completa: `ciclos_analisis` (una fila por
+ejecución, con `status` formalizado en `app.domain.enums.EstadoCiclo`),
+`propuestas` (una fila por CADA opción que devuelve el Consolidador,
+supere o no el umbral de entrada) y `factores` (las 4 categorías
+ponderadas de cada propuesta, con el peso fijo que realmente se usó).
+
+**`EstadoCiclo`** (`app/domain/enums.py`) tiene deliberadamente solo 5
+valores — `PREFILTER`, `EVENT_CORRELATION`, `AI_ANALYSIS`, `CONSOLIDATE`,
+`FREEZE_DECISION_SNAPSHOT` — de los 15 que describe la sección 15.6 del
+plan. Quedan fuera `INGEST`/`VALIDATE_DATA`/`CALCULATE_INDICATORS` porque
+ese orquestador lee datos ya calculados por procesos separados y todavía
+manuales (`scripts/backfill_candles.py`, `scripts/calculate_indicators.py`
+— la actualización incremental programada sigue pendiente, ver "Qué NO
+está implementado"); y quedan fuera `RISK_VALIDATION` en adelante porque
+pertenecen al motor de ejecución (Paso 8) y a resultados/performance (Paso
+9), que todavía no existen. El resultado de un ciclo (falló / terminó sin
+candidatos / terminó con propuestas) se deriva de `status` +
+`error_message` + la existencia de filas en `propuestas` — nunca de un
+campo adicional inventado para resumirlo (ver el docstring de
+`EstadoCiclo`).
+
+**Reglas de corte** (ninguna nueva — ya decididas en pasos previos, o
+confirmadas explícitamente con el usuario para este paso, 2026-09-30):
+sin candidatos del pre-filtro, cero llamadas a la API; un candidato cuyo
+Auditor marca `calidad_global="insuficiente"` queda excluido del bloque
+que recibe el Consolidador (si todos quedan excluidos, el Consolidador ni
+se llama); se persisten TODAS las opciones del Consolidador, trazabilidad
+completa; `decision_snapshot` (JSONB dentro de `propuestas`, sección 8.3
+del plan) congela indicadores, interpretación de los agentes, contexto de
+eventos, auditoría de datos, scores, tesis/invalidación y versión de
+modelo/prompt de cada agente — deliberadamente SIN `initial_stop`/
+`initial_target` todavía, porque no existe `app/domain/rules/risk.py`
+(`TODO — DECISIÓN PENDIENTE`, Paso 8).
+
+**P5 (el sistema debe poder morir y revivir)**: `run_daily_cycle` hace
+`session.commit()` después de cada bloque de costo real (creación del
+ciclo, cada candidato evaluado, la llamada al Consolidador, cada propuesta
+persistida) — mismo patrón que `candle_ingestion.backfill_all` — para que
+un error posterior nunca se lleve por delante una llamada que ya costó
+dinero de verdad. Un fallo no manejado deja el ciclo con `error_message`
+no nulo y `status` = la última etapa alcanzada, nunca un salto silencioso.
+
+Tests contra Postgres real con `call_agent` parcheado (nunca capas más
+internas, igual que `test_consolidator_agent.py`):
+`tests/integration/test_candidate_pipeline.py` (armado de DATOS) y
+`tests/integration/test_daily_cycle.py` (ciclo sin candidatos, ciclo
+completo con 2 candidatos, exclusión parcial/total por calidad
+insuficiente, fallo de un agente).
 
 ## Tests
 
@@ -362,15 +423,19 @@ internet hacia `api.binance.com` (sin API key).
 
 ```text
 app/
-├── main.py              # punto de entrada (comandos healthcheck, fetch-candles)
+├── main.py              # punto de entrada (comandos healthcheck, fetch-candles, calculate-indicators)
 ├── config.py             # configuración tipada (pydantic-settings)
 ├── logging_config.py     # logging estructurado en JSON
 ├── db/
 │   ├── base.py            # Base declarativa de SQLAlchemy
 │   ├── session.py         # engine y fábrica de sesiones
-│   └── models/            # velas, indicadores, eventos, analisis_eventos, ciclos_analisis
+│   └── models/             # velas, indicadores, eventos, analisis_eventos,
+│                           # ciclos_analisis/propuestas/factores, llamadas_ia
 ├── domain/
-│   └── symbols.py         # whitelist explícita de símbolos operables (sección 21)
+│   ├── symbols.py         # whitelist explícita de símbolos operables (sección 21)
+│   ├── enums.py           # EstadoCiclo (etapas de ciclos_analisis.status, Paso 7)
+│   └── rules/
+│       └── scoring.py     # umbrales fijos + calculate_consolidated_score (Paso 6)
 ├── data/
 │   ├── exchange_client.py     # cliente mínimo de Binance mainnet (velas, solo lectura)
 │   ├── candle_ingestion.py    # paginación + backfill idempotente hacia `velas`
@@ -378,23 +443,45 @@ app/
 │   ├── indicator_pipeline.py    # orquesta el cálculo sobre muchas combinaciones + persistencia
 │   ├── indicator_verification.py # recalcula vs. persistido + invariantes matemáticos
 │   ├── event_analyzer.py        # % de cambio de precio en ventanas alrededor de un evento (determinista, puro)
-│   └── event_pipeline.py        # orquesta el cálculo sobre todo el catálogo + persistencia
-├── repositories/
-│   ├── health.py          # health check de base de datos
-│   ├── candles.py         # persistencia + lectura idempotente de velas
-│   ├── indicators.py      # persistencia idempotente de indicadores
-│   ├── events.py          # persistencia con upsert del catálogo de eventos
-│   └── event_analysis.py  # persistencia idempotente de analisis_eventos
-├── ai/, execution/, results/, orchestration/, ui/
+│   ├── event_pipeline.py        # orquesta el cálculo sobre todo el catálogo + persistencia
+│   ├── prefilter.py             # puntaje 0-100 por símbolo (determinista, puro)
+│   └── prefilter_pipeline.py    # orquesta el pre-filtro sobre todo el universo
+├── ai/
+│   ├── client.py           # cliente delgado sobre el SDK de Anthropic (prompt caching)
+│   ├── models.py           # nombres de modelo + precios por millón de tokens
+│   ├── schemas.py          # schemas Pydantic de la salida de cada agente
+│   ├── prompts/            # un prompt de sistema por agente
+│   └── agents/
+│       ├── _runner.py          # orquestación JSON-in/JSON-out compartida (2, 3, 4)
+│       ├── quantitative.py     # Agente 2 — Analista cuantitativo
+│       ├── events.py           # Agente 3 — Analista de eventos
+│       ├── auditor.py          # Agente 4 — Auditor de datos
+│       └── consolidator.py     # Agente 5 — Consolidador (score en código, no en el LLM)
+├── orchestration/
+│   ├── candidate_pipeline.py  # arma el bloque DATOS de cada agente desde la base (Paso 7)
+│   └── daily_cycle.py         # run_daily_cycle: el ciclo real completo (Paso 7)
+├── execution/, results/, ui/
 │   # paquetes reservados por la arquitectura del plan (sección 15.1),
-│   # todavía vacíos: se irán poblando fase a fase.
+│   # todavía vacíos: se irán poblando fase a fase (Paso 8/9/10).
+├── repositories/
+│   ├── health.py           # health check de base de datos
+│   ├── candles.py          # persistencia + lectura idempotente de velas
+│   ├── indicators.py       # persistencia idempotente de indicadores
+│   ├── events.py           # persistencia con upsert del catálogo de eventos
+│   ├── event_analysis.py   # persistencia idempotente de analisis_eventos
+│   ├── ai_calls.py         # persistencia de llamadas_ia
+│   └── analysis.py         # persistencia de ciclos_analisis/propuestas/factores
 migrations/                # Alembic
 scripts/
-├── backfill_candles.py         # CLI: backfill histórico completo
-├── calculate_indicators.py     # CLI: cálculo masivo de indicadores
-├── verify_indicators.py        # CLI: verificación de integridad de indicadores
-├── seed_events.py              # CLI: carga/actualiza el catálogo de eventos
-└── calculate_event_analysis.py # CLI: cálculo masivo de analisis_eventos
+├── backfill_candles.py          # CLI: backfill histórico completo
+├── calculate_indicators.py      # CLI: cálculo masivo de indicadores
+├── verify_indicators.py         # CLI: verificación de integridad de indicadores
+├── seed_events.py                # CLI: carga/actualiza el catálogo de eventos
+├── calculate_event_analysis.py  # CLI: cálculo masivo de analisis_eventos
+├── run_prefilter.py              # CLI: puntúa los 20 símbolos y muestra los candidatos del día
+├── run_agent_demo.py             # CLI: un agente, datos de ejemplo — consume API de pago
+├── run_agent_demo_full_cycle.py  # CLI: 4 agentes, un símbolo real, sin persistir — consume API de pago
+└── run_daily_cycle.py            # CLI: ciclo real completo, persiste todo — consume API de pago
 data/
 └── events/                # catálogo de eventos (*.json) — ver data/events/README.md
 tests/
@@ -480,6 +567,14 @@ puede y no puede hacer cada capa.
   (`app/domain/rules/scoring.py::calculate_consolidated_score`) y valida
   que sus fuentes citadas existan en el catálogo de eventos. Ver "Agentes
   de IA (Paso 6 del plan)" más arriba.
+- Orquestador del ciclo diario (`app/orchestration/`, sección 15.6/8.3 del
+  plan, Paso 7): `daily_cycle.py::run_daily_cycle` corre el ciclo completo
+  de análisis — pre-filtro, hasta 5 candidatos evaluados con los 4 agentes
+  cada uno, Consolidador, scoring determinista — y persiste `ciclos_analisis`
+  (con `status` formalizado en `app.domain.enums.EstadoCiclo`), `propuestas`
+  (con `decision_snapshot` congelado) y `factores`. Comando
+  `python -m scripts.run_daily_cycle`. Ver "Orquestación del ciclo diario
+  (Paso 7 del plan)" más arriba.
 - Tests unitarios (configuración, validaciones del cliente de Binance,
   dispatch de `main`, lógica de paginación del backfill con una fuente
   falsa, fórmulas de indicadores y de análisis de eventos contra casos
@@ -509,9 +604,14 @@ prompt — "no sobreimplementar"):
   catálogo real ya cargado (Fase 2). `analisis_eventos` es el insumo, no
   esa definición.
 - Agente 1 (Entrevistador, conversacional — diferido a Paso 10/Streamlit).
-  Tampoco existe todavía la orquestación que arma el bloque DATOS de cada
-  agente a partir de datos reales de la base, ni la persistencia de
-  `propuestas` a partir de lo que devuelve el Consolidador (Paso 7).
+- `app/domain/rules/risk.py` — no existe todavía. `decision_snapshot` no
+  incluye `initial_stop`/`initial_target` por esto (`TODO — DECISIÓN
+  PENDIENTE` en `app/db/models/analysis.py`); crearlo sin ninguna posición
+  real que proteger sería sobreimplementar.
+- Validación de riesgo, aprobación (manual u órdenes paper) y ejecución de
+  propuestas — `propuestas` queda como el registro de TODO lo que el
+  Consolidador propuso, sin decidir todavía cuál se convierte en una
+  posición real (Paso 8: `RISK_VALIDATION` en adelante de la sección 15.6).
 - Motor de ejecución, órdenes, posiciones y monitoreo — ninguna credencial
   de Binance se usa todavía; ni el cliente de velas ni el backfill la
   necesitan.
