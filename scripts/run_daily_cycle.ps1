@@ -9,11 +9,13 @@
 # hora exacta.
 #
 # Qué hace: se asegura de que Docker Desktop esté corriendo (lo levanta y
-# espera si hace falta), levanta los contenedores y corre el ciclo dentro
-# del contenedor `app` — ver docker-compose.yml y README.md, sección
-# "Ejecutar comandos dentro de Docker" (necesario en esta máquina por el
-# bloqueo de Smart App Control con las extensiones compiladas nativas de
-# Windows, ver Evento 3077 de CodeIntegrity).
+# espera si hace falta), levanta los contenedores y corre
+# scripts.run_daily_pipeline dentro del contenedor `app` (ingesta
+# incremental + indicadores + el ciclo real, en ese orden) — ver
+# docker-compose.yml y README.md, sección "Ejecutar comandos dentro de
+# Docker" (necesario en esta máquina por el bloqueo de Smart App Control
+# con las extensiones compiladas nativas de Windows, ver Evento 3077 de
+# CodeIntegrity).
 #
 # Uso manual: powershell -File scripts\run_daily_cycle.ps1
 # Registro en Task Scheduler: ver README.md, sección
@@ -92,7 +94,12 @@ try {
     }
 
     docker compose up -d *>> $logFile
-    docker compose run --rm app python -m scripts.run_daily_cycle *>> $logFile
+    # scripts.run_daily_pipeline encadena ingesta incremental de velas +
+    # recálculo de indicadores + el ciclo real (en ese orden) — agregado
+    # tras detectar en producción (2026-10-01/02) que el ciclo llevaba dos
+    # días corriendo sobre velas con más de 50 horas de antigüedad, porque
+    # nada mantenía `velas`/`indicadores` al día automáticamente.
+    docker compose run --rm app python -m scripts.run_daily_pipeline *>> $logFile
     $exitCode = $LASTEXITCODE
 
     Write-Log "Ejecucion finalizada con codigo de salida $exitCode."

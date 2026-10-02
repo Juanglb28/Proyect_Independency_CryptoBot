@@ -441,9 +441,22 @@ una sesión de Claude esté abierta y vinculada a esta máquina a esa hora.
 
 `scripts/run_daily_cycle.ps1` es el wrapper que Task Scheduler ejecuta: se
 asegura de que Docker Desktop esté corriendo (lo levanta y espera hasta 2
-minutos si hace falta), levanta los contenedores y corre el ciclo dentro
-del contenedor `app`, con la salida guardada en
-`logs/daily_cycle_<fecha>.log` (no se sube a git — ver `.gitignore`).
+minutos si hace falta), levanta los contenedores y corre
+`scripts.run_daily_pipeline` dentro del contenedor `app`, con la salida
+guardada en `logs/daily_cycle_<fecha>.log` (no se sube a git — ver
+`.gitignore`).
+
+**Bug real (2026-10-02):** el ciclo llevaba dos días corriendo sobre velas
+con más de 50 horas de antigüedad — visible en los `WARNING` del Auditor
+("Antigüedad crítica") en ambas corridas (2026-09-30 y 2026-10-01). Nada
+mantenía `velas`/`indicadores` al día automáticamente: `run_daily_cycle.py`
+asume por diseño (Paso 7) que esos datos ya están frescos, porque la
+ingesta y el cálculo de indicadores son pasos separados. `scripts/
+run_daily_pipeline.py` encadena, en orden, `backfill_candles --days 5`
+(ventana chica, barata e idempotente — no los 2 años completos de la carga
+inicial) → `calculate_indicators` → `run_daily_cycle`, deteniéndose si
+algún paso falla. Esto no reabre la decisión de Paso 7: `daily_cycle.py`
+sigue sin ingerir ni calcular nada por sí mismo.
 
 **Bug real (2026-10-01):** la primera versión del script asumía que Docker
 Desktop ya estaba corriendo. La tarea se disparó antes de que el usuario
@@ -602,7 +615,8 @@ scripts/
 ├── run_prefilter.py              # CLI: puntúa los 20 símbolos y muestra los candidatos del día
 ├── run_agent_demo.py             # CLI: un agente, datos de ejemplo — consume API de pago
 ├── run_agent_demo_full_cycle.py  # CLI: 4 agentes, un símbolo real, sin persistir — consume API de pago
-└── run_daily_cycle.py            # CLI: ciclo real completo, persiste todo — consume API de pago
+├── run_daily_cycle.py            # CLI: ciclo real completo, persiste todo — consume API de pago
+└── run_daily_pipeline.py         # CLI: encadena backfill (--days 5) + indicadores + run_daily_cycle
 data/
 └── events/                # catálogo de eventos (*.json) — ver data/events/README.md
 tests/
