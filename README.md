@@ -439,10 +439,25 @@ es un script determinista (principio P2 del plan). Se registra en el
 de un asistente de IA, para que corra todos los días sin depender de que
 una sesión de Claude esté abierta y vinculada a esta máquina a esa hora.
 
-`scripts/run_daily_cycle.ps1` es el wrapper que Task Scheduler ejecuta:
-levanta los contenedores (por si Docker Desktop se reinició) y corre el
-ciclo dentro del contenedor `app`, con la salida guardada en
+`scripts/run_daily_cycle.ps1` es el wrapper que Task Scheduler ejecuta: se
+asegura de que Docker Desktop esté corriendo (lo levanta y espera hasta 2
+minutos si hace falta), levanta los contenedores y corre el ciclo dentro
+del contenedor `app`, con la salida guardada en
 `logs/daily_cycle_<fecha>.log` (no se sube a git — ver `.gitignore`).
+
+**Bug real (2026-10-01):** la primera versión del script asumía que Docker
+Desktop ya estaba corriendo. La tarea se disparó antes de que el usuario
+lo hubiera abierto esa mañana, `docker compose` falló de inmediato, y ese
+error puntual no quedó capturado por la redirección de streams — el log
+quedó en 0 bytes, sin ninguna pista de qué pasó. Corregido verificando
+`docker info` explícitamente antes de intentar nada, lanzando Docker
+Desktop si hace falta, y envolviendo todo el script en try/catch con su
+propio log — así cualquier error futuro, lo capture o no la redirección de
+streams, queda registrado. Ruta de Docker Desktop asumida:
+`C:\Program Files\Docker\Docker\Docker Desktop.exe` — ajústala en el
+script si la tuya es distinta. Recomendado además: en Docker Desktop,
+Settings → General → "Start Docker Desktop when you sign in", para no
+depender nunca de que este script lo lance.
 
 Registrar la tarea (PowerShell, una sola vez):
 
