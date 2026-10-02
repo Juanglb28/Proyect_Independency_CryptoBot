@@ -444,6 +444,20 @@ preventivamente, el del Analista cuantitativo (Agente 2,
 (`observaciones` también es una lista de texto libre sin tope) — ese no
 había fallado todavía en producción, a diferencia del de eventos.
 
+**Alerta temprana de tokens (2026-10-02):** subir `max_tokens` después de
+cada corte real (Consolidador, luego Eventos) funciona, pero siempre un
+paso atrás — se descubre recién cuando el ciclo ya abortó y se perdió el
+costo de las llamadas previas de ese símbolo. `app/ai/agents/_runner.py`
+ahora registra un `WARNING` (`agente`, `modelo`, `output_tokens`,
+`max_tokens`, `ciclo_id`) cada vez que una llamada que SÍ terminó bien usó
+85% o más de su `max_tokens` — una señal de que el margen se está
+agotando, antes de que efectivamente no alcance. No cambia ningún
+resultado ni aborta nada; es puramente diagnóstico (sección 24 del plan).
+Esto no reemplaza subir el límite cuando corresponda — es la forma de
+enterarnos con datos reales (`output_tokens` por agente, vía esta alerta o
+consultando `llamadas_ia` directamente) en vez de seguir ajustando
+`max_tokens` a ojo, como se hizo con 8000 para Eventos/Cuantitativo.
+
 ## Tarea diaria programada (Windows)
 
 El ciclo diario no necesita que ninguna IA lo arranque ni lo supervise —

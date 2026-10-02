@@ -18,6 +18,7 @@ llamada.
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -31,7 +32,24 @@ from app.ai.models import calculate_cost_usd
 from app.config import Settings
 from app.repositories.ai_calls import LlamadaIARow, save_llamada_ia
 
+logger = logging.getLogger(__name__)
+
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
+
+_RATIO_ALERTA_CERCA_DEL_LIMITE = 0.85
+"""Detección temprana (sección 24 del plan: nunca un fallo silencioso).
+`call_agent` ya detecta y aborta cuando una respuesta SE CORTA por
+max_tokens (`AgentResponseError`) — pero para entonces ya se perdió esa
+llamada y, si era tarde en el ciclo, el costo de las llamadas previas de
+ese símbolo. Esto es distinto: si una llamada que SÍ terminó bien ya usó
+el 85% o más de su `max_tokens`, es señal de que el margen se está
+agotando, antes de que deje de alcanzar — igual que pasó primero con el
+Consolidador (`MAX_TOKENS_CONSOLIDADOR`) y después con el Analista de
+eventos (`MAX_TOKENS_ANALISTA_EVENTOS`), ambos ajustados recién DESPUÉS de
+fallar en una corrida real. No aborta nada ni cambia el resultado — solo
+deja rastro en el log para poder subir el límite de ese agente antes del
+próximo corte, y para ir acumulando datos reales de uso por agente en vez
+de seguir ajustando `max_tokens` a ojo."""
 
 
 class AgentValidationError(Exception):
@@ -100,6 +118,24 @@ def run_json_agent(
         user_content=user_content,
         max_tokens=max_tokens,
     )
+
+    if call_result.output_tokens >= max_tokens * _RATIO_ALERTA_CERCA_DEL_LIMITE:
+        logger.warning(
+            "El agente '%s' usó %d de %d tokens de salida permitidos (%.0f%%) en esta "
+            "llamada — terminó bien, pero cerca del límite. Considerar subir su "
+            "max_tokens antes de que la próxima corrida lo corte a mitad de JSON.",
+            agente,
+            call_result.output_tokens,
+            max_tokens,
+            100 * call_result.output_tokens / max_tokens,
+            extra={
+                "ciclo_id": str(ciclo_id) if ciclo_id else None,
+                "agente": agente,
+                "modelo": modelo,
+                "output_tokens": call_result.output_tokens,
+                "max_tokens": max_tokens,
+            },
+        )
 
     parsed = parse_agent_json(call_result.raw_text)
 
