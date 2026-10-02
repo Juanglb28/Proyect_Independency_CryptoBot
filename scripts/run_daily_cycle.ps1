@@ -34,11 +34,17 @@ function Write-Log {
     "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $Message" | Out-File -FilePath $logFile -Append -Encoding utf8
 }
 
-# Ruta por defecto del instalador oficial de Docker Desktop. Si la tuya es
+# Docker Desktop puede instalarse a nivel de máquina (Program Files) o por
+# usuario (AppData\Local\Programs) — en esta máquina es una instalación por
+# usuario, confirmada en la práctica (2026-10-01): "C:\Program Files\
+# Docker\Docker\Docker Desktop.exe" no existía; el ejecutable real estaba en
+# "%LOCALAPPDATA%\Programs\DockerDesktop\Docker Desktop.exe". Se usa la
+# variable de entorno en vez de la ruta fija con el usuario escrito a mano,
+# para que no dependa de "juang" específicamente. Si tu instalación es
 # distinta, ajusta esta línea (o habilita en Docker Desktop, Settings ->
 # General, "Start Docker Desktop when you sign in" para no depender nunca
 # de que este script lo lance).
-$dockerDesktopExe = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+$dockerDesktopExe = Join-Path $env:LOCALAPPDATA "Programs\DockerDesktop\Docker Desktop.exe"
 
 function Test-DockerReady {
     docker info *> $null

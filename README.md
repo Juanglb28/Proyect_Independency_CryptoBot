@@ -453,9 +453,11 @@ quedó en 0 bytes, sin ninguna pista de qué pasó. Corregido verificando
 `docker info` explícitamente antes de intentar nada, lanzando Docker
 Desktop si hace falta, y envolviendo todo el script en try/catch con su
 propio log — así cualquier error futuro, lo capture o no la redirección de
-streams, queda registrado. Ruta de Docker Desktop asumida:
-`C:\Program Files\Docker\Docker\Docker Desktop.exe` — ajústala en el
-script si la tuya es distinta. Recomendado además: en Docker Desktop,
+streams, queda registrado. Ruta de Docker Desktop: se resuelve vía
+`%LOCALAPPDATA%\Programs\DockerDesktop\Docker Desktop.exe` (instalación por
+usuario, confirmada en esta máquina — la ruta de máquina
+`C:\Program Files\Docker\Docker\...` no aplica aquí); ajusta el script si
+la tuya es distinta. Recomendado además: en Docker Desktop,
 Settings → General → "Start Docker Desktop when you sign in", para no
 depender nunca de que este script lo lance.
 
