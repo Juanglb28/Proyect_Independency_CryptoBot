@@ -46,11 +46,29 @@ class AgentResponseError(Exception):
 @dataclass(frozen=True)
 class AgentCallResult:
     """Resultado crudo de una llamada al modelo, antes de validar el JSON
-    contra el schema del agente."""
+    contra el schema del agente.
+
+    `cache_creation_input_tokens`/`cache_read_input_tokens` (default 0,
+    para no romper construcciones existentes en tests que no los pasan):
+    BUG REAL (2026-10-02): el prompt de sistema de cada agente se manda con
+    `cache_control: ephemeral` (sección 4.3 del plan), pero la API de
+    Anthropic reporta esos tokens en DOS campos separados de `usage`
+    (`cache_creation_input_tokens` al escribir el cache,
+    `cache_read_input_tokens` al reutilizarlo) — `input_tokens` NUNCA los
+    incluye, solo cuenta lo que queda después del último "cache breakpoint"
+    (típicamente el bloque DATOS de esa llamada, chico). Como
+    `calculate_cost_usd` solo multiplicaba `input_tokens`, el costo de
+    escribir/leer el prompt de sistema cacheado — la parte más grande de
+    cada llamada — no se estaba cobrando NUNCA en `cost_usd`, subestimando
+    el costo real de forma sistemática en todas las llamadas, no solo en
+    casos raros. Detectado porque el saldo real de la cuenta de Anthropic
+    bajaba más rápido que el costo que este sistema venía reportando."""
 
     raw_text: str
     input_tokens: int
     output_tokens: int
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
 
 
 def call_agent(
@@ -110,6 +128,8 @@ def call_agent(
         raw_text=raw_text,
         input_tokens=response.usage.input_tokens,
         output_tokens=response.usage.output_tokens,
+        cache_creation_input_tokens=getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
+        cache_read_input_tokens=getattr(response.usage, "cache_read_input_tokens", 0) or 0,
     )
 
 

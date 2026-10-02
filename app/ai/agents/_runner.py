@@ -149,7 +149,13 @@ def run_json_agent(
     if extra_validate is not None:
         extra_validate(output)
 
-    cost_usd = calculate_cost_usd(modelo, call_result.input_tokens, call_result.output_tokens)
+    cost_usd = calculate_cost_usd(
+        modelo,
+        call_result.input_tokens,
+        call_result.output_tokens,
+        cache_creation_input_tokens=call_result.cache_creation_input_tokens,
+        cache_read_input_tokens=call_result.cache_read_input_tokens,
+    )
 
     llamada_id = save_llamada_ia(
         session,

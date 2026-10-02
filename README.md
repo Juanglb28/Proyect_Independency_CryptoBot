@@ -327,6 +327,31 @@ DATOS de cada llamada lo arma quien invoca al agente — construirlo a
 partir de datos reales de la base es responsabilidad del Paso 7
 (orquestación), todavía no implementado.
 
+**Bug real (2026-10-02):** el saldo real de la cuenta de Anthropic bajaba
+más rápido que el `cost_usd` que este sistema venía reportando. Causa:
+el prompt de sistema de cada agente se manda con `cache_control: ephemeral`
+(prompt caching), pero la API reporta esos tokens en DOS campos separados
+de `usage` — `cache_creation_input_tokens` (escritura) y
+`cache_read_input_tokens` (lectura) — que `input_tokens` NUNCA incluye.
+`calculate_cost_usd` solo multiplicaba `input_tokens`/`output_tokens`, así
+que el costo de cachear el prompt de sistema (la parte más grande de cada
+llamada) no se cobraba NUNCA — una subestimación sistemática en TODAS las
+llamadas, no un caso raro. Corregido capturando ambos campos
+(`app/ai/client.py::AgentCallResult`) y cobrándolos al precio de entrada
+del modelo, ajustado por el multiplicador de escritura (1.25x, verificado
+contra la documentación vigente de Anthropic) o de lectura (0.1x, 0.05x
+para Opus 5.5 específicamente) — ver `app/ai/models.py::calculate_cost_usd`.
+Los costos ya facturados antes de este fix no se pueden recalcular
+retroactivamente (nunca se guardó el desglose de tokens de cache); de acá
+en adelante `cost_usd` en `llamadas_ia` debería acercarse mucho más al
+consumo real que reporta la consola de Anthropic — aunque sigue siendo una
+cifra de observabilidad interna, no la factura real (ver el docstring de
+`app/db/models/ai_calls.py`), y no captura llamadas que fallan (JSON
+inválido o truncado por `max_tokens`): esas sí las cobra Anthropic, pero
+nunca llegan a persistirse en `llamadas_ia` porque el esquema actual exige
+una `respuesta` válida — una brecha conocida, pendiente de decisión sobre
+si vale la pena una migración para registrarlas también.
+
 **Consolidador (Agente 5) — diseño co-construido con el usuario el
 2026-09-29**: el plan (sección 7.2) nunca llegó a especificar su JSON de
 "SALIDA" (a diferencia de los otros tres) y su tabla de ponderación

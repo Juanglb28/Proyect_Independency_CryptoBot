@@ -44,10 +44,45 @@ PRECIOS_USD_POR_MTOK: dict[str, PrecioPorMillonUSD] = {
 
 _UN_MILLON = Decimal(1_000_000)
 
+# BUG REAL (2026-10-02): `calculate_cost_usd` solo cobraba `input_tokens` y
+# `output_tokens` — nunca el costo de escribir/leer el prompt de sistema
+# cacheado (ver el docstring de `AgentCallResult.cache_creation_input_tokens`
+# en `app/ai/client.py`), que en la práctica es la porción más grande de
+# cada llamada. Multiplicadores verificados contra la documentación vigente
+# de Anthropic el 2026-10-02 (docs.claude.com/en/docs/build-with-claude/
+# prompt-caching): escritura de cache efímero (5 min, el único tipo que usa
+# este proyecto) = 1.25x el precio de entrada normal; lectura de cache =
+# 0.1x el precio de entrada normal, EXCEPTO Opus 5.5, que lee a 0.05x — por
+# eso el multiplicador de lectura es por modelo, no una constante única.
+_MULTIPLICADOR_ESCRITURA_CACHE = Decimal("1.25")
+_MULTIPLICADOR_LECTURA_CACHE_POR_DEFECTO = Decimal("0.1")
+_MULTIPLICADOR_LECTURA_CACHE_POR_MODELO: dict[str, Decimal] = {
+    MODEL_CONSOLIDADOR: Decimal("0.05"),  # Opus 5.5
+}
 
-def calculate_cost_usd(model: str, input_tokens: int, output_tokens: int) -> Decimal:
+
+def calculate_cost_usd(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    *,
+    cache_creation_input_tokens: int = 0,
+    cache_read_input_tokens: int = 0,
+) -> Decimal:
     """Costo estimado de una llamada, a partir de la tabla de precios de
     arriba. Lanza `KeyError` si `model` no está en la tabla — preferible a
-    devolver 0 o un costo inventado (sección P3 del plan)."""
+    devolver 0 o un costo inventado (sección P3 del plan).
+
+    `cache_creation_input_tokens`/`cache_read_input_tokens` (default 0,
+    para no romper llamadas existentes que no cachean nada) se cobran al
+    precio de ENTRADA de ese modelo, ajustado por el multiplicador de
+    escritura/lectura de cache — ver el bug real arriba."""
     precio = PRECIOS_USD_POR_MTOK[model]
-    return (Decimal(input_tokens) * precio.entrada + Decimal(output_tokens) * precio.salida) / _UN_MILLON
+    multiplicador_lectura = _MULTIPLICADOR_LECTURA_CACHE_POR_MODELO.get(
+        model, _MULTIPLICADOR_LECTURA_CACHE_POR_DEFECTO
+    )
+    costo_entrada_normal = Decimal(input_tokens) * precio.entrada
+    costo_salida = Decimal(output_tokens) * precio.salida
+    costo_escritura_cache = Decimal(cache_creation_input_tokens) * precio.entrada * _MULTIPLICADOR_ESCRITURA_CACHE
+    costo_lectura_cache = Decimal(cache_read_input_tokens) * precio.entrada * multiplicador_lectura
+    return (costo_entrada_normal + costo_salida + costo_escritura_cache + costo_lectura_cache) / _UN_MILLON
