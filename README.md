@@ -458,6 +458,23 @@ inicial) → `calculate_indicators` → `run_daily_cycle`, deteniéndose si
 algún paso falla. Esto no reabre la decisión de Paso 7: `daily_cycle.py`
 sigue sin ingerir ni calcular nada por sí mismo.
 
+**Bug real (2026-10-02, segundo hallazgo):** al probar `schtasks /run` tras
+el fix anterior, la tarea se disparó y murió en segundos — el log mostraba
+`ERROR no controlado:  Container crypto_trading_postgres Running` apuntando
+a la línea del `docker compose run`. No era un fallo real: `docker compose`
+escribe su progreso normal ("Container ... Running", "Creating", etc.) por
+stderr, no por stdout, y con `$ErrorActionPreference = "Stop"` activo a
+nivel de script, Windows PowerShell 5.1 convierte **cualquier línea de
+stderr de un comando nativo** (no de un cmdlet de PowerShell) en un error
+terminante — confundía progreso informativo con una excepción real y
+cortaba el script antes de que Docker terminara de responder. Corregido con
+un helper `Invoke-Native` que baja `$ErrorActionPreference` a `"Continue"`
+solo mientras dura la llamada nativa (restaurando el valor anterior en un
+`finally`) y valida el resultado real a mano con `$LASTEXITCODE` — la forma
+correcta de detectar un fallo de un ejecutable externo en PowerShell. Se
+aplicó a los tres llamados nativos del script (`docker info`,
+`docker compose up -d` y `docker compose run ... run_daily_pipeline`).
+
 **Bug real (2026-10-01):** la primera versión del script asumía que Docker
 Desktop ya estaba corriendo. La tarea se disparó antes de que el usuario
 lo hubiera abierto esa mañana, `docker compose` falló de inmediato, y ese

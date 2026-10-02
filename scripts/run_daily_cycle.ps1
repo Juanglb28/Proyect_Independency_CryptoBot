@@ -36,6 +36,28 @@ function Write-Log {
     "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $Message" | Out-File -FilePath $logFile -Append -Encoding utf8
 }
 
+# BUG REAL (2026-10-02): `docker compose` escribe su progreso normal
+# ("Container ... Running", "Creating", etc.) por stderr, no por stdout.
+# Con $ErrorActionPreference = "Stop" activo, Windows PowerShell convierte
+# CUALQUIER línea de stderr de un comando nativo en un error terminante —
+# el script se cortaba a los dos segundos de arrancar `docker compose up -d`
+# aunque el comando en sí no hubiera fallado, confundiendo progreso normal
+# con una excepción real. Por eso todo comando nativo (docker, no cmdlets de
+# PowerShell) corre con $ErrorActionPreference = "Continue" y se valida a
+# mano con $LASTEXITCODE, que es la forma correcta de detectar un fallo real
+# de un ejecutable externo en PowerShell.
+function Invoke-Native {
+    param([Parameter(Mandatory)][scriptblock]$Command)
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $Command
+    }
+    finally {
+        $ErrorActionPreference = $previous
+    }
+}
+
 # Docker Desktop puede instalarse a nivel de máquina (Program Files) o por
 # usuario (AppData\Local\Programs) — en esta máquina es una instalación por
 # usuario, confirmada en la práctica (2026-10-01): "C:\Program Files\
@@ -49,7 +71,7 @@ function Write-Log {
 $dockerDesktopExe = Join-Path $env:LOCALAPPDATA "Programs\DockerDesktop\Docker Desktop.exe"
 
 function Test-DockerReady {
-    docker info *> $null
+    Invoke-Native { docker info *> $null }
     return ($LASTEXITCODE -eq 0)
 }
 
@@ -93,13 +115,17 @@ try {
         Write-Log "Docker ya estaba listo."
     }
 
-    docker compose up -d *>> $logFile
+    Invoke-Native { docker compose up -d *>> $logFile }
+    if ($LASTEXITCODE -ne 0) {
+        throw "docker compose up -d salio con codigo $LASTEXITCODE"
+    }
+
     # scripts.run_daily_pipeline encadena ingesta incremental de velas +
     # recálculo de indicadores + el ciclo real (en ese orden) — agregado
     # tras detectar en producción (2026-10-01/02) que el ciclo llevaba dos
     # días corriendo sobre velas con más de 50 horas de antigüedad, porque
     # nada mantenía `velas`/`indicadores` al día automáticamente.
-    docker compose run --rm app python -m scripts.run_daily_pipeline *>> $logFile
+    Invoke-Native { docker compose run --rm app python -m scripts.run_daily_pipeline *>> $logFile }
     $exitCode = $LASTEXITCODE
 
     Write-Log "Ejecucion finalizada con codigo de salida $exitCode."
