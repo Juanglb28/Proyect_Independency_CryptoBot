@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.models.ai_calls import LlamadaIA
@@ -58,3 +60,22 @@ def save_llamada_ia(session: Session, row: LlamadaIARow) -> uuid.UUID:
     session.add(llamada)
     session.flush()
     return llamada.id
+
+
+def get_gasto_acumulado_desde(session: Session, desde: datetime) -> Decimal:
+    """Suma `cost_usd` de todas las llamadas registradas en `llamadas_ia`
+    con `created_at >= desde` — reconstruible en cualquier momento a partir
+    de los datos ya persistidos (mismo principio que `performance_metrics`,
+    sección 13 del plan: un agregado derivado, nunca una cifra que se
+    acumula aparte y puede desincronizarse).
+
+    Usado para estimar cuánto queda del saldo declarado por el usuario en
+    `Settings.anthropic_saldo_declarado_usd` (ver ese campo: la API de
+    Anthropic no expone un endpoint de saldo real, así que esto es una
+    ESTIMACIÓN, no la cifra exacta de la consola — en particular, no
+    incluye el costo de llamadas que fallaron antes de persistirse, que
+    Anthropic sí cobra igual)."""
+    total = session.execute(
+        select(func.coalesce(func.sum(LlamadaIA.cost_usd), 0)).where(LlamadaIA.created_at >= desde)
+    ).scalar_one()
+    return Decimal(total)

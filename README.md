@@ -385,6 +385,66 @@ agente sobre un símbolo puntual sin gastar en los otros candidatos del día.
 multi-turno y su perfil de salida no tiene tabla asignada en el plan —
 se construirá junto con Streamlit (Paso 10).
 
+## Control de gastos de la API de Anthropic
+
+`scripts/run_daily_cycle.py` imprime, al final de cada corrida, tres cifras:
+
+1. **Costo de esta corrida** (`cost_usd` del ciclo) — ya existía.
+2. **Gasto acumulado** desde una fecha de referencia — suma real de
+   `llamadas_ia.cost_usd` (`get_gasto_acumulado_desde`,
+   `app/repositories/ai_calls.py`), reconstruible en cualquier momento a
+   partir de los datos ya persistidos, igual que `performance_metrics`
+   (sección 13 del plan).
+3. **Saldo estimado restante** = saldo declarado − gasto acumulado desde
+   esa fecha.
+
+Las primeras dos cifras son exactas (dentro de lo que este sistema puede
+medir — ver el bug real de abajo). La tercera es una ESTIMACIÓN, nunca el
+número exacto de la consola de Anthropic: la API de Anthropic no expone
+ningún endpoint de saldo real, así que el "saldo declarado" lo escribís vos
+mismo en `.env` a partir de lo que ves en Billing -> Credit balance:
+
+```bash
+ANTHROPIC_SALDO_DECLARADO_USD=2.26
+ANTHROPIC_SALDO_DECLARADO_EN=2026-10-02T00:00:00+00:00
+```
+
+Si no se definen, el reporte simplemente omite el saldo restante estimado
+(no inventa un número — sección P3 del plan). Recalibrá ambos valores cada
+vez que revises el saldo real en la consola, para que la estimación no se
+aleje demasiado.
+
+**Por qué es una estimación y no la cifra exacta**, aun después del fix de
+cache (ver abajo): no incluye el costo de llamadas que fallaron antes de
+persistirse en `llamadas_ia` (JSON inválido o truncado por `max_tokens` —
+Anthropic sí las cobra, nosotros no las vemos — brecha conocida, pendiente
+de una migración si se decide cerrarla) ni ningún gasto fuera de este
+sistema que comparta la misma cuenta/API key.
+
+**Bug real (2026-10-02):** el usuario notó que el saldo real de su cuenta
+bajaba más rápido que el `cost_usd` que este sistema reportaba —
+compró 5 USD, el saldo mostraba 2.26 USD restantes, pero el sistema solo
+tenía registrados 1.34 USD de costo. Causa encontrada: el prompt de
+sistema de cada agente se manda con `cache_control: ephemeral` (prompt
+caching), pero la API reporta esos tokens en dos campos separados de
+`usage` — `cache_creation_input_tokens` (escritura, 1.25x el precio de
+entrada) y `cache_read_input_tokens` (lectura, 0.1x, 0.05x para Opus 5.5) —
+que `input_tokens` NUNCA incluye. `calculate_cost_usd` solo multiplicaba
+`input_tokens`/`output_tokens`, así que el costo de cachear el prompt de
+sistema — la parte más grande de cada llamada — no se cobraba nunca: una
+subestimación sistemática en TODAS las llamadas, no un caso raro.
+Corregido en `app/ai/client.py::AgentCallResult` y
+`app/ai/models.py::calculate_cost_usd` (multiplicadores verificados contra
+`docs.claude.com` el 2026-10-02). Los costos ya facturados antes de este
+fix no se pueden recalcular retroactivamente — nunca se guardó el
+desglose de tokens de cache de esas llamadas. Separado de este bug: la
+consola de Anthropic también mostraba `$1.34` bajo "Spend limits" con la
+leyenda "Resets Nov 1, 2026" — ese contador es del mes calendario en
+curso, no del total gastado desde la compra; si hubo gasto de pruebas
+antes del 1 de octubre, ese gasto ya había bajado el saldo pero no
+aparece en ese contador mensual — una fuente de confusión aparte del bug
+real, no algo que el código de este proyecto pueda corregir.
+
 ## Orquestación del ciclo diario (Paso 7 del plan)
 
 ```bash

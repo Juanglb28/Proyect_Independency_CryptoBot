@@ -14,6 +14,7 @@ al 100%. Lo que sí es configuración legítima por entorno es el capital
 simulado y el número máximo de posiciones, que sí aparecen abajo.
 """
 
+from datetime import datetime
 from decimal import Decimal
 
 from pydantic import Field
@@ -64,6 +65,32 @@ class Settings(BaseSettings):
 
     # --- Anthropic: no se usa todavía (Fase 3 en adelante) ---
     anthropic_api_key: str | None = Field(default=None)
+
+    # --- Control de gastos de la API de Anthropic (bug real 2026-10-02:
+    # ver app/ai/models.py::calculate_cost_usd y README "Control de gastos
+    # de la API de Anthropic") ---
+    anthropic_saldo_declarado_usd: Decimal | None = Field(
+        default=None,
+        description="Saldo real de la cuenta de Anthropic (consola -> "
+        "Billing -> Credit balance), a la fecha de "
+        "`anthropic_saldo_declarado_en`. Dato declarado por el usuario, "
+        "NUNCA inferido ni inventado (sección P3 del plan) — la API de "
+        "Anthropic no expone un endpoint de saldo real. Se usa solo para "
+        "ESTIMAR cuánto queda, sumando el gasto registrado en "
+        "`llamadas_ia` desde esa fecha — una estimación que diverge del "
+        "saldo real por cualquier gasto que este sistema no haya podido "
+        "registrar (llamadas fallidas, otra API key compartiendo el "
+        "mismo saldo, etc.). Si no se define, el reporte de cada corrida "
+        "simplemente omite el saldo restante estimado.",
+    )
+    anthropic_saldo_declarado_en: datetime | None = Field(
+        default=None,
+        description="Fecha/hora (ISO 8601, con offset de zona horaria — "
+        "ej. 2026-10-02T00:00:00+00:00) en la que el saldo de arriba era "
+        "correcto, según la consola de Anthropic. Recalibrar ambos valores "
+        "cada vez que se revise el saldo real mantiene la estimación "
+        "cerca de la realidad.",
+    )
 
     # --- Telegram: no se usa todavía (Fase 4 en adelante) ---
     telegram_bot_token: str | None = Field(default=None)

@@ -26,7 +26,37 @@ from app.config import get_settings
 from app.db.session import get_engine, get_sessionmaker, session_scope
 from app.logging_config import configure_logging
 from app.orchestration.daily_cycle import run_daily_cycle
+from app.repositories.ai_calls import get_gasto_acumulado_desde
 from app.repositories.analysis import get_factores_de_propuesta, get_propuestas_de_ciclo
+
+
+def _imprimir_control_de_gastos(session, settings, costo_de_esta_corrida) -> None:
+    """Costo de esta corrida (ya lo tiene `result.cost_usd`) + gasto
+    acumulado desde el saldo declarado + saldo restante ESTIMADO — nunca el
+    saldo real exacto, que solo lo sabe la consola de Anthropic (ver
+    `Settings.anthropic_saldo_declarado_usd` sobre por qué esto es una
+    estimación, no una cifra exacta)."""
+    if settings.anthropic_saldo_declarado_usd is None or settings.anthropic_saldo_declarado_en is None:
+        print(
+            "\n(Para ver gasto acumulado y saldo estimado restante, configura "
+            "ANTHROPIC_SALDO_DECLARADO_USD y ANTHROPIC_SALDO_DECLARADO_EN en "
+            ".env — ver README, sección 'Control de gastos de la API de "
+            "Anthropic'.)"
+        )
+        return
+
+    gasto_acumulado = get_gasto_acumulado_desde(session, settings.anthropic_saldo_declarado_en)
+    saldo_estimado = settings.anthropic_saldo_declarado_usd - gasto_acumulado
+
+    print(
+        f"\nGasto acumulado desde {settings.anthropic_saldo_declarado_en.date()} "
+        f"(según lo registrado en llamadas_ia): ${gasto_acumulado} USD"
+    )
+    print(
+        f"Saldo estimado restante (declaraste ${settings.anthropic_saldo_declarado_usd} USD "
+        f"el {settings.anthropic_saldo_declarado_en.date()}): ${saldo_estimado} USD "
+        "-- ESTIMADO, no la cifra exacta de la consola de Anthropic."
+    )
 
 
 def main() -> int:
@@ -46,6 +76,7 @@ def main() -> int:
                 f"{', '.join(result.candidatos_excluidos_por_calidad)}"
             )
         print(f"Costo total del ciclo: ${result.cost_usd} USD")
+        _imprimir_control_de_gastos(session, settings, result.cost_usd)
 
         if not result.propuesta_ids:
             print("\nSin propuestas este ciclo.")
