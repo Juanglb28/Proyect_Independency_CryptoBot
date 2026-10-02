@@ -32,7 +32,16 @@ from app.db.models.ai_calls import LlamadaIA
 
 @dataclass(frozen=True)
 class LlamadaIARow:
-    """Una llamada a un agente de IA, lista para persistir."""
+    """Una llamada a un agente de IA, lista para persistir.
+
+    `respuesta`/`exitosa`/`error_message` (bug real 2026-10-02, ver
+    `app/db/models/ai_calls.py::LlamadaIA`): una llamada EXITOSA trae
+    `respuesta` con el JSON ya validado y `exitosa=True` (el default,
+    compatible con todas las llamadas de antes de este campo). Una llamada
+    FALLIDA (JSON inválido, truncada por `max_tokens`, o con forma
+    distinta al schema) trae `respuesta=None`, `exitosa=False` y
+    `error_message` con el motivo — Anthropic la cobra igual, así que debe
+    quedar registrada para que `cost_usd` no la pierda."""
 
     agente: str
     modelo: str
@@ -40,13 +49,15 @@ class LlamadaIARow:
     input_tokens: int
     output_tokens: int
     cost_usd: Decimal
-    respuesta: dict
+    respuesta: dict | None = None
+    exitosa: bool = True
+    error_message: str | None = None
     ciclo_id: uuid.UUID | None = None
 
 
 def save_llamada_ia(session: Session, row: LlamadaIARow) -> uuid.UUID:
-    """Inserta el registro de una llamada ya realizada y valida, y devuelve
-    su `id`."""
+    """Inserta el registro de una llamada ya realizada (exitosa o fallida —
+    ver `LlamadaIARow`), y devuelve su `id`."""
     llamada = LlamadaIA(
         ciclo_id=row.ciclo_id,
         agente=row.agente,
@@ -56,6 +67,8 @@ def save_llamada_ia(session: Session, row: LlamadaIARow) -> uuid.UUID:
         output_tokens=row.output_tokens,
         cost_usd=row.cost_usd,
         respuesta=row.respuesta,
+        exitosa=row.exitosa,
+        error_message=row.error_message,
     )
     session.add(llamada)
     session.flush()
@@ -63,18 +76,21 @@ def save_llamada_ia(session: Session, row: LlamadaIARow) -> uuid.UUID:
 
 
 def get_gasto_acumulado_desde(session: Session, desde: datetime) -> Decimal:
-    """Suma `cost_usd` de todas las llamadas registradas en `llamadas_ia`
-    con `created_at >= desde` — reconstruible en cualquier momento a partir
-    de los datos ya persistidos (mismo principio que `performance_metrics`,
-    sección 13 del plan: un agregado derivado, nunca una cifra que se
-    acumula aparte y puede desincronizarse).
+    """Suma `cost_usd` de TODAS las llamadas registradas en `llamadas_ia`
+    con `created_at >= desde`, exitosas o no (bug real 2026-10-02: antes de
+    persistir también las fallidas, esta suma las omitía por completo,
+    aunque Anthropic sí las cobra) — reconstruible en cualquier momento a
+    partir de los datos ya persistidos (mismo principio que
+    `performance_metrics`, sección 13 del plan: un agregado derivado, nunca
+    una cifra que se acumula aparte y puede desincronizarse).
 
     Usado para estimar cuánto queda del saldo declarado por el usuario en
     `Settings.anthropic_saldo_declarado_usd` (ver ese campo: la API de
-    Anthropic no expone un endpoint de saldo real, así que esto es una
-    ESTIMACIÓN, no la cifra exacta de la consola — en particular, no
-    incluye el costo de llamadas que fallaron antes de persistirse, que
-    Anthropic sí cobra igual)."""
+    Anthropic no expone un endpoint de saldo real, así que esto sigue
+    siendo una ESTIMACIÓN, no la cifra exacta de la consola — en
+    particular, no incluye gasto de errores que ocurren ANTES de recibir
+    respuesta de la API, como una caída de red, que normalmente tampoco
+    cobra Anthropic)."""
     total = session.execute(
         select(func.coalesce(func.sum(LlamadaIA.cost_usd), 0)).where(LlamadaIA.created_at >= desde)
     ).scalar_one()

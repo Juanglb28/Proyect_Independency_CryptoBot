@@ -346,11 +346,11 @@ retroactivamente (nunca se guardó el desglose de tokens de cache); de acá
 en adelante `cost_usd` en `llamadas_ia` debería acercarse mucho más al
 consumo real que reporta la consola de Anthropic — aunque sigue siendo una
 cifra de observabilidad interna, no la factura real (ver el docstring de
-`app/db/models/ai_calls.py`), y no captura llamadas que fallan (JSON
-inválido o truncado por `max_tokens`): esas sí las cobra Anthropic, pero
-nunca llegan a persistirse en `llamadas_ia` porque el esquema actual exige
-una `respuesta` válida — una brecha conocida, pendiente de decisión sobre
-si vale la pena una migración para registrarlas también.
+`app/db/models/ai_calls.py`). Las llamadas que fallan después de que la
+API responde (JSON inválido o truncado por `max_tokens`) sí se persisten
+con su costo real desde el fix del 2026-10-02 descrito más abajo (sección
+"Control de gastos de la API de Anthropic") — en el momento en que se
+escribió este párrafo todavía era una brecha conocida, ya cerrada.
 
 **Consolidador (Agente 5) — diseño co-construido con el usuario el
 2026-09-29**: el plan (sección 7.2) nunca llegó a especificar su JSON de
@@ -415,11 +415,11 @@ vez que revises el saldo real en la consola, para que la estimación no se
 aleje demasiado.
 
 **Por qué es una estimación y no la cifra exacta**, aun después del fix de
-cache (ver abajo): no incluye el costo de llamadas que fallaron antes de
-persistirse en `llamadas_ia` (JSON inválido o truncado por `max_tokens` —
-Anthropic sí las cobra, nosotros no las vemos — brecha conocida, pendiente
-de una migración si se decide cerrarla) ni ningún gasto fuera de este
-sistema que comparta la misma cuenta/API key.
+cache y del fix de llamadas fallidas (ambos abajo): no incluye gasto de
+errores que ocurren ANTES de recibir cualquier respuesta de la API (caída
+de red, error de autenticación, rate limit — casos que normalmente
+tampoco cobra Anthropic, ver `_persistir_llamada_fallida` más abajo) ni
+ningún gasto fuera de este sistema que comparta la misma cuenta/API key.
 
 **Bug real (2026-10-02):** el usuario notó que el saldo real de su cuenta
 bajaba más rápido que el `cost_usd` que este sistema reportaba —
@@ -444,6 +444,34 @@ curso, no del total gastado desde la compra; si hubo gasto de pruebas
 antes del 1 de octubre, ese gasto ya había bajado el saldo pero no
 aparece en ese contador mensual — una fuente de confusión aparte del bug
 real, no algo que el código de este proyecto pueda corregir.
+
+**Bug real (2026-10-02, segundo hallazgo):** `llamadas_ia.respuesta` era
+`NOT NULL`, así que una llamada que fallaba DESPUÉS de que la API ya
+respondiera — JSON inválido, truncada por `max_tokens`
+(`AgentResponseError`), o con forma distinta al schema del agente
+(`AgentValidationError`, incluida la validación de que una "fuente" citada
+por el Consolidador exista en el catálogo de eventos) — nunca se
+persistía: no había ninguna fila que guardar con `respuesta=None`. Pero
+Anthropic cobra esa llamada igual (generó tokens de salida hasta el corte,
+o un JSON completo que simplemente no sirvió), así que ese costo quedaba
+invisible para "gasto acumulado" de arriba — exactamente la brecha que
+este mismo README documentaba como pendiente hasta ahora. Corregido con
+una migración (`858d5d2840d7`) que agrega `exitosa: bool` (default
+retroactivo `true` — toda fila previa a esta migración es, por
+definición, una llamada que sí se persistió con éxito) y `error_message:
+str | None`, y vuelve `respuesta` nullable. `app/ai/agents/_runner.py`
+ahora envuelve la llamada/parseo/validación en un
+`try/except (AgentResponseError, AgentValidationError)` que llama a
+`_persistir_llamada_fallida` (guarda `exitosa=False`, `respuesta=None`,
+`error_message=str(exc)` y el costo real) antes de relanzar la misma
+excepción — el comportamiento de quien orquesta el ciclo no cambia en
+nada, solo deja de perderse el registro de costo. Los tokens reales nunca
+se inventan (P3 del plan): vienen de `AgentResponseError.tokens` cuando
+`call_agent` detecta el corte por `max_tokens` antes de devolver nada, o
+del `AgentCallResult` ya recibido cuando la falla es posterior (JSON
+inválido o schema incorrecto); si ninguno está disponible (un error antes
+de recibir cualquier respuesta de la API), no se persiste nada, porque no
+hay tokens reales que registrar.
 
 ## Orquestación del ciclo diario (Paso 7 del plan)
 

@@ -27,7 +27,7 @@ from typing import TypeVar
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 
-from app.ai.client import call_agent, parse_agent_json
+from app.ai.client import AgentCallResult, AgentResponseError, call_agent, parse_agent_json
 from app.ai.models import calculate_cost_usd
 from app.config import Settings
 from app.repositories.ai_calls import LlamadaIARow, save_llamada_ia
@@ -61,6 +61,58 @@ class AgentValidationError(Exception):
     sí sabemos la forma exacta que se esperaba — útil para diagnosticar si
     el prompt necesita ajustarse.
     """
+
+
+def _persistir_llamada_fallida(
+    session: Session,
+    *,
+    agente: str,
+    modelo: str,
+    prompt_version: str,
+    ciclo_id: uuid.UUID | None,
+    call_result: AgentCallResult | None,
+    exc: Exception,
+) -> None:
+    """Registra en `llamadas_ia` el costo real de una llamada que falló
+    DESPUÉS de que la API respondiera (JSON inválido, truncada por
+    `max_tokens`, o con forma distinta al schema del agente) — Anthropic la
+    cobra igual (bug real 2026-10-02, ver
+    `app/db/models/ai_calls.py::LlamadaIA`).
+
+    Los tokens reales vienen de dos fuentes posibles, nunca inventados
+    (P3 del plan): `exc.tokens` (cuando `call_agent` detectó el corte por
+    `max_tokens` ANTES de devolver un `AgentCallResult` — ver
+    `AgentResponseError.tokens`) o `call_result` (cuando `call_agent` sí
+    devolvió, y la falla fue después: JSON inválido o schema incorrecto).
+    Si ninguna de las dos está disponible (un error antes de recibir
+    cualquier respuesta de la API, que normalmente tampoco cobra Anthropic),
+    no se persiste nada — no hay tokens reales que registrar."""
+    tokens = getattr(exc, "tokens", None) or call_result
+    if tokens is None:
+        return
+
+    cost_usd = calculate_cost_usd(
+        modelo,
+        tokens.input_tokens,
+        tokens.output_tokens,
+        cache_creation_input_tokens=tokens.cache_creation_input_tokens,
+        cache_read_input_tokens=tokens.cache_read_input_tokens,
+    )
+    save_llamada_ia(
+        session,
+        LlamadaIARow(
+            agente=agente,
+            modelo=modelo,
+            prompt_version=prompt_version,
+            input_tokens=tokens.input_tokens,
+            output_tokens=tokens.output_tokens,
+            cost_usd=cost_usd,
+            respuesta=None,
+            exitosa=False,
+            error_message=str(exc),
+            ciclo_id=ciclo_id,
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -108,46 +160,66 @@ def run_json_agent(
     salida crece con la cantidad de candidatos que recibe, pasa un valor
     mayor explícitamente — ver `app.ai.agents.consolidator` (bug real,
     2026-09-30: con varios candidatos la respuesta se cortaba a mitad de
-    JSON con el valor por defecto)."""
+    JSON con el valor por defecto).
+
+    Una interpretación fallida (`AgentResponseError`/`AgentValidationError`)
+    igual deja un registro de costo en `llamadas_ia` antes de propagarse —
+    ver `_persistir_llamada_fallida` (bug real 2026-10-02): Anthropic cobra
+    esa llamada aunque el resultado no sirva, así que debe quedar
+    registrada, sin que esto cambie en nada el comportamiento de quien
+    llama (la excepción se relanza igual)."""
     user_content = json.dumps(datos, ensure_ascii=False, default=str)
 
-    call_result = call_agent(
-        settings,
-        model=modelo,
-        system_prompt=system_prompt,
-        user_content=user_content,
-        max_tokens=max_tokens,
-    )
-
-    if call_result.output_tokens >= max_tokens * _RATIO_ALERTA_CERCA_DEL_LIMITE:
-        logger.warning(
-            "El agente '%s' usó %d de %d tokens de salida permitidos (%.0f%%) en esta "
-            "llamada — terminó bien, pero cerca del límite. Considerar subir su "
-            "max_tokens antes de que la próxima corrida lo corte a mitad de JSON.",
-            agente,
-            call_result.output_tokens,
-            max_tokens,
-            100 * call_result.output_tokens / max_tokens,
-            extra={
-                "ciclo_id": str(ciclo_id) if ciclo_id else None,
-                "agente": agente,
-                "modelo": modelo,
-                "output_tokens": call_result.output_tokens,
-                "max_tokens": max_tokens,
-            },
+    call_result: AgentCallResult | None = None
+    try:
+        call_result = call_agent(
+            settings,
+            model=modelo,
+            system_prompt=system_prompt,
+            user_content=user_content,
+            max_tokens=max_tokens,
         )
 
-    parsed = parse_agent_json(call_result.raw_text)
+        if call_result.output_tokens >= max_tokens * _RATIO_ALERTA_CERCA_DEL_LIMITE:
+            logger.warning(
+                "El agente '%s' usó %d de %d tokens de salida permitidos (%.0f%%) en esta "
+                "llamada — terminó bien, pero cerca del límite. Considerar subir su "
+                "max_tokens antes de que la próxima corrida lo corte a mitad de JSON.",
+                agente,
+                call_result.output_tokens,
+                max_tokens,
+                100 * call_result.output_tokens / max_tokens,
+                extra={
+                    "ciclo_id": str(ciclo_id) if ciclo_id else None,
+                    "agente": agente,
+                    "modelo": modelo,
+                    "output_tokens": call_result.output_tokens,
+                    "max_tokens": max_tokens,
+                },
+            )
 
-    try:
-        output = schema.model_validate(parsed)
-    except ValidationError as exc:
-        raise AgentValidationError(
-            f"La respuesta de '{agente}' no cumple el schema {schema.__name__}: {exc}"
-        ) from exc
+        parsed = parse_agent_json(call_result.raw_text)
 
-    if extra_validate is not None:
-        extra_validate(output)
+        try:
+            output = schema.model_validate(parsed)
+        except ValidationError as exc:
+            raise AgentValidationError(
+                f"La respuesta de '{agente}' no cumple el schema {schema.__name__}: {exc}"
+            ) from exc
+
+        if extra_validate is not None:
+            extra_validate(output)
+    except (AgentResponseError, AgentValidationError) as exc:
+        _persistir_llamada_fallida(
+            session,
+            agente=agente,
+            modelo=modelo,
+            prompt_version=prompt_version,
+            ciclo_id=ciclo_id,
+            call_result=call_result,
+            exc=exc,
+        )
+        raise
 
     cost_usd = calculate_cost_usd(
         modelo,

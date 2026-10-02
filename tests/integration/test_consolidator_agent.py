@@ -155,10 +155,17 @@ def test_run_consolidador_rejects_fuente_that_does_not_exist_in_catalog(monkeypa
             calidad_datos_por_simbolo={"AVAXUSDT": Decimal(70)},
         )
 
-    # Una respuesta que cita un evento inventado tampoco debe quedar
-    # registrada como una interpretación válida (mismo criterio que un
-    # fallo de schema en tests/unit/test_ai_agents.py).
-    assert saved == []
+    # Una respuesta que cita un evento inventado no debe quedar registrada
+    # como una interpretación válida (respuesta=None) — pero bug real
+    # 2026-10-02: Anthropic cobró esta llamada igual (la detección del
+    # evento inventado ocurre en `extra_validate`, DESPUÉS de que la API ya
+    # respondiera), así que sí debe quedar un registro de auditoría marcado
+    # como fallido, mismo criterio que un fallo de schema en
+    # tests/unit/test_ai_agents.py.
+    assert len(saved) == 1
+    assert saved[0].exitosa is False
+    assert saved[0].respuesta is None
+    assert saved[0].cost_usd > 0
 
 
 def test_run_consolidador_raises_key_error_when_calidad_datos_missing_for_a_symbol(monkeypatch, db_session):

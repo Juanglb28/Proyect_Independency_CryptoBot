@@ -1,7 +1,8 @@
 """Test de app.ai.agents._runner: la alerta temprana de uso de tokens
-cerca del límite (sección 24 del plan — nunca un fallo silencioso), no la
-orquestación completa de cada agente (ya cubierta, por agente, en
-test_ai_agents.py / test_consolidator_agent.py).
+cerca del límite (sección 24 del plan — nunca un fallo silencioso) y el
+registro de costo de llamadas fallidas (bug real 2026-10-02 — Anthropic
+las cobra igual). No cubre la orquestación completa de cada agente (ya
+cubierta, por agente, en test_ai_agents.py / test_consolidator_agent.py).
 """
 
 from __future__ import annotations
@@ -10,10 +11,11 @@ import json
 import logging
 import uuid
 
+import pytest
 from pydantic import BaseModel
 
-from app.ai.agents._runner import run_json_agent
-from app.ai.client import AgentCallResult
+from app.ai.agents._runner import AgentValidationError, run_json_agent
+from app.ai.client import AgentCallResult, AgentResponseError
 from app.ai.models import MODEL_ANALISTA
 from app.config import Settings
 
@@ -33,8 +35,41 @@ def _patch_call_agent(monkeypatch, output_tokens: int):
     monkeypatch.setattr("app.ai.agents._runner.call_agent", fake_call_agent)
 
 
-def _patch_save_llamada_ia(monkeypatch):
-    monkeypatch.setattr("app.ai.agents._runner.save_llamada_ia", lambda session, row: uuid.uuid4())
+def _patch_call_agent_devuelve(monkeypatch, *, raw_text: str, input_tokens=100, output_tokens=200):
+    def fake_call_agent(settings, *, model, system_prompt, user_content, max_tokens=4096):
+        return AgentCallResult(
+            raw_text=raw_text,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_creation_input_tokens=10,
+            cache_read_input_tokens=5,
+        )
+
+    monkeypatch.setattr("app.ai.agents._runner.call_agent", fake_call_agent)
+
+
+def _patch_call_agent_se_corta_por_max_tokens(monkeypatch, *, output_tokens=4096):
+    tokens = AgentCallResult(
+        raw_text="{incompleto",
+        input_tokens=100,
+        output_tokens=output_tokens,
+        cache_creation_input_tokens=10,
+        cache_read_input_tokens=5,
+    )
+
+    def fake_call_agent(settings, *, model, system_prompt, user_content, max_tokens=4096):
+        raise AgentResponseError("se cortó por max_tokens", tokens=tokens)
+
+    monkeypatch.setattr("app.ai.agents._runner.call_agent", fake_call_agent)
+
+
+def _patch_save_llamada_ia(monkeypatch, capture: list | None = None):
+    def fake_save(session, row):
+        if capture is not None:
+            capture.append(row)
+        return uuid.uuid4()
+
+    monkeypatch.setattr("app.ai.agents._runner.save_llamada_ia", fake_save)
 
 
 def _run(monkeypatch, ciclo_id=None):
@@ -92,3 +127,80 @@ def test_no_advierte_justo_por_debajo_del_umbral(monkeypatch, caplog):
         _run(monkeypatch)
 
     assert len(caplog.records) == 0
+
+
+# ---------------------------------------------------------------------------
+# Registro de costo de llamadas fallidas (bug real 2026-10-02)
+# ---------------------------------------------------------------------------
+
+
+def test_llamada_truncada_por_max_tokens_persiste_su_costo_real_y_relanza(monkeypatch):
+    # call_agent detecta el corte ANTES de devolver un AgentCallResult, así
+    # que los tokens viajan en AgentResponseError.tokens (ver
+    # app/ai/client.py) — este es el caso que más dinero puede perder si no
+    # se registra: el agente ya generó hasta max_tokens de salida.
+    _patch_call_agent_se_corta_por_max_tokens(monkeypatch, output_tokens=4096)
+    capturado: list = []
+    _patch_save_llamada_ia(monkeypatch, capture=capturado)
+
+    with pytest.raises(AgentResponseError):
+        _run(monkeypatch)
+
+    assert len(capturado) == 1
+    row = capturado[0]
+    assert row.exitosa is False
+    assert row.respuesta is None
+    assert row.output_tokens == 4096
+    assert row.cost_usd > 0
+    assert "max_tokens" in row.error_message
+
+
+def test_llamada_con_json_invalido_persiste_su_costo_real_y_relanza(monkeypatch):
+    # Acá call_agent SÍ devuelve un AgentCallResult completo (la API
+    # respondió, solo que el texto no es JSON válido) — los tokens deben
+    # salir de ese call_result, no de la excepción (que no los trae).
+    _patch_call_agent_devuelve(monkeypatch, raw_text="esto no es json")
+    capturado: list = []
+    _patch_save_llamada_ia(monkeypatch, capture=capturado)
+
+    with pytest.raises(AgentResponseError):
+        _run(monkeypatch)
+
+    assert len(capturado) == 1
+    row = capturado[0]
+    assert row.exitosa is False
+    assert row.respuesta is None
+    assert row.input_tokens == 100
+    assert row.output_tokens == 200
+    assert row.cost_usd > 0
+
+
+def test_llamada_que_no_cumple_el_schema_persiste_su_costo_real_y_relanza(monkeypatch):
+    # JSON válido, pero le falta el campo "ok" que exige _DummySchema.
+    _patch_call_agent_devuelve(monkeypatch, raw_text="{}")
+    capturado: list = []
+    _patch_save_llamada_ia(monkeypatch, capture=capturado)
+
+    with pytest.raises(AgentValidationError):
+        _run(monkeypatch)
+
+    assert len(capturado) == 1
+    row = capturado[0]
+    assert row.exitosa is False
+    assert row.respuesta is None
+    assert row.cost_usd > 0
+    assert "_DummySchema" in row.error_message or "DummySchema" in row.error_message
+
+
+def test_llamada_exitosa_no_registra_ninguna_fila_de_fallo(monkeypatch):
+    # Caso de control: una llamada exitosa solo persiste UNA fila, y es la
+    # exitosa (exitosa=True) — no debe quedar ningún registro de fallo.
+    _patch_call_agent(monkeypatch, output_tokens=50)
+    capturado: list = []
+    _patch_save_llamada_ia(monkeypatch, capture=capturado)
+
+    _run(monkeypatch)
+
+    assert len(capturado) == 1
+    assert capturado[0].exitosa is True
+    assert capturado[0].respuesta == {"ok": True}

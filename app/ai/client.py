@@ -40,7 +40,22 @@ class AgentResponseError(Exception):
     defecto (sección P3 del plan: cero datos inventados) — quien llama debe
     tratar esto como una interpretación fallida, no como un resultado
     parcial utilizable.
-    """
+
+    `tokens` (default `None`): cuando el corte es por `max_tokens`, la API
+    SÍ respondió y SÍ se cobra esa llamada — Anthropic no la regala solo
+    porque el JSON quedó incompleto. Antes de este campo, `run_json_agent`
+    no tenía forma de conocer esos tokens para registrar el costo real de
+    una llamada fallida (bug real 2026-10-02: ver
+    `app/db/models/ai_calls.py::LlamadaIA.exitosa`) — se pierde esa
+    información apenas termina `call_agent` si no viaja con la excepción.
+    Queda en `None` para el caso de JSON inválido detectado en
+    `parse_agent_json` (no tiene acceso a la respuesta cruda del modelo, ni
+    falta le hace: quien la llama ya tiene el `AgentCallResult` completo en
+    ese punto)."""
+
+    def __init__(self, message: str, *, tokens: AgentCallResult | None = None) -> None:
+        super().__init__(message)
+        self.tokens = tokens
 
 
 @dataclass(frozen=True)
@@ -105,6 +120,14 @@ def call_agent(
 
     raw_text = "".join(block.text for block in response.content if block.type == "text")
 
+    call_result = AgentCallResult(
+        raw_text=raw_text,
+        input_tokens=response.usage.input_tokens,
+        output_tokens=response.usage.output_tokens,
+        cache_creation_input_tokens=getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
+        cache_read_input_tokens=getattr(response.usage, "cache_read_input_tokens", 0) or 0,
+    )
+
     if response.stop_reason == "max_tokens":
         # BUG REAL encontrado corriendo scripts/run_daily_cycle.py contra la
         # API real (2026-09-30): con varios candidatos, la respuesta del
@@ -116,21 +139,21 @@ def call_agent(
         # de inmediato (sección 24 del plan: contexto suficiente para
         # diagnosticar) — nunca se intenta "cerrar" el JSON truncado a mano,
         # eso sería inventar el resto de la respuesta (P3 del plan).
+        #
+        # `tokens=call_result` (bug real 2026-10-02): esta llamada SÍ la
+        # cobra Anthropic, aunque el JSON haya quedado incompleto — sin
+        # adjuntar los tokens reales acá, quien llama (`run_json_agent`) no
+        # tiene forma de registrar ese costo real en `llamadas_ia`.
         raise AgentResponseError(
             f"La respuesta de '{model}' se cortó por alcanzar max_tokens={max_tokens} "
             f"({response.usage.output_tokens} tokens de salida generados) antes de "
             "terminar el JSON. Quien llama debe pasar un max_tokens mayor para este "
             "agente — nunca se completa el JSON a mano.\n"
-            f"Texto recibido (últimos 300 caracteres): {raw_text[-300:]!r}"
+            f"Texto recibido (últimos 300 caracteres): {raw_text[-300:]!r}",
+            tokens=call_result,
         )
 
-    return AgentCallResult(
-        raw_text=raw_text,
-        input_tokens=response.usage.input_tokens,
-        output_tokens=response.usage.output_tokens,
-        cache_creation_input_tokens=getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
-        cache_read_input_tokens=getattr(response.usage, "cache_read_input_tokens", 0) or 0,
-    )
+    return call_result
 
 
 def parse_agent_json(raw_text: str) -> dict:

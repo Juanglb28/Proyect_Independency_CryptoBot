@@ -99,8 +99,13 @@ def test_run_auditor_datos_raises_on_schema_mismatch(monkeypatch):
         run_auditor_datos(session=object(), settings=_settings(), datos={})
 
     # Una respuesta que no cumple el schema no debe quedar registrada como
-    # si fuera una interpretación válida.
-    assert saved == []
+    # si fuera una interpretación válida (respuesta=None) — pero bug real
+    # 2026-10-02: Anthropic cobró esta llamada igual, así que SÍ debe
+    # quedar un registro de auditoría marcado como fallido.
+    assert len(saved) == 1
+    assert saved[0].exitosa is False
+    assert saved[0].respuesta is None
+    assert saved[0].cost_usd > 0
 
 
 # ---------------------------------------------------------------------------
