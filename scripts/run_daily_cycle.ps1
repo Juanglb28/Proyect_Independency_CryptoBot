@@ -17,7 +17,11 @@
 # con las extensiones compiladas nativas de Windows, ver Evento 3077 de
 # CodeIntegrity).
 #
-# Uso manual: powershell -File scripts\run_daily_cycle.ps1
+# Uso manual (recomendado para probar, en vez de `schtasks /run`, que es
+# "fire and forget": lanza la tarea en un proceso aparte y la consola donde
+# escribiste el comando nunca ve su salida — ver BUG REAL 2026-10-02 (b)
+# más abajo):
+#     powershell -File scripts\run_daily_cycle.ps1
 # Registro en Task Scheduler: ver README.md, sección
 # "Tarea diaria programada (Windows)".
 
@@ -31,9 +35,19 @@ $logDir = "logs"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $logFile = Join-Path $logDir ("daily_cycle_{0}.log" -f (Get-Date -Format "yyyyMMdd_HHmmss"))
 
+# BUG REAL (2026-10-02, b): el script solo escribía al archivo de log, nunca
+# a la consola — pensado para la tarea programada desatendida, donde no hay
+# nadie mirando. Pero al probarlo a mano (`schtasks /run` o corriendo este
+# script directo) la consola se quedaba sin ningún indicio de si seguía
+# corriendo, si terminó bien o si falló, obligando a abrir una segunda
+# ventana para seguir el log con `Get-Content -Wait`. Ahora Write-Log
+# también imprime por consola (Write-Host) — sigue escribiendo al archivo
+# igual que antes, para la tarea programada sin nadie mirando.
 function Write-Log {
     param([string]$Message)
-    "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $Message" | Out-File -FilePath $logFile -Append -Encoding utf8
+    $linea = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $Message"
+    $linea | Out-File -FilePath $logFile -Append -Encoding utf8
+    Write-Host $linea
 }
 
 # BUG REAL (2026-10-02): `docker compose` escribe su progreso normal
@@ -76,7 +90,7 @@ function Test-DockerReady {
 }
 
 try {
-    Write-Log "Iniciando ejecucion del ciclo diario."
+    Write-Log "=== Iniciando ejecucion del ciclo diario ==="
 
     # BUG REAL (2026-10-01): la tarea programada se disparó a las 10:00 sin
     # que Docker Desktop estuviera abierto todavía (el usuario lo arranca
@@ -92,6 +106,7 @@ try {
 
         if (-not (Test-Path $dockerDesktopExe)) {
             Write-Log "No se encontro Docker Desktop en la ruta esperada. Abortando sin correr el ciclo."
+            Write-Log "=== PROCESO FINALIZADO CON ERROR (codigo 1) ==="
             exit 1
         }
 
@@ -108,6 +123,7 @@ try {
 
         if (-not $ready) {
             Write-Log "Docker Desktop no respondio tras $maxWaitSeconds segundos. Abortando sin correr el ciclo."
+            Write-Log "=== PROCESO FINALIZADO CON ERROR (codigo 1) ==="
             exit 1
         }
         Write-Log "Docker Desktop listo tras $elapsed segundos de espera."
@@ -115,7 +131,14 @@ try {
         Write-Log "Docker ya estaba listo."
     }
 
-    Invoke-Native { docker compose up -d *>> $logFile }
+    Write-Log "En ejecucion: docker compose up -d ..."
+    # 2>&1 + Tee-Object en vez de `*>> $logFile`: lo de antes solo mandaba la
+    # salida al archivo, nunca a la consola (mismo BUG REAL de arriba, b).
+    # Tee-Object manda cada línea a AMBOS lados sin perder la detección de
+    # fallo real: Tee-Object es un cmdlet de PowerShell, no un ejecutable
+    # nativo, así que no toca $LASTEXITCODE — sigue siendo el código de
+    # salida real de `docker`, el mismo que ya se valida a mano de abajo.
+    Invoke-Native { docker compose up -d 2>&1 | Tee-Object -FilePath $logFile -Append }
     if ($LASTEXITCODE -ne 0) {
         throw "docker compose up -d salio con codigo $LASTEXITCODE"
     }
@@ -125,10 +148,15 @@ try {
     # tras detectar en producción (2026-10-01/02) que el ciclo llevaba dos
     # días corriendo sobre velas con más de 50 horas de antigüedad, porque
     # nada mantenía `velas`/`indicadores` al día automáticamente.
-    Invoke-Native { docker compose run --rm app python -m scripts.run_daily_pipeline *>> $logFile }
+    Write-Log "En ejecucion: scripts.run_daily_pipeline (ingesta + indicadores + ciclo) ..."
+    Invoke-Native { docker compose run --rm app python -m scripts.run_daily_pipeline 2>&1 | Tee-Object -FilePath $logFile -Append }
     $exitCode = $LASTEXITCODE
 
-    Write-Log "Ejecucion finalizada con codigo de salida $exitCode."
+    if ($exitCode -eq 0) {
+        Write-Log "=== PROCESO FINALIZADO CON EXITO (codigo 0) ==="
+    } else {
+        Write-Log "=== PROCESO FINALIZADO CON ERROR (codigo $exitCode) ==="
+    }
     exit $exitCode
 }
 catch {
@@ -137,5 +165,6 @@ catch {
     # en silencio.
     Write-Log "ERROR no controlado: $($_.Exception.Message)"
     Write-Log ($_.ScriptStackTrace)
+    Write-Log "=== PROCESO FINALIZADO CON ERROR (codigo 1) ==="
     exit 1
 }

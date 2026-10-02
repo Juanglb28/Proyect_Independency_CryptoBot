@@ -471,7 +471,24 @@ asegura de que Docker Desktop esté corriendo (lo levanta y espera hasta 2
 minutos si hace falta), levanta los contenedores y corre
 `scripts.run_daily_pipeline` dentro del contenedor `app`, con la salida
 guardada en `logs/daily_cycle_<fecha>.log` (no se sube a git — ver
-`.gitignore`).
+`.gitignore`) y espejada en vivo a la consola cuando corre en primer plano
+(ver bug real más abajo).
+
+**Para probar a mano, corré el script directo, no `schtasks /run`:**
+
+```powershell
+powershell -File scripts\run_daily_cycle.ps1
+```
+
+`schtasks /run` lanza la tarea registrada en un proceso aparte y vuelve de
+inmediato — es "fire and forget" por diseño de Windows, nunca te va a
+mostrar el progreso en la consola donde escribiste el comando, sin importar
+qué tan bien loguee el script (ver bug real 2026-10-02, b). Sirve para
+confirmar que la tarea programada en sí está bien registrada (credenciales,
+disparador), no para ver una corrida en vivo. Corriendo el script directo
+en cambio es síncrono: se queda en la misma ventana, imprime cada paso a
+medida que pasa, y termina con `=== PROCESO FINALIZADO CON EXITO ===` o
+`=== PROCESO FINALIZADO CON ERROR (codigo N) ===`.
 
 **Bug real (2026-10-02):** el ciclo llevaba dos días corriendo sobre velas
 con más de 50 horas de antigüedad — visible en los `WARNING` del Auditor
@@ -501,6 +518,21 @@ solo mientras dura la llamada nativa (restaurando el valor anterior en un
 correcta de detectar un fallo de un ejecutable externo en PowerShell. Se
 aplicó a los tres llamados nativos del script (`docker info`,
 `docker compose up -d` y `docker compose run ... run_daily_pipeline`).
+
+**Bug real (2026-10-02, b):** el script solo escribía al archivo de log,
+nunca a la consola — tenía sentido para la tarea programada desatendida
+(nadie mira esa ventana), pero al probarlo a mano la consola no mostraba
+nada: ni que seguía corriendo, ni si terminó bien o mal, obligando a abrir
+una segunda ventana con `Get-Content -Wait` para ver algo. Corregido
+espejando toda la salida a consola además del archivo: `Write-Log` ahora
+también hace `Write-Host`, y los dos llamados a `docker compose` pasan por
+`Tee-Object -FilePath $logFile -Append` en vez de `*>> $logFile` (que solo
+mandaba al archivo). `Tee-Object` es un cmdlet de PowerShell, no un
+ejecutable nativo, así que no pisa `$LASTEXITCODE` — sigue siendo el código
+real de `docker`, el mismo que ya se valida a mano. Esto no sirve para
+`schtasks /run` (ver la nota de arriba sobre por qué esa consola nunca
+muestra nada, con o sin este fix) — es para cuando corrés el script
+directo.
 
 **Bug real (2026-10-01):** la primera versión del script asumía que Docker
 Desktop ya estaba corriendo. La tarea se disparó antes de que el usuario
