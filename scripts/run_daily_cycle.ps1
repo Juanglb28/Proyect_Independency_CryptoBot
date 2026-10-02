@@ -27,6 +27,29 @@
 
 $ErrorActionPreference = "Stop"
 
+# BUG REAL (2026-10-02, c): el texto de las tesis en el log salía con un
+# espacio de más entre cada letra ("C a n d i d a t o s") y las tildes/ñ
+# como "%�". Causa: Windows PowerShell 5.1 decodifica la salida de un
+# comando nativo (acá, la de `docker compose`, que a su vez reenvía la de
+# Python dentro del contenedor) usando `[Console]::OutputEncoding`, que
+# por defecto NO es UTF-8 en esta máquina — así que cualquier texto con
+# tildes llegaba corrupto desde el vamos. Encima, `Tee-Object` (a
+# diferencia de `Out-File`/`Add-Content`, no tiene parámetro `-Encoding`:
+# no hay forma de pedirle UTF-8) escribe al archivo con el default de
+# Windows PowerShell para ese tipo de cmdlet, que es UTF-16LE — mezclado
+# en el mismo archivo con las líneas de `Write-Log`, que sí se escriben
+# en UTF-8 a mano. Un ASCII en UTF-16LE es ese mismo byte seguido de un
+# byte 0x00; leído con cualquier herramienta que asuma UTF-8 (como la que
+# usamos para revisar el log), ese 0x00 se muestra como un espacio de
+# más — de ahí el patrón letra-espacio-letra. Se corrige en dos partes:
+# forzando aquí la decodificación de salida nativa a UTF-8 (esto además
+# arregla las tildes, no solo el espaciado), y más abajo reemplazando
+# `Tee-Object` por `Write-TeeUtf8`, que escribe al archivo explícitamente
+# en UTF-8 (la misma codificación que ya usa `Write-Log`) en vez de
+# dejarlo en el default de ese cmdlet.
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+
 # La raíz del proyecto es el directorio padre de scripts\ — así el script
 # funciona sin importar desde dónde lo invoque el Programador de tareas.
 Set-Location -Path (Join-Path $PSScriptRoot "..")
@@ -48,6 +71,24 @@ function Write-Log {
     $linea = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $Message"
     $linea | Out-File -FilePath $logFile -Append -Encoding utf8
     Write-Host $linea
+}
+
+# Reemplaza a `Tee-Object -FilePath $logFile -Append` en la salida de los
+# comandos nativos (ver BUG REAL 2026-10-02, c, arriba de este archivo):
+# `Tee-Object` no tiene parámetro `-Encoding`, así que escribía con el
+# default de Windows PowerShell (UTF-16LE), distinto del UTF-8 que usa
+# `Write-Log` — un mismo archivo con dos codificaciones mezcladas. Esta
+# función hace lo mismo que `Tee-Object` (mostrar en consola Y guardar en
+# el archivo) pero forzando la misma codificación UTF-8 en los dos lados.
+# Al ser una función de PowerShell, no un ejecutable nativo, tampoco pisa
+# `$LASTEXITCODE` — sigue siendo el código real del comando nativo que la
+# alimenta, igual que pasaba con `Tee-Object`.
+function Write-TeeUtf8 {
+    param([Parameter(ValueFromPipeline)][string]$Linea)
+    process {
+        Write-Host $Linea
+        $Linea | Out-File -FilePath $logFile -Append -Encoding utf8
+    }
 }
 
 # BUG REAL (2026-10-02): `docker compose` escribe su progreso normal
@@ -132,13 +173,16 @@ try {
     }
 
     Write-Log "En ejecucion: docker compose up -d ..."
-    # 2>&1 + Tee-Object en vez de `*>> $logFile`: lo de antes solo mandaba la
-    # salida al archivo, nunca a la consola (mismo BUG REAL de arriba, b).
-    # Tee-Object manda cada línea a AMBOS lados sin perder la detección de
-    # fallo real: Tee-Object es un cmdlet de PowerShell, no un ejecutable
-    # nativo, así que no toca $LASTEXITCODE — sigue siendo el código de
-    # salida real de `docker`, el mismo que ya se valida a mano de abajo.
-    Invoke-Native { docker compose up -d 2>&1 | Tee-Object -FilePath $logFile -Append }
+    # 2>&1 + Write-TeeUtf8 en vez de `*>> $logFile`: lo de antes solo mandaba
+    # la salida al archivo, nunca a la consola (BUG REAL 2026-10-02, b) —
+    # y `Tee-Object`, usado ahí para resolver eso, escribía el archivo con
+    # una codificación distinta a la de `Write-Log` (BUG REAL 2026-10-02, c,
+    # arriba de este archivo). `Write-TeeUtf8` manda cada línea a AMBOS
+    # lados en UTF-8 sin perder la detección de fallo real: es una función
+    # de PowerShell, no un ejecutable nativo, así que no toca
+    # $LASTEXITCODE — sigue siendo el código de salida real de `docker`, el
+    # mismo que ya se valida a mano de abajo.
+    Invoke-Native { docker compose up -d 2>&1 } | Write-TeeUtf8
     if ($LASTEXITCODE -ne 0) {
         throw "docker compose up -d salio con codigo $LASTEXITCODE"
     }
@@ -149,7 +193,7 @@ try {
     # días corriendo sobre velas con más de 50 horas de antigüedad, porque
     # nada mantenía `velas`/`indicadores` al día automáticamente.
     Write-Log "En ejecucion: scripts.run_daily_pipeline (ingesta + indicadores + ciclo) ..."
-    Invoke-Native { docker compose run --rm app python -m scripts.run_daily_pipeline 2>&1 | Tee-Object -FilePath $logFile -Append }
+    Invoke-Native { docker compose run --rm app python -m scripts.run_daily_pipeline 2>&1 } | Write-TeeUtf8
     $exitCode = $LASTEXITCODE
 
     if ($exitCode -eq 0) {

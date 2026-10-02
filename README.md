@@ -647,6 +647,27 @@ real de `docker`, el mismo que ya se valida a mano. Esto no sirve para
 muestra nada, con o sin este fix) — es para cuando corrés el script
 directo.
 
+**Bug real (2026-10-02, c):** el texto de las tesis en el log salía con un
+espacio de más entre cada letra ("C a n d i d a t o s") y las tildes/ñ
+como "%�". Dos causas combinadas: Windows PowerShell 5.1 decodifica la
+salida de un comando nativo (acá, `docker compose`, que reenvía la de
+Python dentro del contenedor) usando `[Console]::OutputEncoding`, que por
+defecto no era UTF-8 en esta máquina — así que el texto con tildes llegaba
+corrupto desde el vamos; y `Tee-Object` (a diferencia de
+`Out-File`/`Add-Content`) no tiene parámetro `-Encoding`, así que escribía
+al log con el default de Windows PowerShell para ese cmdlet (UTF-16LE),
+mezclado en el mismo archivo con las líneas de `Write-Log` (UTF-8 a mano).
+Un ASCII en UTF-16LE es ese byte seguido de un byte `0x00`; leído con
+cualquier herramienta que asuma UTF-8, ese `0x00` se ve como un espacio de
+más — de ahí el patrón letra-espacio-letra. Corregido fijando
+`[Console]::OutputEncoding`/`$OutputEncoding` a UTF-8 al inicio del script
+(arregla la decodificación de origen, no solo el espaciado) y
+reemplazando `Tee-Object` por `Write-TeeUtf8`, una función propia que
+escribe a consola y archivo forzando UTF-8 en los dos lados — misma
+codificación que `Write-Log` en todo el archivo. No cambia la detección
+de fallo: `Write-TeeUtf8`, igual que `Tee-Object` antes, no es un
+ejecutable nativo, así que no pisa `$LASTEXITCODE`.
+
 **Bug real (2026-10-01):** la primera versión del script asumía que Docker
 Desktop ya estaba corriendo. La tarea se disparó antes de que el usuario
 lo hubiera abierto esa mañana, `docker compose` falló de inmediato, y ese
