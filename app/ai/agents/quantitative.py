@@ -25,6 +25,15 @@ from app.config import Settings
 
 AGENTE = "analista_cuantitativo"
 
+MAX_TOKENS_ANALISTA_CUANTITATIVO = 8_000
+"""Preventivo, no un bug confirmado todavía (a diferencia de
+`events.MAX_TOKENS_ANALISTA_EVENTOS`, que sí se cortó en producción el
+2026-10-02): `observaciones` tiene la misma forma estructural de riesgo —
+una lista que crece con la cantidad de factores/temporalidades que el
+agente decida comentar, con texto libre por ítem. Subir el tope ahora, en
+vez de esperar a que falle en una corrida real, no cuesta nada (un TOPE no
+es un gasto garantizado — ver `consolidator.MAX_TOKENS_CONSOLIDADOR`)."""
+
 
 def run_analista_cuantitativo(
     session: Session,
@@ -43,4 +52,5 @@ def run_analista_cuantitativo(
         datos=datos,
         schema=AnalistaCuantitativoOutput,
         ciclo_id=ciclo_id,
+        max_tokens=MAX_TOKENS_ANALISTA_CUANTITATIVO,
     )

@@ -25,6 +25,20 @@ from app.config import Settings
 
 AGENTE = "analista_eventos"
 
+MAX_TOKENS_ANALISTA_EVENTOS = 8_000
+"""Por encima del default de `run_json_agent` (4096): `eventos_comparables`
+crece con la cantidad de eventos del catálogo en alcance para el símbolo
+(no hay un tope fijo — depende de cuántos eventos reales le correspondan),
+y cada uno trae dos campos de texto libre (`razon_semejanza`,
+`comportamiento_posterior`). Mismo mecanismo que
+`consolidator.MAX_TOKENS_CONSOLIDADOR`: un TOPE, no un gasto garantizado.
+
+BUG REAL (2026-10-02): en una corrida real con 5-6 eventos en alcance, la
+respuesta se cortó a mitad del JSON con el default de 4096
+(`stop_reason="max_tokens"`), abortando el ciclo completo después de haber
+pagado ya las llamadas previas (Entrevistador/Auditor/Cuantitativo) de ese
+símbolo."""
+
 
 def run_analista_eventos(
     session: Session,
@@ -43,4 +57,5 @@ def run_analista_eventos(
         datos=datos,
         schema=AnalistaEventosOutput,
         ciclo_id=ciclo_id,
+        max_tokens=MAX_TOKENS_ANALISTA_EVENTOS,
     )

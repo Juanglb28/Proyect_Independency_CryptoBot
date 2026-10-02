@@ -431,6 +431,19 @@ se revisaba antes de intentar parsear el JSON). Ver `app/ai/client.py`
 (detección explícita de truncamiento) y
 `app/ai/agents/consolidator.py::MAX_TOKENS_CONSOLIDADOR`.
 
+**Fix real (2026-10-02):** el mismo tipo de corte pasó en el Analista de
+eventos (Agente 3), no en el Consolidador — con 5-6 eventos del catálogo
+en alcance para un símbolo, su respuesta se cortó a mitad de JSON con el
+default de `run_json_agent` (4096 tokens), abortando el ciclo completo
+después de ya haber pagado las llamadas previas de ese símbolo. Mismo
+mecanismo de fix que el Consolidador: `app/ai/agents/events.py::
+MAX_TOKENS_ANALISTA_EVENTOS` (8000, porque `eventos_comparables` crece con
+la cantidad de eventos en alcance, sin tope fijo). Se subió también,
+preventivamente, el del Analista cuantitativo (Agente 2,
+`MAX_TOKENS_ANALISTA_CUANTITATIVO`) por compartir la misma forma de riesgo
+(`observaciones` también es una lista de texto libre sin tope) — ese no
+había fallado todavía en producción, a diferencia del de eventos.
+
 ## Tarea diaria programada (Windows)
 
 El ciclo diario no necesita que ninguna IA lo arranque ni lo supervise —
