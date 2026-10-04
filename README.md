@@ -672,8 +672,9 @@ paso antes y un paso después (stop -8%, TP +12%, trailing 6%, drawdown
 -15%). `Settings.max_open_positions` (variable heredada del plan) no es la
 fuente de verdad: lo es `MAX_POSICIONES_ABIERTAS`, y un test falla si se
 desalinean. Sigue marcada `TODO — DECISIÓN PENDIENTE` la base del tope de
-25% del capital (irrelevante con el tamaño fijo de 100 USD) y los porcentajes
-de stop/objetivo (ver el estudio más abajo).
+25% del capital (irrelevante con el tamaño fijo de 100 USD). Los porcentajes
+de stop y objetivo están cerrados: se mantienen -8% / +12% (ver el estudio
+más abajo).
 
 **Selección de propuestas (`app/domain/rules/execution.py`, 2026-10-04):**
 `select_entries(candidatos, cupos)` es una función pura: ordena los
@@ -717,21 +718,48 @@ funciona, no un mal día. Tests: `tests/integration/test_system_events.py`.
 Para aplicarla: `docker compose run --rm app alembic upgrade head` (y lo
 mismo sobre la base `_test`, ver "Tests").
 
-**Estudio de stop/objetivo (pendiente de decisión, 2026-10-04):** el usuario
-propuso -6% de stop y +8% de objetivo (el plan dice -8% y +12%). Las
-constantes de `risk.py` NO cambian hasta que decida con datos. Para medir,
-`python -m scripts.study_stop_target` (en Docker: `docker compose run --rm app
-python -m scripts.study_stop_target`) lee las velas guardadas y, para cada
-moneda, entra a ciegas una vez al día y cuenta qué barrera toca primero el
-precio (módulo puro `app/data/barrier_study.py`, solo lectura). Es
+**Stop y objetivo: se mantienen -8% / +12% (decisión del usuario,
+2026-10-04, tras el estudio).** El usuario había propuesto -6% / +8%; antes
+de tocar una regla que afecta dinero se midió con las velas históricas
+guardadas (`python -m scripts.study_stop_target`; en Docker
+`docker compose run --rm app python -m scripts.study_stop_target`). El
+estudio lee las velas 1h de las 20 monedas, entra a ciegas una vez al día
+(746 entradas por moneda, 14.920 en total) y cuenta qué barrera toca primero
+el precio (módulo puro `app/data/barrier_study.py`, solo lectura). Es
 **incondicional** (no usa el score), no simula comisiones, cierre parcial ni
-trailing, y las entradas de distintas monedas están correlacionadas: sirve para
-ver cuánto ruido tiene cada moneda frente a cada stop y cuánto tardan las
-operaciones en resolverse, no para probar que una combinación gana dinero.
-Las velas dentro de las cuales se tocan ambos niveles se cuentan aparte como
-`ambiguas`. Cualquiera que sea la decisión, se fija antes de la primera
-operación paper y no se cambia a mitad de la muestra. Tests:
-`tests/unit/test_barrier_study.py`.
+trailing, y las entradas de distintas monedas están correlacionadas.
+Resultado, todas las monedas juntas:
+
+| Stop / objetivo | Toca objetivo primero | Mínimo para no perder | Margen | Mediana hasta resolver |
+|---|---|---|---|---|
+| -6% / +8% | 45,4% | 44,3% | +1,1 | 2,7 días |
+| -6% / +12% | 35,6% | 34,4% | +1,2 | 3,6 días |
+| -8% / +8% | 52,9% | 51,2% | +1,7 | 3,5 días |
+| **-8% / +12% (plan, vigente)** | 42,9% | 41,0% | +1,9 | 5,0 días |
+
+Lectura (descriptiva, no una prueba estadística):
+
+- Los cuatro pares superan el mínimo por apenas 1-2 puntos entrando a
+  ciegas (≈ +0,2% a +0,4% por operación). Con 30 operaciones el error típico
+  es de 1,3-1,8 puntos, mucho mayor que las diferencias entre pares: los
+  datos no distinguen un par mejor.
+- Parte de ese margen viene de BTC, BNB y TRX, que subieron en la ventana
+  cargada; con -6% / +8% unas 10 de 20 monedas quedan bajo el mínimo. No es
+  una ventaja que dar por sentada.
+- **Para qué sirve: es el listón (benchmark) que el score debe superar.** Si
+  las propuestas del sistema no rinden mejor que entrar a ciegas con el mismo
+  stop y objetivo, el score no aporta. Este estudio se puede repetir para
+  comparar en la validación del Paso 9.
+- Con stop -6% el 54% de las entradas a ciegas tocan el stop primero (46% con
+  -8% / +8%): un stop corto se activa más por ruido normal de precio.
+- La mediana hasta el primer toque varía de 1,1 días (ZEC) a 12,6 (TRX, con 95
+  entradas sin resolver) a -6% / +8%: un porcentaje fijo se comporta muy
+  distinto según la moneda. Un stop ligado a la volatilidad (ATR) sería un
+  cambio del plan; se evalúa con datos de la v1, no antes.
+
+Las constantes de `risk.py` no cambian (un test las fija en 8% y 12%). Se
+mantienen durante toda la muestra de la v1: cambiarlas a mitad volvería las
+operaciones incomparables. Tests: `tests/unit/test_barrier_study.py`.
 
 Sigue pendiente, y depende de datos reales (no del Paso 8): fórmula
 definitiva del pre-filtro, evento comparable, ajuste final del scoring,
