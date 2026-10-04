@@ -584,8 +584,9 @@ inventa). Todas se suman a las reglas fijas ya cerradas en la sección 9 del
 plan (stop -8%, TP 50% en +12%, trailing 6%, pausa en -15%, máx. 4
 posiciones, 100-250 USD, aprobación manual sobre 200 USD, score mínimo 55,
 3 operaciones por día, `client_order_id`, archivo `PARAR`, monitor cada
-60 s). **Todavía no hay código de ejecución**: esto es solo la especificación
-que el Paso 8 va a implementar y testear.
+60 s). **Todavía no hay servicios de ejecución ni monitor**: existen las
+reglas puras (`risk.py`, `execution.py`), las tablas y sus repositorios;
+falta el servicio que los conecta.
 
 | Tema | Decisión |
 |---|---|
@@ -598,6 +599,9 @@ que el Paso 8 va a implementar y testear.
 | Tope de MAYOR_RIESGO | Comparten los cupos generales **y además** tienen un tope propio de **1 posición abierta a la vez**. Siempre aprobación manual y 100 USD (ya decidido el 2026-10-04). |
 | Aprobación manual | Estado `PENDING_APPROVAL`; se aprueba o rechaza con un **comando de terminal**; Telegram/Streamlit reutilizarán el mismo servicio. **Expira a las 00:00 UTC del día del ciclo** si no se resuelve: el análisis envejece. |
 | Salida por tiempo | **Ninguna** (fiel al plan). Solo stop, TP con trailing y pausa por drawdown. Si posiciones estancadas retrasan las 30 operaciones, se mide y se decide con datos. |
+| Fuente de precio del monitor | **Ticker público de Binance** (endpoint de mercado sin credenciales). El monitor no necesita API key: ninguna credencial de exchange se usa para vigilar posiciones paper. |
+| Entradas pendientes de aprobación | **Reservan cupo**: una orden `PENDING_APPROVAL` cuenta para las 4 posiciones, las 3 entradas del día y, si es de mayor riesgo, el tope de 1, hasta que se apruebe, rechace o expire. Evita que una entrada aprobada tarde rompa los topes. |
+| Desempate de la selección | Orden: tier (NORMAL antes que MAYOR_RIESGO) → puntaje ponderado descendente → símbolo alfabético → id de propuesta. El plan no define el desempate; hace falta uno para que el resultado sea reproducible (ciclo y backtest). Solo es determinismo, no una preferencia por un activo; fácil de cambiar. |
 
 **Derivado del plan, sin pregunta aparte (corregir si no es lo que quieres):**
 el trailing del 6% se mide desde el **precio máximo observado desde que se
@@ -605,10 +609,13 @@ activó** (al tocar +12%), actualizado en cada chequeo y nunca a la baja. Su
 nivel (≥ +5,3% sobre la entrada) siempre queda por encima del stop de -8%,
 así que el stop original queda superado de forma automática.
 
-**Aún abierto (se confirma al empezar el código, no se asume):** si una
-propuesta en `PENDING_APPROVAL` consume cupo de las 4 posiciones o de las 3
-operaciones por día antes de ser aprobada (el criterio natural sería que
-solo cuenta al ejecutarse).
+**Cerrado después (2026-10-04):** una entrada en `PENDING_APPROVAL` SÍ
+reserva cupo (ver la tabla). El servicio que arme `SituacionDeCupos` debe
+contar posiciones abiertas + entradas pendientes, y las entradas del día
+como las órdenes `ENTRY` ejecutadas o pendientes creadas en el día UTC
+actual (las rechazadas o expiradas liberan el cupo de posición, pero la
+entrada del día ya consumida se decide al implementar el servicio — ver
+"Aún abierto" más abajo).
 
 **Tablas creadas (migración `f3cbb4cdb7d1`, 2026-10-04):** `posiciones` y
 `ordenes`, con el diseño aprobado por el usuario (modelos en
@@ -630,10 +637,8 @@ existentes. Lo que garantiza la base de datos por sí sola (P5), cubierto por
 - Dinero y precios en `NUMERIC`, fechas en `TIMESTAMPTZ`, enums como
   `VARCHAR` validado (agregar un estado no requiere `ALTER TYPE`).
 
-Los cupos (4 abiertas, 3 por día, 1 de mayor riesgo) se calcularán
-consultando estas tablas, sin contadores aparte. Todavía no hay repositorios
-ni servicios sobre ellas: llegan junto con `risk.py` y los managers. Para
-aplicarla: `docker compose run --rm app alembic upgrade head` (y lo mismo
+Los cupos (4 abiertas, 3 por día, 1 de mayor riesgo) se calculan
+consultando estas tablas, sin contadores aparte. Para aplicarla: `docker compose run --rm app alembic upgrade head` (y lo mismo
 sobre la base `_test`, ver "Tests").
 
 **Reglas de riesgo en código (`app/domain/rules/risk.py`, 2026-10-04):**
@@ -664,9 +669,38 @@ Tests en `tests/unit/test_risk_rules.py`: cada umbral se prueba exacto, un
 paso antes y un paso después (stop -8%, TP +12%, trailing 6%, drawdown
 -15%). `Settings.max_open_positions` (variable heredada del plan) no es la
 fuente de verdad: lo es `MAX_POSICIONES_ABIERTAS`, y un test falla si se
-desalinean. Siguen marcadas `TODO — DECISIÓN PENDIENTE`: la base del tope de
-25% del capital (irrelevante con el tamaño fijo de 100 USD) y si una orden
-`PENDING_APPROVAL` cuenta para los cupos.
+desalinean. Sigue marcada `TODO — DECISIÓN PENDIENTE` la base del tope de
+25% del capital (irrelevante con el tamaño fijo de 100 USD).
+
+**Selección de propuestas (`app/domain/rules/execution.py`, 2026-10-04):**
+`select_entries(candidatos, cupos)` es una función pura: ordena los
+candidatos (tier → puntaje → símbolo → id), valida cada uno con
+`validate_entry` contra los cupos que van quedando y devuelve
+`seleccionadas` (con si requieren aprobación manual y su monto) y
+`descartadas` (con todos sus motivos). Cada entrada seleccionada consume
+cupo para las siguientes — se ejecute sola o pida aprobación —; las
+rechazadas no consumen nada. No toca la base de datos ni crea órdenes.
+Tests: `tests/unit/test_execution_selection.py`.
+
+**Repositorios (`app/repositories/orders.py` y `positions.py`):** solo
+persistencia, sin reglas de negocio. `create_orden` y `create_posicion`
+son idempotentes (`ON CONFLICT` por `client_order_id` y por `proposal_id`):
+un reintento devuelve lo que ya existía, nunca duplica; un choque con otra
+restricción (segunda entrada de una propuesta con otro `client_order_id`,
+segunda posición abierta del mismo símbolo) NO se silencia y lanza
+`IntegrityError`. `resolve_pending_order` solo transiciona órdenes que
+sigan en `PENDING_APPROVAL` (la segunda resolución devuelve `False`) y
+`update_open_position` solo modifica posiciones `OPEN` y no puede alterar
+precio de entrada, cantidad inicial, stop ni objetivo originales. Los
+conteos (`count_entry_orders`, `count_open_posiciones`) reciben los estados
+y la ventana ya decididos por quien llama. Tests:
+`tests/integration/test_orders_positions_repositories.py`.
+
+**Aún abierto del Paso 8** (necesita decisión antes del servicio que abre
+posiciones): precio de referencia para calcular stop/objetivo respecto al
+`decision_snapshot` congelado; dónde persistir el estado de pausa por
+drawdown (el plan no tiene tabla para eso); si una entrada pendiente que
+se rechaza o expira devuelve también la "entrada del día".
 
 Sigue pendiente, y depende de datos reales (no del Paso 8): fórmula
 definitiva del pre-filtro, evento comparable, ajuste final del scoring,
@@ -1196,8 +1230,9 @@ prompt — "no sobreimplementar"):
   propuestas (sus reglas ya están decididas: ver "Decisiones del Paso 8") — `propuestas` queda como el registro de TODO lo que el
   Consolidador propuso, sin decidir todavía cuál se convierte en una
   posición real (Paso 8: `RISK_VALIDATION` en adelante de la sección 15.6).
-- Motor de ejecución, órdenes, posiciones y monitoreo (las TABLAS `ordenes`
-  y `posiciones` ya existen; falta toda la lógica sobre ellas) — ninguna credencial
+- Servicios de ejecución, monitor, reconciliación y parada de emergencia (las
+  TABLAS `ordenes` y `posiciones`, sus repositorios, `risk.py` y la selección
+  pura ya existen; falta el servicio que los conecta) — ninguna credencial
   de Binance se usa todavía; ni el cliente de velas ni el backfill la
   necesitan.
 - Cálculo de resultados y métricas de performance.

@@ -311,9 +311,19 @@ class SituacionDeCupos:
     """Foto de los cupos al momento de validar. La calcula el servicio
     consultando `posiciones`/`ordenes` (no hay contadores aparte).
 
-    `TODO — DECISIÓN PENDIENTE`: si una orden `PENDING_APPROVAL` cuenta para
-    `posiciones_abiertas`/`entradas_hoy` antes de aprobarse. Este módulo no
-    lo decide: cuenta lo que el servicio le entregue."""
+    Decisión del usuario (2026-10-04): una orden de entrada
+    `PENDING_APPROVAL` RESERVA cupo hasta que se apruebe, se rechace o expire
+    (a las 00:00 UTC). Por eso quien arme esta foto debe contar:
+
+    - `posiciones_abiertas`: posiciones `OPEN` + entradas pendientes (que
+      todavía no tienen posición, así que no se cuentan dos veces);
+    - `entradas_hoy`: órdenes `ENTRY` ejecutadas o pendientes creadas en el
+      día UTC en curso;
+    - `mayor_riesgo_abiertas`: posiciones `OPEN` de mayor riesgo + entradas
+      pendientes de mayor riesgo;
+    - `simbolos_abiertos`: símbolos con posición `OPEN` o entrada pendiente.
+
+    Este módulo no consulta nada: cuenta lo que el servicio le entregue."""
 
     posiciones_abiertas: int
     entradas_hoy: int
