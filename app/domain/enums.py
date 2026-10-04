@@ -122,7 +122,8 @@ class EstadoOrden(str, Enum):
       intermedio "enviada/sin llenar" todavía (P5): si en el futuro existe un
       exchange real con latencia, se agrega con su propio caso de prueba.
     - `REJECTED`: el usuario la rechazó, o la validación de riesgo la bloqueó.
-    - `EXPIRED`: no se aprobó antes de las 00:00 UTC del día del ciclo."""
+    - `EXPIRED`: no se aprobó antes del fin del día UTC del ciclo (00:00 UTC del
+      día siguiente)."""
 
     PENDING_APPROVAL = "PENDING_APPROVAL"
     FILLED = "FILLED"

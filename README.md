@@ -597,7 +597,7 @@ falta el servicio que los conecta.
 | Pausa total (-15%) | **Solo bloquea entradas nuevas.** Las posiciones abiertas siguen vigiladas con stop/TP/trailing. Reanudar es siempre una acción manual del usuario, nunca automática. |
 | Selección de propuestas | Se ordenan por puntaje ponderado (mayor a menor) hasta llenar los cupos (4 abiertas, 3 por día). Nunca se abre un símbolo que ya tiene posición abierta. Las NORMAL entran antes que las MAYOR_RIESGO. |
 | Tope de MAYOR_RIESGO | Comparten los cupos generales **y además** tienen un tope propio de **1 posición abierta a la vez**. Siempre aprobación manual y 100 USD (ya decidido el 2026-10-04). |
-| Aprobación manual | Estado `PENDING_APPROVAL`; se aprueba o rechaza con un **comando de terminal**; Telegram/Streamlit reutilizarán el mismo servicio. **Expira a las 00:00 UTC del día del ciclo** si no se resuelve: el análisis envejece. |
+| Aprobación manual | Estado `PENDING_APPROVAL`; se aprueba o rechaza con un **comando de terminal**; Telegram/Streamlit reutilizarán el mismo servicio. **Vence al terminar el día UTC del ciclo** (00:00 UTC del día siguiente; "vence fin del día") si no se resuelve: el análisis envejece. |
 | Salida por tiempo | **Ninguna** (fiel al plan). Solo stop, TP con trailing y pausa por drawdown. Si posiciones estancadas retrasan las 30 operaciones, se mide y se decide con datos. |
 | Fuente de precio del monitor | **Ticker público de Binance** (endpoint de mercado sin credenciales). El monitor no necesita API key: ninguna credencial de exchange se usa para vigilar posiciones paper. |
 | Precio base de stop y objetivo | **Precio de ejecución**: se calculan sobre el precio real al que se abre la posición paper (`calculate_initial_levels(entry_price)`); si la entrada esperó aprobación, el del momento de aprobarla. El `decision_snapshot` conserva el precio del análisis sin tocarlo. Los niveles quedan en `posiciones.initial_*`. |
@@ -699,6 +699,54 @@ precio de entrada, cantidad inicial, stop ni objetivo originales. Los
 conteos (`count_entry_orders`, `count_open_posiciones`) reciben los estados
 y la ventana ya decididos por quien llama. Tests:
 `tests/integration/test_orders_positions_repositories.py`.
+
+**Servicio de entradas (`app/execution/order_manager.py`, 2026-10-04):**
+une las reglas puras, los repositorios y la fuente de precios. **No calcula
+ninguna regla financiera y no importa nada de IA** (un test de arquitectura lo
+verifica). Qué hace:
+
+- `open_entries`: libera primero las aprobaciones vencidas, arma los cupos
+  (`build_cupos`, contando las entradas pendientes como reservadas), elige con
+  `select_entries` y, para cada entrada elegida, la ejecuta en paper al precio
+  observado (crea la posición y la orden `FILLED` en la MISMA transacción) o,
+  si es de mayor riesgo, crea una orden `PENDING_APPROVAL` que vence al
+  terminar el día UTC del ciclo.
+- `approve_pending_entry`, `reject_pending_entry`, `expire_pending_entries`:
+  resuelven las pendientes. Aprobar ejecuta al precio del momento de aprobar;
+  si ya venció, expira en vez de ejecutar. Rechazar o expirar devuelve todos
+  los cupos que reservaba, porque simplemente deja de contar.
+- Idempotencia: el `client_order_id` de una entrada es `entry-<id propuesta>`;
+  una propuesta tiene a lo sumo UNA oportunidad de entrada (si se rechazó o
+  expiró, no se reintenta).
+- Sin precio no hay orden: si Binance no entrega un precio válido
+  (`PriceUnavailable`) no se escribe nada.
+- Ningún `commit` en el servicio: lo hace quien llama, así que si algo falla
+  a mitad, posición y orden se revierten juntas.
+- Fuente de precio (`app/execution/price_source.py`): ticker público de
+  Binance, sin credenciales, solo símbolos de la whitelist, nunca un precio
+  inventado ni viejo.
+
+**Decisión derivada (corregir si no es lo que quieres):** aprobar una entrada
+mientras el sistema está pausado por drawdown se **bloquea**. La pausa
+significa "no se abren entradas nuevas" y aprobar es abrir una, aunque su cupo
+se reservara antes de la pausa. Rechazarla sigue permitido.
+
+**Comandos de terminal (`scripts/entries.py`):** son la interfaz manual del
+servicio, una transacción por comando. Mueven solo dinero simulado.
+
+```
+docker compose run --rm app python -m scripts.entries open --ciclo-id <UUID>
+docker compose run --rm app python -m scripts.entries list
+docker compose run --rm app python -m scripts.entries approve <ORDEN_ID>
+docker compose run --rm app python -m scripts.entries reject <ORDEN_ID> --motivo "texto"
+docker compose run --rm app python -m scripts.entries expire
+```
+
+`open` toma las propuestas `NORMAL` y `MAYOR_RIESGO` del ciclo indicado. Por
+ahora es un paso manual, separado del ciclo diario: encadenarlos se decide
+más adelante. Tests: `tests/integration/test_order_manager.py`,
+`tests/integration/test_entries_script.py`,
+`tests/unit/test_price_source.py` y `tests/unit/test_architecture.py`.
 
 **Pausa por drawdown (`eventos_sistema`, migración `ae3d54f68225`,
 2026-10-04):** tabla nueva y vacía, solo-agregar. Modelo en
@@ -1289,9 +1337,11 @@ prompt — "no sobreimplementar"):
   propuestas (sus reglas ya están decididas: ver "Decisiones del Paso 8") — `propuestas` queda como el registro de TODO lo que el
   Consolidador propuso, sin decidir todavía cuál se convierte en una
   posición real (Paso 8: `RISK_VALIDATION` en adelante de la sección 15.6).
-- Servicios de ejecución, monitor, reconciliación y parada de emergencia (las
-  TABLAS `ordenes` y `posiciones`, sus repositorios, `risk.py` y la selección
-  pura ya existen; falta el servicio que los conecta) — ninguna credencial
+- Monitor de posiciones (60 s), cierres (stop, objetivo parcial, trailing),
+  cálculo de equity y pausa automática por drawdown, reconciliación al
+  arrancar y parada de emergencia (`PARAR`). Ya existen las tablas, los
+  repositorios, `risk.py`, la selección, la apertura de entradas y su
+  aprobación manual — ninguna credencial
   de Binance se usa todavía; ni el cliente de velas ni el backfill la
   necesitan.
 - Cálculo de resultados y métricas de performance.

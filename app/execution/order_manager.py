@@ -1,0 +1,455 @@
+"""Servicio de entradas del motor de ejecución paper (Paso 8).
+
+Conecta lo que ya existe y está probado por separado:
+
+- las reglas puras (`app.domain.rules.risk` / `execution`) deciden QUÉ se
+  abre, a qué monto, con qué cantidad, comisión, stop y objetivo;
+- los repositorios (`app.repositories.*`) persisten;
+- este módulo solo ordena los pasos y los hace de forma atómica e
+  idempotente. **No calcula ninguna regla financiera** y **no importa nada
+  de IA**: los agentes nunca están en el camino de una orden (P1/P2 del plan).
+
+Flujo de una entrada:
+
+1. `candidates_from_cycle` convierte las propuestas de un ciclo en
+   candidatos (solo tier `NORMAL` / `MAYOR_RIESGO`).
+2. `open_entries` libera las aprobaciones vencidas, arma los cupos
+   (contando también las entradas pendientes, que reservan cupo), selecciona
+   con `select_entries` y para cada entrada elegida:
+   - si no requiere aprobación manual, la ejecuta en paper al precio
+     observado (`PriceSource`): crea la posición y la orden `FILLED` en la
+     MISMA transacción;
+   - si la requiere (mayor riesgo), crea una orden `PENDING_APPROVAL` que
+     vence al terminar el día UTC del ciclo y reserva cupo.
+3. `approve_pending_entry` / `reject_pending_entry` /
+   `expire_pending_entries` resuelven las pendientes. Rechazar o expirar
+   devuelve todo lo que la entrada reservaba (cupo de posición, tope de
+   mayor riesgo y entrada del día), simplemente porque deja de contar.
+
+Garantías (P5):
+
+- **Una sola transacción por operación y ningún `commit` aquí**: lo hace
+  quien llama (`session_scope`). Si algo falla a mitad, la posición y la
+  orden se revierten juntas: nunca queda una posición sin su orden.
+- **Idempotencia**: el `client_order_id` de una entrada es determinista
+  (`entry-<proposal_id>`). Reintentar la misma propuesta no crea otra orden
+  ni otra posición (`YA_PROCESADA`), aunque esa orden haya sido rechazada o
+  haya expirado: una propuesta tiene a lo sumo UNA oportunidad de entrada.
+- **Sin precio no hay orden**: si `PriceSource` lanza `PriceUnavailable`, no
+  se escribe nada y el resultado es `SIN_PRECIO`.
+- Stop y objetivo se calculan sobre el precio de EJECUCIÓN real (decisión del
+  2026-10-04), no sobre el precio del análisis. El `decision_snapshot` de la
+  propuesta no se toca nunca.
+
+Decisión derivada (no preguntada, ver README): aprobar una entrada mientras
+el sistema está pausado por drawdown se BLOQUEA. La pausa significa "no se
+abren entradas nuevas"; aprobar es abrir una, aunque su cupo se reservara
+antes de la pausa. Rechazarla sigue permitido.
+"""
+
+from __future__ import annotations
+
+import logging
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, time, timedelta, timezone
+from decimal import Decimal
+from enum import Enum
+
+from sqlalchemy.orm import Session
+
+from app.domain.enums import EstadoOrden, IntencionOrden, LadoOrden, TierEntrada
+from app.domain.rules.execution import (
+    CandidatoEntrada,
+    EntradaDescartada,
+    select_entries,
+)
+from app.domain.rules.risk import (
+    SituacionDeCupos,
+    calculate_entry_quantity,
+    calculate_fee,
+    calculate_initial_levels,
+    sistema_pausado,
+)
+from app.execution.price_source import PriceSource, PriceUnavailable
+from app.repositories.analysis import get_propuesta, get_propuestas_de_ciclo
+from app.repositories.orders import (
+    OrdenRow,
+    count_entry_orders,
+    create_orden,
+    get_orden,
+    get_orden_by_client_order_id,
+    list_orders,
+    list_pending_orders_expired_at,
+    resolve_pending_order,
+)
+from app.repositories.positions import PosicionRow, create_posicion, list_open_posiciones
+from app.repositories.system_events import get_ultimo_evento_sistema
+
+logger = logging.getLogger(__name__)
+
+_COMPONENT = "execution.order_manager"
+_ESTADOS_QUE_OCUPAN_ENTRADA_DEL_DIA = (EstadoOrden.PENDING_APPROVAL, EstadoOrden.FILLED)
+
+
+class ResultadoEntrada(str, Enum):
+    ABIERTA = "ABIERTA"
+    PENDIENTE_APROBACION = "PENDIENTE_APROBACION"
+    YA_PROCESADA = "YA_PROCESADA"
+    """Esta propuesta ya tuvo su orden de entrada (ejecutada, pendiente,
+    rechazada o expirada): no se vuelve a intentar."""
+    SIN_PRECIO = "SIN_PRECIO"
+
+
+class ResultadoAprobacion(str, Enum):
+    APROBADA = "APROBADA"
+    EXPIRADA = "EXPIRADA"
+    NO_PENDIENTE = "NO_PENDIENTE"
+    BLOQUEADA_POR_PAUSA = "BLOQUEADA_POR_PAUSA"
+    SIN_PRECIO = "SIN_PRECIO"
+
+
+@dataclass(frozen=True)
+class EntradaProcesada:
+    proposal_id: uuid.UUID
+    symbol: str
+    resultado: ResultadoEntrada
+    orden_id: uuid.UUID | None = None
+    posicion_id: uuid.UUID | None = None
+
+
+@dataclass(frozen=True)
+class ResultadoAperturaEntradas:
+    procesadas: tuple[EntradaProcesada, ...]
+    descartadas: tuple[EntradaDescartada, ...]
+    expiradas: int
+    """Cuántas aprobaciones vencidas se liberaron antes de calcular cupos."""
+
+
+def entry_client_order_id(proposal_id: uuid.UUID) -> str:
+    """Identificador de idempotencia de la orden de entrada de una propuesta."""
+    return f"entry-{proposal_id}"
+
+
+def _exigir_utc(now: datetime) -> None:
+    if now.tzinfo is None or now.utcoffset() != timedelta(0):
+        raise ValueError("`now` debe ser un datetime con zona horaria UTC explícita (sección 15.3 del plan).")
+
+
+def _limites_del_dia_utc(now: datetime) -> tuple[datetime, datetime]:
+    inicio = datetime.combine(now.astimezone(timezone.utc).date(), time.min, tzinfo=timezone.utc)
+    return inicio, inicio + timedelta(days=1)
+
+
+def build_cupos(session: Session, now: datetime) -> SituacionDeCupos:
+    """Foto de cupos para `select_entries`, con las entradas pendientes
+    RESERVANDO cupo (decisión del 2026-10-04):
+
+    - posiciones = abiertas + entradas pendientes;
+    - entradas de hoy = órdenes `ENTRY` pendientes o ejecutadas creadas en el
+      día UTC de `now` (rechazadas y expiradas no cuentan: devuelven el cupo);
+    - mayor riesgo = abiertas + pendientes cuya propuesta es `MAYOR_RIESGO`;
+    - símbolos = los de las posiciones abiertas y los de las pendientes.
+    """
+    _exigir_utc(now)
+    abiertas = list_open_posiciones(session)
+    pendientes = list_orders(
+        session, estados=[EstadoOrden.PENDING_APPROVAL], intencion=IntencionOrden.ENTRY
+    )
+
+    mayor_riesgo = 0
+    for proposal_id in [p.proposal_id for p in abiertas] + [o.proposal_id for o in pendientes]:
+        propuesta = get_propuesta(session, proposal_id)
+        if propuesta is not None and propuesta.tier_entrada == TierEntrada.MAYOR_RIESGO:
+            mayor_riesgo += 1
+
+    desde, hasta = _limites_del_dia_utc(now)
+    entradas_hoy = count_entry_orders(
+        session,
+        estados=_ESTADOS_QUE_OCUPAN_ENTRADA_DEL_DIA,
+        created_from=desde,
+        created_before=hasta,
+    )
+    ultimo_evento = get_ultimo_evento_sistema(session)
+
+    return SituacionDeCupos(
+        posiciones_abiertas=len(abiertas) + len(pendientes),
+        entradas_hoy=entradas_hoy,
+        mayor_riesgo_abiertas=mayor_riesgo,
+        simbolos_abiertos=frozenset([p.symbol for p in abiertas] + [o.symbol for o in pendientes]),
+        sistema_pausado=sistema_pausado(ultimo_evento.event_type if ultimo_evento else None),
+    )
+
+
+def candidates_from_cycle(session: Session, ciclo_id: uuid.UUID) -> list[CandidatoEntrada]:
+    """Propuestas del ciclo que calificaron como `NORMAL` o `MAYOR_RIESGO`. El
+    tier y el puntaje ya los calculó el código al guardar la propuesta."""
+    return [
+        CandidatoEntrada(
+            proposal_id=p.id,
+            symbol=p.symbol,
+            tier=p.tier_entrada,
+            puntaje_ponderado=p.puntaje_ponderado,
+        )
+        for p in get_propuestas_de_ciclo(session, ciclo_id)
+        if p.tier_entrada in (TierEntrada.NORMAL, TierEntrada.MAYOR_RIESGO)
+    ]
+
+
+def _valores_de_ejecucion(requested_usd: Decimal, price: Decimal):
+    quantity = calculate_entry_quantity(requested_usd, price)
+    if quantity <= 0:
+        raise ValueError(f"Cantidad no positiva al comprar {requested_usd} USD a {price}")
+    fee = calculate_fee(quantity, price)
+    niveles = calculate_initial_levels(price)
+    return quantity, fee, niveles
+
+
+def _abrir_posicion(
+    session: Session, *, proposal_id: uuid.UUID, symbol: str, quantity: Decimal, price: Decimal, niveles, now: datetime
+) -> uuid.UUID:
+    posicion_id, creada = create_posicion(
+        session,
+        PosicionRow(
+            proposal_id=proposal_id,
+            symbol=symbol,
+            entry_price=price,
+            initial_quantity=quantity,
+            initial_stop_price=niveles.stop_price,
+            initial_target_price=niveles.target_price,
+            opened_at=now,
+        ),
+    )
+    if not creada:
+        # Existe una posición para esta propuesta pero no una orden que la
+        # explique: estado incoherente. Se aborta para que la transacción
+        # completa se revierta; nunca se "arregla" en silencio.
+        raise RuntimeError(f"La propuesta {proposal_id} ya tiene una posición sin orden de entrada asociada")
+    return posicion_id
+
+
+def _ejecutar_entrada_automatica(
+    session: Session, *, candidato: CandidatoEntrada, requested_usd: Decimal, now: datetime, price_source: PriceSource
+) -> EntradaProcesada:
+    client_order_id = entry_client_order_id(candidato.proposal_id)
+    if get_orden_by_client_order_id(session, client_order_id) is not None:
+        return EntradaProcesada(candidato.proposal_id, candidato.symbol, ResultadoEntrada.YA_PROCESADA)
+
+    try:
+        price = price_source.get_price(candidato.symbol)
+    except PriceUnavailable:
+        return EntradaProcesada(candidato.proposal_id, candidato.symbol, ResultadoEntrada.SIN_PRECIO)
+
+    quantity, fee, niveles = _valores_de_ejecucion(requested_usd, price)
+    posicion_id = _abrir_posicion(
+        session,
+        proposal_id=candidato.proposal_id,
+        symbol=candidato.symbol,
+        quantity=quantity,
+        price=price,
+        niveles=niveles,
+        now=now,
+    )
+    orden_id, creada = create_orden(
+        session,
+        OrdenRow(
+            client_order_id=client_order_id,
+            proposal_id=candidato.proposal_id,
+            symbol=candidato.symbol,
+            side=LadoOrden.BUY,
+            intencion=IntencionOrden.ENTRY,
+            estado=EstadoOrden.FILLED,
+            position_id=posicion_id,
+            requested_usd=requested_usd,
+            quantity=quantity,
+            reference_price=price,
+            execution_price=price,
+            fee=fee,
+            filled_at=now,
+        ),
+    )
+    if not creada:  # pragma: no cover - descartado arriba; solo una carrera
+        raise RuntimeError(f"client_order_id {client_order_id!r} apareció durante la ejecución")
+    return EntradaProcesada(
+        candidato.proposal_id, candidato.symbol, ResultadoEntrada.ABIERTA, orden_id=orden_id, posicion_id=posicion_id
+    )
+
+
+def _crear_entrada_pendiente(
+    session: Session, *, candidato: CandidatoEntrada, requested_usd: Decimal, now: datetime
+) -> EntradaProcesada:
+    _, vence = _limites_del_dia_utc(now)
+    orden_id, creada = create_orden(
+        session,
+        OrdenRow(
+            client_order_id=entry_client_order_id(candidato.proposal_id),
+            proposal_id=candidato.proposal_id,
+            symbol=candidato.symbol,
+            side=LadoOrden.BUY,
+            intencion=IntencionOrden.ENTRY,
+            estado=EstadoOrden.PENDING_APPROVAL,
+            requested_usd=requested_usd,
+            expires_at=vence,
+        ),
+    )
+    resultado = ResultadoEntrada.PENDIENTE_APROBACION if creada else ResultadoEntrada.YA_PROCESADA
+    return EntradaProcesada(candidato.proposal_id, candidato.symbol, resultado, orden_id=orden_id)
+
+
+def expire_pending_entries(session: Session, now: datetime) -> int:
+    """Marca `EXPIRED` las entradas pendientes cuyo vencimiento ya llegó.
+    Devuelve cuántas expiró. Al dejar de estar pendientes, sus cupos vuelven."""
+    _exigir_utc(now)
+    expiradas = 0
+    for orden in list_pending_orders_expired_at(session, now):
+        if resolve_pending_order(
+            session,
+            orden.id,
+            nuevo_estado=EstadoOrden.EXPIRED,
+            resolved_at=now,
+            detail="Expiró sin aprobación al terminar el día UTC del ciclo.",
+        ):
+            expiradas += 1
+            _log("entrada expirada", orden_id=orden.id, symbol=orden.symbol)
+    return expiradas
+
+
+def open_entries(
+    session: Session,
+    candidatos: list[CandidatoEntrada],
+    *,
+    now: datetime,
+    price_source: PriceSource,
+) -> ResultadoAperturaEntradas:
+    """Procesa los candidatos de un ciclo (ver el docstring del módulo)."""
+    _exigir_utc(now)
+    expiradas = expire_pending_entries(session, now)
+
+    cupos = build_cupos(session, now)
+    seleccion = select_entries(candidatos, cupos)
+
+    procesadas: list[EntradaProcesada] = []
+    for elegida in seleccion.seleccionadas:
+        if elegida.requiere_aprobacion_manual:
+            procesada = _crear_entrada_pendiente(
+                session, candidato=elegida.candidato, requested_usd=elegida.monto_usd, now=now
+            )
+        else:
+            procesada = _ejecutar_entrada_automatica(
+                session,
+                candidato=elegida.candidato,
+                requested_usd=elegida.monto_usd,
+                now=now,
+                price_source=price_source,
+            )
+        procesadas.append(procesada)
+        _log(
+            "entrada procesada",
+            proposal_id=procesada.proposal_id,
+            symbol=procesada.symbol,
+            resultado=procesada.resultado.value,
+        )
+
+    for descartada in seleccion.descartadas:
+        _log(
+            "entrada descartada",
+            proposal_id=descartada.candidato.proposal_id,
+            symbol=descartada.candidato.symbol,
+            motivos=[m.value for m in descartada.motivos],
+        )
+
+    return ResultadoAperturaEntradas(
+        procesadas=tuple(procesadas), descartadas=seleccion.descartadas, expiradas=expiradas
+    )
+
+
+def approve_pending_entry(
+    session: Session, orden_id: uuid.UUID, *, now: datetime, price_source: PriceSource
+) -> ResultadoAprobacion:
+    """Aprueba una entrada `PENDING_APPROVAL` y la ejecuta en paper al precio
+    de este momento. Si venció, la expira en vez de ejecutarla; si el sistema
+    está pausado por drawdown, la bloquea (ver el docstring del módulo)."""
+    _exigir_utc(now)
+    orden = get_orden(session, orden_id)
+    if orden is None:
+        raise ValueError(f"No existe la orden {orden_id}")
+    if orden.intencion != IntencionOrden.ENTRY or orden.estado != EstadoOrden.PENDING_APPROVAL:
+        return ResultadoAprobacion.NO_PENDIENTE
+
+    if orden.expires_at is not None and now >= orden.expires_at:
+        resolve_pending_order(
+            session,
+            orden.id,
+            nuevo_estado=EstadoOrden.EXPIRED,
+            resolved_at=now,
+            detail="Se intentó aprobar después del vencimiento.",
+        )
+        return ResultadoAprobacion.EXPIRADA
+
+    ultimo_evento = get_ultimo_evento_sistema(session)
+    if sistema_pausado(ultimo_evento.event_type if ultimo_evento else None):
+        return ResultadoAprobacion.BLOQUEADA_POR_PAUSA
+
+    try:
+        price = price_source.get_price(orden.symbol)
+    except PriceUnavailable:
+        return ResultadoAprobacion.SIN_PRECIO
+
+    quantity, fee, niveles = _valores_de_ejecucion(orden.requested_usd, price)
+    posicion_id = _abrir_posicion(
+        session,
+        proposal_id=orden.proposal_id,
+        symbol=orden.symbol,
+        quantity=quantity,
+        price=price,
+        niveles=niveles,
+        now=now,
+    )
+    resuelta = resolve_pending_order(
+        session,
+        orden.id,
+        nuevo_estado=EstadoOrden.FILLED,
+        resolved_at=now,
+        position_id=posicion_id,
+        quantity=quantity,
+        execution_price=price,
+        fee=fee,
+        filled_at=now,
+    )
+    if not resuelta:
+        # Otra resolución se adelantó entre la lectura y el UPDATE: se aborta
+        # para revertir también la posición recién creada.
+        raise RuntimeError(f"La orden {orden.id} dejó de estar pendiente durante la aprobación")
+
+    _log("entrada aprobada", orden_id=orden.id, symbol=orden.symbol, posicion_id=posicion_id)
+    return ResultadoAprobacion.APROBADA
+
+
+def reject_pending_entry(
+    session: Session, orden_id: uuid.UUID, *, now: datetime, detail: str | None = None
+) -> bool:
+    """Rechaza una entrada pendiente. `True` si la rechazó, `False` si ya no
+    estaba pendiente. Libera todo lo que reservaba."""
+    _exigir_utc(now)
+    orden = get_orden(session, orden_id)
+    if orden is None:
+        raise ValueError(f"No existe la orden {orden_id}")
+    if orden.intencion != IntencionOrden.ENTRY:
+        return False
+    rechazada = resolve_pending_order(
+        session,
+        orden_id,
+        nuevo_estado=EstadoOrden.REJECTED,
+        resolved_at=now,
+        detail=detail or "Rechazada manualmente.",
+    )
+    if rechazada:
+        _log("entrada rechazada", orden_id=orden_id, symbol=orden.symbol)
+    return rechazada
+
+
+def _log(message: str, **context) -> None:
+    logger.info(
+        f"order-manager: {message}",
+        extra={"component": _COMPONENT, **{k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in context.items()}},
+    )

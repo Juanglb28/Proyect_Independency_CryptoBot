@@ -167,6 +167,10 @@ def save_propuesta(session: Session, row: PropuestaRow) -> uuid.UUID:
     return propuesta.id
 
 
+def get_propuesta(session: Session, propuesta_id: uuid.UUID) -> Propuesta | None:
+    return session.get(Propuesta, propuesta_id)
+
+
 def get_propuestas_de_ciclo(session: Session, ciclo_id: uuid.UUID) -> list[Propuesta]:
     stmt = select(Propuesta).where(Propuesta.ciclo_id == ciclo_id).order_by(Propuesta.created_at)
     return list(session.scalars(stmt))
