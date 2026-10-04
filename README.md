@@ -576,6 +576,45 @@ por el usuario aun sabiendo que LTC (49.80) habría quedado fuera ese día:
 se prefirió no ajustar el umbral mirando un solo caso. Con los datos del
 2026-10-03, ninguna propuesta habría calificado.
 
+## Decisiones del Paso 8 (motor de ejecución paper) — cerradas el 2026-10-04
+
+Decididas por el usuario antes de escribir una sola línea de `risk.py`
+(master prompt, sección 30: nada que afecte dinero, riesgo o ejecución se
+inventa). Todas se suman a las reglas fijas ya cerradas en la sección 9 del
+plan (stop -8%, TP 50% en +12%, trailing 6%, pausa en -15%, máx. 4
+posiciones, 100-250 USD, aprobación manual sobre 200 USD, score mínimo 55,
+3 operaciones por día, `client_order_id`, archivo `PARAR`, monitor cada
+60 s). **Todavía no hay código de ejecución**: esto es solo la especificación
+que el Paso 8 va a implementar y testear.
+
+| Tema | Decisión |
+|---|---|
+| Tamaño por posición | **Fijo 100 USD** para todas las entradas (mínimo del plan). Mantiene el tamaño fuera de la validación del score; las entradas NORMAL quedan bajo el umbral de 200 USD y se ejecutan solas. |
+| Precio de salida si se cruza un nivel | **Precio observado** en el chequeo (no el precio exacto del nivel). Si el precio salta de -7% a -9%, se cierra a -9%: el paper no infla resultados. Aplica por igual al stop, al TP parcial y al trailing (extensión coherente de la misma regla). |
+| Costos del paper | **Comisión 0,1% por lado**; `estimated_*_slippage` queda **NULL** (campo nullable en el plan) y se trata como 0 en `net_pnl`, documentado. Sin libro de órdenes real, un porcentaje sería un número inventado (P3). |
+| Base del -15% | **Pico de equity** (capital + P&L realizado y no realizado), la misma definición de Maximum Drawdown de la sección 8.6. |
+| Pausa total (-15%) | **Solo bloquea entradas nuevas.** Las posiciones abiertas siguen vigiladas con stop/TP/trailing. Reanudar es siempre una acción manual del usuario, nunca automática. |
+| Selección de propuestas | Se ordenan por puntaje ponderado (mayor a menor) hasta llenar los cupos (4 abiertas, 3 por día). Nunca se abre un símbolo que ya tiene posición abierta. Las NORMAL entran antes que las MAYOR_RIESGO. |
+| Tope de MAYOR_RIESGO | Comparten los cupos generales **y además** tienen un tope propio de **1 posición abierta a la vez**. Siempre aprobación manual y 100 USD (ya decidido el 2026-10-04). |
+| Aprobación manual | Estado `PENDING_APPROVAL`; se aprueba o rechaza con un **comando de terminal**; Telegram/Streamlit reutilizarán el mismo servicio. **Expira a las 00:00 UTC del día del ciclo** si no se resuelve: el análisis envejece. |
+| Salida por tiempo | **Ninguna** (fiel al plan). Solo stop, TP con trailing y pausa por drawdown. Si posiciones estancadas retrasan las 30 operaciones, se mide y se decide con datos. |
+
+**Derivado del plan, sin pregunta aparte (corregir si no es lo que quieres):**
+el trailing del 6% se mide desde el **precio máximo observado desde que se
+activó** (al tocar +12%), actualizado en cada chequeo y nunca a la baja. Su
+nivel (≥ +5,3% sobre la entrada) siempre queda por encima del stop de -8%,
+así que el stop original queda superado de forma automática.
+
+**Aún abierto (se confirma al empezar el código, no se asume):** si una
+propuesta en `PENDING_APPROVAL` consume cupo de las 4 posiciones o de las 3
+operaciones por día antes de ser aprobada (el criterio natural sería que
+solo cuenta al ejecutarse).
+
+Sigue pendiente, y depende de datos reales (no del Paso 8): fórmula
+definitiva del pre-filtro, evento comparable, ajuste final del scoring,
+ventanas del backtest, calibración numérica para capital real y si la racha
+en zona pasa de observación a criterio.
+
 ## Orquestación del ciclo diario (Paso 7 del plan)
 
 ```bash
@@ -1083,7 +1122,7 @@ prompt — "no sobreimplementar"):
   PENDIENTE` en `app/db/models/analysis.py`); crearlo sin ninguna posición
   real que proteger sería sobreimplementar.
 - Validación de riesgo, aprobación (manual u órdenes paper) y ejecución de
-  propuestas — `propuestas` queda como el registro de TODO lo que el
+  propuestas (sus reglas ya están decididas: ver "Decisiones del Paso 8") — `propuestas` queda como el registro de TODO lo que el
   Consolidador propuso, sin decidir todavía cuál se convierte en una
   posición real (Paso 8: `RISK_VALIDATION` en adelante de la sección 15.6).
 - Motor de ejecución, órdenes, posiciones y monitoreo — ninguna credencial
