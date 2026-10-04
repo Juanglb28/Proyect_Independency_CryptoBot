@@ -636,6 +636,38 @@ ni servicios sobre ellas: llegan junto con `risk.py` y los managers. Para
 aplicarla: `docker compose run --rm app alembic upgrade head` (y lo mismo
 sobre la base `_test`, ver "Tests").
 
+**Reglas de riesgo en código (`app/domain/rules/risk.py`, 2026-10-04):**
+funciones puras sobre `Decimal`, sin base de datos, Binance, LLM ni
+Streamlit, con las constantes del plan en código versionado (nunca en
+`.env`). Qué hace cada una:
+
+- `calculate_initial_levels`: stop -8% y objetivo +12% desde la entrada,
+  redondeados a la escala de la columna (`NUMERIC(30,12)`), así lo calculado
+  es exactamente lo guardado.
+- `calculate_entry_quantity` y `calculate_fee`: cantidad hacia abajo (nunca
+  se compra de más) y comisión de 0,1% aparte, como en las fórmulas de la
+  sección 8.4 del plan.
+- `evaluate_position`: dado el estado de una posición y un precio observado,
+  decide `MANTENER` / `CERRAR_PARCIAL` (50% en +12%, activa el trailing) /
+  `CERRAR_TOTAL` (`STOP_LOSS` o `TRAILING_STOP`) y devuelve el estado de
+  trailing a persistir. Un nivel se considera alcanzado en la igualdad
+  exacta. Un estado incoherente lanza `ValueError`, nunca se adivina.
+- `is_drawdown_limit_reached` / `calculate_drawdown_pct`: -15% contra el
+  pico de equity, comparando `equity <= pico × 85%` sin dividir.
+- `validate_entry`: aplica TODAS las reglas de entrada (sistema pausado,
+  whitelist, tier, símbolo ya abierto, 4 posiciones, 3 por día, tope de 1
+  de mayor riesgo, rango 100-250 USD) y devuelve todos los motivos de
+  rechazo, no solo el primero; indica si exige aprobación manual (mayor
+  riesgo o monto > 200 USD).
+
+Tests en `tests/unit/test_risk_rules.py`: cada umbral se prueba exacto, un
+paso antes y un paso después (stop -8%, TP +12%, trailing 6%, drawdown
+-15%). `Settings.max_open_positions` (variable heredada del plan) no es la
+fuente de verdad: lo es `MAX_POSICIONES_ABIERTAS`, y un test falla si se
+desalinean. Siguen marcadas `TODO — DECISIÓN PENDIENTE`: la base del tope de
+25% del capital (irrelevante con el tamaño fijo de 100 USD) y si una orden
+`PENDING_APPROVAL` cuenta para los cupos.
+
 Sigue pendiente, y depende de datos reales (no del Paso 8): fórmula
 definitiva del pre-filtro, evento comparable, ajuste final del scoring,
 ventanas del backtest, calibración numérica para capital real y si la racha
@@ -1156,10 +1188,10 @@ prompt — "no sobreimplementar"):
   catálogo real ya cargado (Fase 2). `analisis_eventos` es el insumo, no
   esa definición.
 - Agente 1 (Entrevistador, conversacional — diferido a Paso 10/Streamlit).
-- `app/domain/rules/risk.py` — no existe todavía. `decision_snapshot` no
-  incluye `initial_stop`/`initial_target` por esto (`TODO — DECISIÓN
-  PENDIENTE` en `app/db/models/analysis.py`); crearlo sin ninguna posición
-  real que proteger sería sobreimplementar.
+- Conectar `risk.py` al `decision_snapshot`: el módulo ya existe, pero
+  `decision_snapshot` todavía no incluye `initial_stop`/`initial_target`
+  (`TODO — DECISIÓN PENDIENTE` en `app/db/models/analysis.py`): se agregan
+  cuando exista el servicio que abre posiciones.
 - Validación de riesgo, aprobación (manual u órdenes paper) y ejecución de
   propuestas (sus reglas ya están decididas: ver "Decisiones del Paso 8") — `propuestas` queda como el registro de TODO lo que el
   Consolidador propuso, sin decidir todavía cuál se convierte en una
