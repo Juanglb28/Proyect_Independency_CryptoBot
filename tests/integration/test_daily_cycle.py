@@ -281,6 +281,39 @@ def test_todos_los_candidatos_insuficientes_termina_sin_llamar_al_consolidador(m
     assert ciclo.error_message is None
 
 
+def test_consolidador_no_invertir_queda_expuesto_en_el_resultado(monkeypatch, db_session):
+    _seed_symbol(db_session, "BTCUSDT")
+    monkeypatch.setattr("app.orchestration.daily_cycle.run_prefilter", _fake_prefilter(["BTCUSDT"]))
+    base = _make_fake_call_agent({"BTCUSDT": "suficiente"})
+
+    def fake_call_agent(settings, *, model, system_prompt, user_content, max_tokens=4096):
+        if "consolidador de análisis" in system_prompt:
+            resp = {
+                "recomendacion": "no_invertir",
+                "razon_no_invertir": "ningún candidato sostiene una tesis hoy",
+                "opciones": [],
+                "confianza_global": "media",
+            }
+            return AgentCallResult(raw_text=json.dumps(resp), input_tokens=100, output_tokens=100)
+        return base(settings, model=model, system_prompt=system_prompt, user_content=user_content, max_tokens=max_tokens)
+
+    monkeypatch.setattr("app.ai.agents._runner.call_agent", fake_call_agent)
+
+    result = run_daily_cycle(db_session, _settings(), now=_OPEN_TIME)
+
+    assert result.propuesta_ids == ()
+    assert result.consolidador_recomendacion == "no_invertir"
+    assert result.consolidador_razon_no_invertir == "ningún candidato sostiene una tesis hoy"
+    assert result.consolidador_confianza_global == "media"
+
+
+def test_ciclo_sin_llamar_al_consolidador_deja_su_recomendacion_en_none(monkeypatch, db_session):
+    monkeypatch.setattr("app.orchestration.daily_cycle.run_prefilter", _fake_prefilter([]))
+    result = run_daily_cycle(db_session, _settings(), now=_OPEN_TIME)
+    assert result.consolidador_recomendacion is None
+    assert result.consolidador_razon_no_invertir is None
+
+
 def test_error_en_un_agente_marca_el_ciclo_como_fallido_y_relanza(monkeypatch, db_session):
     _seed_symbol(db_session, "BTCUSDT")
     monkeypatch.setattr("app.orchestration.daily_cycle.run_prefilter", _fake_prefilter(["BTCUSDT"]))

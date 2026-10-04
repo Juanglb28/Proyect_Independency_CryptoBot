@@ -674,6 +674,25 @@ enterarnos con datos reales (`output_tokens` por agente, vía esta alerta o
 consultando `llamadas_ia` directamente) en vez de seguir ajustando
 `max_tokens` a ojo, como se hizo con 8000 para Eventos/Cuantitativo.
 
+**Observación real (2026-10-04) — "Sin propuestas" sin explicación:** al
+terminar un ciclo sin propuestas, `scripts/run_daily_cycle.py` solo imprimía
+"Sin propuestas este ciclo.", sin distinguir entre sus cuatro causas
+posibles, y la única forma de saberlo era consultar la base. Ahora
+`DailyCycleResult` expone también lo que respondió el Consolidador
+(`consolidador_recomendacion`, `consolidador_razon_no_invertir`,
+`consolidador_confianza_global`; todos `None` si el ciclo ni llegó a
+llamarlo) — copiado tal cual de la respuesta ya validada, sin recalcular
+nada (P1) — y el script imprime debajo del aviso una línea `Motivo:` según
+el caso: (1) el pre-filtro no dejó candidatos, (2) todos quedaron excluidos
+por calidad de datos y el Consolidador no se llamó, (3) el Consolidador
+recomendó `no_invertir` (se imprime su razón textual y su confianza
+global), o (4) un caso que no debería ocurrir (el schema rechaza `invertir`
+sin opciones), que se declara como "motivo no determinado" en vez de
+inventar una causa (P3). No cambia ninguna decisión del ciclo ni la base de
+datos; es solo salida. Tests: `tests/unit/test_run_daily_cycle_script.py`
+(los cuatro textos) y `tests/integration/test_daily_cycle.py` (el resultado
+lleva la razón del Consolidador).
+
 ## Tarea diaria programada (Windows)
 
 El ciclo diario no necesita que ninguna IA lo arranque ni lo supervise —
@@ -930,7 +949,7 @@ scripts/
 ├── run_prefilter.py              # CLI: puntúa los 20 símbolos y muestra los candidatos del día
 ├── run_agent_demo.py             # CLI: un agente, datos de ejemplo — consume API de pago
 ├── run_agent_demo_full_cycle.py  # CLI: 4 agentes, un símbolo real, sin persistir — consume API de pago
-├── run_daily_cycle.py            # CLI: ciclo real completo, persiste todo — consume API de pago
+├── run_daily_cycle.py            # CLI: ciclo real completo, persiste todo — consume API de pago; explica el "sin propuestas"
 └── run_daily_pipeline.py         # CLI: encadena backfill (--days 5) + indicadores + run_daily_cycle
 data/
 └── events/                # catálogo de eventos (*.json) — ver data/events/README.md

@@ -147,6 +147,17 @@ class DailyCycleResult:
     candidatos_excluidos_por_calidad: tuple[str, ...]
     propuesta_ids: tuple[uuid.UUID, ...]
     cost_usd: Decimal
+    # Lo que respondió el Consolidador, tal cual — `None` si el ciclo ni
+    # siquiera llegó a llamarlo (sin candidatos del pre-filtro, o todos
+    # excluidos por calidad de datos). Se expone para que quien imprima el
+    # resultado pueda explicar un "sin propuestas" sin consultar la base de
+    # datos (BUG/OBSERVACIÓN 2026-10-04: la salida solo decía "Sin
+    # propuestas este ciclo." sin distinguir las causas posibles). Es un
+    # dato de solo lectura copiado de la respuesta ya validada — no se
+    # recalcula ni se interpreta aquí (P1).
+    consolidador_recomendacion: str | None = None
+    consolidador_razon_no_invertir: str | None = None
+    consolidador_confianza_global: str | None = None
 
 
 def _marcar_fallo_y_relanzar(session: Session, ciclo_id: uuid.UUID, costo_total: Decimal, exc: Exception) -> None:
@@ -335,6 +346,9 @@ def run_daily_cycle(session: Session, settings: Settings, *, now: datetime | Non
             candidatos_excluidos_por_calidad=tuple(excluidos),
             propuesta_ids=tuple(propuesta_ids),
             cost_usd=costo_total,
+            consolidador_recomendacion=r5.output.recomendacion,
+            consolidador_razon_no_invertir=r5.output.razon_no_invertir,
+            consolidador_confianza_global=r5.output.confianza_global,
         )
 
     except Exception as exc:  # noqa: BLE001 — se relanza; ver docstring del módulo

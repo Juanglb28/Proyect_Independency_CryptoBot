@@ -59,6 +59,35 @@ def _imprimir_control_de_gastos(session, settings, costo_de_esta_corrida) -> Non
     )
 
 
+def explicar_sin_propuestas(result) -> list[str]:
+    """Líneas de texto que explican POR QUÉ un ciclo terminó sin propuestas.
+
+    Solo describe lo que el resultado del ciclo ya contiene — no consulta la
+    base ni interpreta nada nuevo (P1/P3). Los cuatro casos posibles:
+    1. el pre-filtro no dejó ningún candidato;
+    2. todos los candidatos quedaron excluidos por calidad de datos;
+    3. el Consolidador recomendó `no_invertir` (con su razón textual);
+    4. cualquier otro caso (no debería ocurrir: el schema rechaza "invertir"
+       sin opciones) — se dice tal cual en vez de inventar una causa."""
+    if not result.candidatos_evaluados:
+        return ["Motivo: el pre-filtro no dejó ningun candidato (ningun simbolo supero el puntaje minimo del pre-filtro)."]
+    if result.consolidador_recomendacion is None:
+        return [
+            "Motivo: todos los candidatos fueron excluidos por calidad de datos insuficiente; "
+            "el Consolidador no se llamo."
+        ]
+    if result.consolidador_recomendacion == "no_invertir":
+        lineas = ["Motivo: el Consolidador recomendo NO invertir hoy."]
+        lineas.append(f"  Razon del Consolidador: {result.consolidador_razon_no_invertir}")
+        if result.consolidador_confianza_global is not None:
+            lineas.append(f"  Confianza global del Consolidador: {result.consolidador_confianza_global}")
+        return lineas
+    return [
+        "Motivo no determinado: el Consolidador recomendo "
+        f"'{result.consolidador_recomendacion}' pero no se persistio ninguna propuesta (revisar los logs)."
+    ]
+
+
 def main() -> int:
     configure_logging()
     settings = get_settings()
@@ -80,6 +109,8 @@ def main() -> int:
 
         if not result.propuesta_ids:
             print("\nSin propuestas este ciclo.")
+            for linea in explicar_sin_propuestas(result):
+                print(linea)
             return 0
 
         print(f"\n{len(result.propuesta_ids)} propuesta(s) persistida(s):")
