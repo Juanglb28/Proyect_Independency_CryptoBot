@@ -950,6 +950,18 @@ final de cada test, incluso si el código bajo prueba hizo `commit()`). Los
 tests de integración de `exchange_client` además requieren salida a
 internet hacia `api.binance.com` (sin API key).
 
+**Bug real (2026-10-04) — test de configuración dependiente del entorno:**
+`docker compose run --rm app pytest` fallaba en
+`test_settings_defaults_match_plan_values` con `'' is None`, mientras que en
+venv nativo pasaba. Causa: `docker-compose.yml` inyecta el `.env` completo
+como variables de entorno del contenedor, y una variable definida pero vacía
+(`BINANCE_API_KEY=`) gana sobre el default `None` de `Settings`, aunque el
+test pase `_env_file=None` (eso solo apaga el archivo, no el entorno del
+proceso). No era un bug de la aplicación sino de aislamiento del test:
+ahora `tests/unit/test_config.py` borra del entorno todas las variables que
+lee `Settings` (fixture autouse `_entorno_limpio`), así pasa igual en venv,
+en Docker o en CI.
+
 ## Estructura del proyecto
 
 ```text

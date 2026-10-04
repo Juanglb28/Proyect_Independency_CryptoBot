@@ -13,6 +13,32 @@ from pydantic import ValidationError
 from app.config import Settings
 
 
+_VARIABLES_DE_SETTINGS = (
+    "DATABASE_URL",
+    "TEST_DATABASE_URL",
+    "PAPER_CAPITAL_USD",
+    "MAX_OPEN_POSITIONS",
+    "BINANCE_TESTNET",
+    "BINANCE_API_KEY",
+    "BINANCE_API_SECRET",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_SALDO_DECLARADO_USD",
+    "ANTHROPIC_SALDO_DECLARADO_EN",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_CHAT_ID",
+)
+
+
+@pytest.fixture(autouse=True)
+def _entorno_limpio(monkeypatch):
+    """Borra del entorno del proceso toda variable que lee `Settings`, para
+    que cada test parta de cero sin importar dónde corra (venv nativo, o
+    `docker compose run`, que inyecta el `.env` completo — incluidas claves
+    vacías como `BINANCE_API_KEY=`, que ganan sobre el default `None`)."""
+    for nombre in _VARIABLES_DE_SETTINGS:
+        monkeypatch.delenv(nombre, raising=False)
+
+
 def test_settings_requires_database_url(monkeypatch):
     """Sin DATABASE_URL, la aplicación debe fallar explícitamente al arrancar
     (sección 15.4 del plan), no más tarde con un error críptico.
@@ -30,7 +56,18 @@ def test_settings_defaults_match_plan_values():
     """Los valores por defecto de capital y posiciones deben coincidir
     exactamente con los fijados en la sección 9 del plan (1.000 USD, 4
     posiciones), y binance_testnet debe ser True por defecto (sección 10:
-    nunca claves de producción por accidente)."""
+    nunca claves de producción por accidente).
+
+    Bug real (2026-10-04): este test pasaba en venv nativo pero fallaba
+    dentro de `docker compose run --rm app pytest` con `'' is None`.
+    `docker-compose.yml` inyecta el `.env` completo como variables de
+    entorno del contenedor, y `.env.example` deja claves como
+    `BINANCE_API_KEY=` vacías: una variable de entorno definida pero vacía
+    gana sobre el default `None` de `Settings`, aunque se pase
+    `_env_file=None` (ese parámetro solo desactiva el archivo, no el
+    entorno del proceso — mismo motivo que `test_settings_requires_database_url`).
+    Ninguno de estos tests puede depender del entorno de quien los corra:
+    ver la fixture autouse `_entorno_limpio` de este archivo."""
     settings = Settings(_env_file=None, database_url="postgresql+psycopg://x:x@localhost/x")  # type: ignore[call-arg]
 
     assert settings.paper_capital_usd == Decimal("1000")
