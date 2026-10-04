@@ -600,6 +600,9 @@ falta el servicio que los conecta.
 | Aprobación manual | Estado `PENDING_APPROVAL`; se aprueba o rechaza con un **comando de terminal**; Telegram/Streamlit reutilizarán el mismo servicio. **Expira a las 00:00 UTC del día del ciclo** si no se resuelve: el análisis envejece. |
 | Salida por tiempo | **Ninguna** (fiel al plan). Solo stop, TP con trailing y pausa por drawdown. Si posiciones estancadas retrasan las 30 operaciones, se mide y se decide con datos. |
 | Fuente de precio del monitor | **Ticker público de Binance** (endpoint de mercado sin credenciales). El monitor no necesita API key: ninguna credencial de exchange se usa para vigilar posiciones paper. |
+| Precio base de stop y objetivo | **Precio de ejecución**: se calculan sobre el precio real al que se abre la posición paper (`calculate_initial_levels(entry_price)`); si la entrada esperó aprobación, el del momento de aprobarla. El `decision_snapshot` conserva el precio del análisis sin tocarlo. Los niveles quedan en `posiciones.initial_*`. |
+| Entradas rechazadas o expiradas | **Devuelven todo lo que reservaban**: cupo de posición, tope de mayor riesgo y la entrada del día. Por eso la "entrada del día" cuenta solo órdenes `ENTRY` en `PENDING_APPROVAL` o `FILLED`. |
+| Estado de la pausa por drawdown | Tabla nueva `eventos_sistema`, **solo-agregar** (un trigger rechaza `UPDATE`/`DELETE`). Estado actual = tipo del último evento. **Reanudar fija un pico de equity nuevo igual al equity de ese momento** (si no, `equity <= pico × 0,85` volvería a pausar al instante) y guarda el pico anterior como registro. |
 | Entradas pendientes de aprobación | **Reservan cupo**: una orden `PENDING_APPROVAL` cuenta para las 4 posiciones, las 3 entradas del día y, si es de mayor riesgo, el tope de 1, hasta que se apruebe, rechace o expire. Evita que una entrada aprobada tarde rompa los topes. |
 | Desempate de la selección | Orden: tier (NORMAL antes que MAYOR_RIESGO) → puntaje ponderado descendente → símbolo alfabético → id de propuesta. El plan no define el desempate; hace falta uno para que el resultado sea reproducible (ciclo y backtest). Solo es determinismo, no una preferencia por un activo; fácil de cambiar. |
 
@@ -610,12 +613,11 @@ nivel (≥ +5,3% sobre la entrada) siempre queda por encima del stop de -8%,
 así que el stop original queda superado de forma automática.
 
 **Cerrado después (2026-10-04):** una entrada en `PENDING_APPROVAL` SÍ
-reserva cupo (ver la tabla). El servicio que arme `SituacionDeCupos` debe
-contar posiciones abiertas + entradas pendientes, y las entradas del día
-como las órdenes `ENTRY` ejecutadas o pendientes creadas en el día UTC
-actual (las rechazadas o expiradas liberan el cupo de posición, pero la
-entrada del día ya consumida se decide al implementar el servicio — ver
-"Aún abierto" más abajo).
+reserva cupo, y si se rechaza o expira lo devuelve todo (ver la tabla). El
+servicio que arme `SituacionDeCupos` debe contar posiciones abiertas +
+entradas pendientes, y las entradas del día como las órdenes `ENTRY` en
+`PENDING_APPROVAL` o `FILLED` creadas en el día UTC actual
+(`count_entry_orders` con esos estados).
 
 **Tablas creadas (migración `f3cbb4cdb7d1`, 2026-10-04):** `posiciones` y
 `ordenes`, con el diseño aprobado por el usuario (modelos en
@@ -670,7 +672,8 @@ paso antes y un paso después (stop -8%, TP +12%, trailing 6%, drawdown
 -15%). `Settings.max_open_positions` (variable heredada del plan) no es la
 fuente de verdad: lo es `MAX_POSICIONES_ABIERTAS`, y un test falla si se
 desalinean. Sigue marcada `TODO — DECISIÓN PENDIENTE` la base del tope de
-25% del capital (irrelevante con el tamaño fijo de 100 USD).
+25% del capital (irrelevante con el tamaño fijo de 100 USD) y los porcentajes
+de stop/objetivo (ver el estudio más abajo).
 
 **Selección de propuestas (`app/domain/rules/execution.py`, 2026-10-04):**
 `select_entries(candidatos, cupos)` es una función pura: ordena los
@@ -696,11 +699,39 @@ conteos (`count_entry_orders`, `count_open_posiciones`) reciben los estados
 y la ventana ya decididos por quien llama. Tests:
 `tests/integration/test_orders_positions_repositories.py`.
 
-**Aún abierto del Paso 8** (necesita decisión antes del servicio que abre
-posiciones): precio de referencia para calcular stop/objetivo respecto al
-`decision_snapshot` congelado; dónde persistir el estado de pausa por
-drawdown (el plan no tiene tabla para eso); si una entrada pendiente que
-se rechaza o expira devuelve también la "entrada del día".
+**Pausa por drawdown (`eventos_sistema`, migración `ae3d54f68225`,
+2026-10-04):** tabla nueva y vacía, solo-agregar. Modelo en
+`app/db/models/system_events.py` (archivo añadido a la estructura del
+master prompt porque la tabla no existía en el plan), repositorio en
+`app/repositories/system_events.py` y enum `TipoEventoSistema`
+(`PAUSA_DRAWDOWN`, `REANUDACION`). `risk.sistema_pausado(ultimo_evento)` es
+la única regla: pausado si el último evento es una pausa. El repositorio
+solo acepta transiciones válidas (pausa si no hay eventos o el último es una
+reanudación; reanudación solo tras una pausa): repetir un evento no escribe
+nada y devuelve `False`. La base de datos exige que una reanudación traiga el
+pico anterior y que su pico nuevo sea igual al equity. Un tip para entender
+la regla: con 100 USD fijos y stop -8%, cada pérdida cuesta unos 8,2 USD con
+comisiones, así que llegar a -150 USD requiere unas 18 pérdidas netas de las
+ganancias — es un freno lento, que detecta un sistema que en conjunto no
+funciona, no un mal día. Tests: `tests/integration/test_system_events.py`.
+Para aplicarla: `docker compose run --rm app alembic upgrade head` (y lo
+mismo sobre la base `_test`, ver "Tests").
+
+**Estudio de stop/objetivo (pendiente de decisión, 2026-10-04):** el usuario
+propuso -6% de stop y +8% de objetivo (el plan dice -8% y +12%). Las
+constantes de `risk.py` NO cambian hasta que decida con datos. Para medir,
+`python -m scripts.study_stop_target` (en Docker: `docker compose run --rm app
+python -m scripts.study_stop_target`) lee las velas guardadas y, para cada
+moneda, entra a ciegas una vez al día y cuenta qué barrera toca primero el
+precio (módulo puro `app/data/barrier_study.py`, solo lectura). Es
+**incondicional** (no usa el score), no simula comisiones, cierre parcial ni
+trailing, y las entradas de distintas monedas están correlacionadas: sirve para
+ver cuánto ruido tiene cada moneda frente a cada stop y cuánto tardan las
+operaciones en resolverse, no para probar que una combinación gana dinero.
+Las velas dentro de las cuales se tocan ambos niveles se cuentan aparte como
+`ambiguas`. Cualquiera que sea la decisión, se fija antes de la primera
+operación paper y no se cambia a mitad de la muestra. Tests:
+`tests/unit/test_barrier_study.py`.
 
 Sigue pendiente, y depende de datos reales (no del Paso 8): fórmula
 definitiva del pre-filtro, evento comparable, ajuste final del scoring,

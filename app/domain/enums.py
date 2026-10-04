@@ -136,3 +136,23 @@ class EstadoPosicion(str, Enum):
 
     OPEN = "OPEN"
     CLOSED = "CLOSED"
+
+
+class TipoEventoSistema(str, Enum):
+    """Tipos de `eventos_sistema.event_type` (decisión del usuario,
+    2026-10-04: la pausa por drawdown se guarda como un registro de eventos
+    de solo-agregar, no como un campo que se sobrescribe).
+
+    - `PAUSA_DRAWDOWN`: el equity cayó a -15% o menos desde su pico y el
+      sistema dejó de abrir entradas nuevas.
+    - `REANUDACION`: el usuario reanudó a mano. Fija un pico de equity NUEVO
+      igual al equity de ese momento (si no, la regla `equity <= pico × 0,85`
+      volvería a pausar al instante) y conserva el pico anterior como
+      registro.
+
+    El estado actual es el tipo del ÚLTIMO evento (ver
+    `app.domain.rules.risk.sistema_pausado`). Se guarda como VARCHAR validado
+    (`native_enum=False`), igual que el resto de enums."""
+
+    PAUSA_DRAWDOWN = "PAUSA_DRAWDOWN"
+    REANUDACION = "REANUDACION"

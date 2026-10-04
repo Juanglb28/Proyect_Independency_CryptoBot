@@ -43,7 +43,7 @@ from dataclasses import dataclass
 from decimal import ROUND_DOWN, ROUND_HALF_EVEN, Decimal
 from enum import Enum
 
-from app.domain.enums import IntencionOrden, TierEntrada
+from app.domain.enums import IntencionOrden, TierEntrada, TipoEventoSistema
 from app.domain.symbols import ALLOWED_SYMBOLS
 
 # --- Reglas fijas de la sección 9 del plan -------------------------------
@@ -290,6 +290,15 @@ def is_drawdown_limit_reached(equity: Decimal, peak_equity: Decimal) -> bool:
     de una división: 850 sobre un pico de 1.000 pausa exactamente."""
     peak = update_peak_equity(peak_equity, equity)
     return equity <= peak * (_UNO - MAX_DRAWDOWN_PCT)
+
+
+def sistema_pausado(ultimo_evento: TipoEventoSistema | None) -> bool:
+    """¿Está el sistema pausado por drawdown? Depende solo del tipo del
+    ÚLTIMO evento de `eventos_sistema` (decisión del 2026-10-04): sin eventos
+    o último `REANUDACION` -> no pausado; último `PAUSA_DRAWDOWN` -> pausado.
+    Una pausa solo bloquea entradas nuevas; las posiciones abiertas siguen
+    vigiladas."""
+    return ultimo_evento == TipoEventoSistema.PAUSA_DRAWDOWN
 
 
 # --- Validación de una entrada nueva -------------------------------------

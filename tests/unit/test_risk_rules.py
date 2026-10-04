@@ -483,3 +483,15 @@ def test_el_default_de_settings_no_se_desalinea_de_la_regla_fija_de_posiciones(m
     monkeypatch.delenv("MAX_OPEN_POSITIONS", raising=False)
     settings = Settings(_env_file=None, database_url="postgresql+psycopg://x:x@localhost/x")  # type: ignore[call-arg]
     assert settings.max_open_positions == risk.MAX_POSICIONES_ABIERTAS
+
+
+# --- sistema_pausado (estado de la pausa por drawdown) ---
+
+
+def test_sistema_pausado_depende_solo_del_ultimo_evento():
+    from app.domain.enums import TipoEventoSistema
+    from app.domain.rules.risk import sistema_pausado
+
+    assert sistema_pausado(None) is False
+    assert sistema_pausado(TipoEventoSistema.PAUSA_DRAWDOWN) is True
+    assert sistema_pausado(TipoEventoSistema.REANUDACION) is False
