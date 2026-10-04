@@ -473,6 +473,67 @@ inválido o schema incorrecto); si ninguno está disponible (un error antes
 de recibir cualquier respuesta de la API), no se persiste nada, porque no
 hay tokens reales que registrar.
 
+## Segunda ronda: entradas "de mayor riesgo" (decisión del usuario, 2026-10-04)
+
+**Por qué existe.** El ciclo del 2026-10-03 no produjo ninguna propuesta
+sobre el umbral de entrada (55): los mejores puntajes ponderados fueron
+LTC 49.80, AVAX 47.80 y ETH 46.30. El usuario, mirando LTC (momentum
+fuerte, RSI alto también contra BTC), consideró defendible una entrada de
+mayor riesgo y propuso un criterio adicional para esos casos. **No se bajó
+el umbral global ni se tocaron los pesos 30/20/20/30**: la v1 existe para
+medir si el score predice (sección 1 del master prompt), y ajustar el
+umbral o los pesos después de ver un caso concreto contaminaría esa
+validación. En su lugar se agregó un tier SEPARADO y ETIQUETADO, para poder
+comparar después si estas entradas rinden mejor o peor que las normales.
+
+**Cómo funciona** (todo en código, ningún LLM interviene — P1;
+`app/domain/rules/entry_tier.py`). Solo se evalúa una propuesta cuyo
+`puntaje_ponderado` esté en `[50, 55)`. Para calificar como
+`TierEntrada.MAYOR_RIESGO` debe cumplir las tres verificaciones:
+
+1. **Fuerza relativa vs BTC:** RSI 14 diario del ratio `SÍMBOLO/BTCUSDT` > 50.
+2. **Momentum multitemporal:** RSI 14 > 50 en al menos 3 de las 4
+   temporalidades (1h, 4h, 12h, 1d).
+3. **Tope de sobrecompra:** RSI 14 diario <= 70.
+
+Todos los umbrales son estrictos donde dice ">" (un RSI exactamente en 50
+no cuenta) y están probados en su valor exacto
+(`tests/unit/test_entry_tier.py`). El resto de propuestas queda como
+`NORMAL` (supera 55) o `NINGUNO`.
+
+**El ratio contra BTC se calcula, no se descarga:** `app/data/
+relative_strength.py` divide los cierres de las velas USDT que ya existen
+(`LTCUSDT / BTCUSDT`) y aplica el mismo RSI de Wilder del resto del
+proyecto. No se ingesta ningún par nuevo (p. ej. LTCBTC) ni se amplía la
+lista de símbolos autorizados. Es una aproximación del par cruzado real de
+Binance, que cotiza por su cuenta y puede diferir levemente.
+
+**Datos faltantes nunca se suponen (P3):** si falta un RSI o no hay
+historia suficiente para el ratio, la verificación que dependa de ello
+falla y el dato queda listado en `faltantes`. **BTCUSDT nunca puede
+calificar por esta vía:** su ratio contra sí mismo es constante y no define
+una fuerza relativa; se declara como faltante en vez de saltarse el
+criterio con una regla inventada.
+
+**Trazabilidad.** `propuestas` ganó dos columnas (migración `c0855d96f99b`):
+`tier_entrada` y `segunda_ronda` (JSONB con el valor y el veredicto de cada
+verificación). Ambas quedan también congeladas en el `decision_snapshot`.
+Son NULLABLE y sin backfill a propósito: las propuestas anteriores nacieron
+sin este criterio y rellenarlas sería reescribir historia congelada
+(sección 14 del plan). En la salida de `scripts/run_daily_cycle.py` una
+propuesta de este tier aparece marcada como `ENTRADA DE MAYOR RIESGO`.
+
+**Pendiente — Paso 8 (decisión del usuario, aún sin implementar porque no
+existe el motor de ejecución):** toda entrada de este tier requerirá
+APROBACIÓN MANUAL SIEMPRE y usará el tamaño mínimo ya existente (100 USD),
+sin introducir ningún parámetro de dinero nuevo. Hoy este tier solo
+clasifica y registra; no abre ninguna posición.
+
+**Nota de calibración.** El corte inferior en 50 fue mantenido a propósito
+por el usuario aun sabiendo que LTC (49.80) habría quedado fuera ese día:
+se prefirió no ajustar el umbral mirando un solo caso. Con los datos del
+2026-10-03, ninguna propuesta habría calificado.
+
 ## Orquestación del ciclo diario (Paso 7 del plan)
 
 ```bash
@@ -777,9 +838,10 @@ app/
 │                           # ciclos_analisis/propuestas/factores, llamadas_ia
 ├── domain/
 │   ├── symbols.py         # whitelist explícita de símbolos operables (sección 21)
-│   ├── enums.py           # EstadoCiclo (etapas de ciclos_analisis.status, Paso 7)
+│   ├── enums.py           # EstadoCiclo (etapas de ciclos_analisis.status, Paso 7), TierEntrada
 │   └── rules/
-│       └── scoring.py     # umbrales fijos + calculate_consolidated_score (Paso 6)
+│       ├── scoring.py     # umbrales fijos + calculate_consolidated_score (Paso 6)
+│       └── entry_tier.py  # segunda ronda de entradas de mayor riesgo (determinista, puro)
 ├── data/
 │   ├── exchange_client.py     # cliente mínimo de Binance mainnet (velas, solo lectura)
 │   ├── candle_ingestion.py    # paginación + backfill idempotente hacia `velas`
@@ -789,6 +851,7 @@ app/
 │   ├── event_analyzer.py        # % de cambio de precio en ventanas alrededor de un evento (determinista, puro)
 │   ├── event_pipeline.py        # orquesta el cálculo sobre todo el catálogo + persistencia
 │   ├── prefilter.py             # puntaje 0-100 por símbolo (determinista, puro)
+│   ├── relative_strength.py     # RSI del ratio SÍMBOLO/BTCUSDT con velas ya guardadas (determinista, puro)
 │   └── prefilter_pipeline.py    # orquesta el pre-filtro sobre todo el universo
 ├── ai/
 │   ├── client.py           # cliente delgado sobre el SDK de Anthropic (prompt caching)

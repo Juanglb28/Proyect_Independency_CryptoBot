@@ -68,7 +68,9 @@ from app.ai.prompts.events import PROMPT_VERSION as PROMPT_VERSION_EVENTOS
 from app.ai.prompts.quantitative import PROMPT_VERSION as PROMPT_VERSION_CUANTITATIVO
 from app.config import Settings
 from app.data.prefilter_pipeline import run_prefilter
+from app.data.relative_strength import calculate_ratio_rsi
 from app.domain.enums import EstadoCiclo
+from app.domain.rules.entry_tier import clasificar_tier, en_zona_segunda_ronda, evaluar_segunda_ronda
 from app.domain.rules.scoring import (
     PESO_CONTEXTO_EVENTOS,
     PESO_POSICION_RANGOS_ATH,
@@ -89,6 +91,7 @@ from app.repositories.analysis import (
     get_ciclo,
     save_propuesta,
 )
+from app.repositories.candles import get_candles
 
 logger = logging.getLogger(__name__)
 
@@ -333,6 +336,39 @@ def run_daily_cycle(session: Session, settings: Settings, *, now: datetime | Non
         raise
 
 
+_SIMBOLO_REFERENCIA_RELATIVA = "BTCUSDT"
+_TEMPORALIDAD_DIARIA_ROUND2 = "1d"
+
+
+def _evaluar_segunda_ronda_si_aplica(session: Session, *, symbol: str, score, candidato: _DatosCandidato):
+    """Segunda ronda de entradas de mayor riesgo (`app/domain/rules/
+    entry_tier.py`, decisión del usuario 2026-10-04). Devuelve `None` si el
+    puntaje no cae en la zona `[50, 55)` — en ese caso no se evalúa nada.
+
+    Los RSI por temporalidad salen del mismo bloque DATOS ya armado para el
+    Analista cuantitativo (los mismos valores que quedan en el
+    `decision_snapshot`); el RSI del ratio contra BTC se calcula en código
+    (`app/data/relative_strength.py`) con las velas diarias ya guardadas."""
+    if not en_zona_segunda_ronda(score.puntaje_ponderado):
+        return None
+
+    temporalidades = candidato.datos_cuantitativo["temporalidades"]
+    rsi_por_tf = {
+        tf: (None if bloque.get("rsi_14") is None else Decimal(str(bloque["rsi_14"])))
+        for tf, bloque in temporalidades.items()
+    }
+
+    if symbol == _SIMBOLO_REFERENCIA_RELATIVA:
+        rsi_ratio = None  # contra sí mismo no define fuerza relativa
+    else:
+        rsi_ratio = calculate_ratio_rsi(
+            get_candles(session, symbol, _TEMPORALIDAD_DIARIA_ROUND2),
+            get_candles(session, _SIMBOLO_REFERENCIA_RELATIVA, _TEMPORALIDAD_DIARIA_ROUND2),
+        )
+
+    return evaluar_segunda_ronda(rsi_por_temporalidad=rsi_por_tf, rsi_ratio_btc_diario=rsi_ratio)
+
+
 def _congelar_y_guardar_propuesta(
     session: Session,
     *,
@@ -369,6 +405,15 @@ def _congelar_y_guardar_propuesta(
     - "stop inicial"/"target inicial": deliberadamente AUSENTES — ver el
       docstring de `app.db.models.analysis.Propuesta` (TODO, Paso 8).
     """
+    segunda_ronda = _evaluar_segunda_ronda_si_aplica(
+        session, symbol=opcion.simbolo, score=score, candidato=candidato
+    )
+    tier_entrada = clasificar_tier(
+        puntaje_ponderado=score.puntaje_ponderado,
+        supera_umbral_entrada=score.supera_umbral_entrada,
+        segunda_ronda=segunda_ronda,
+    )
+
     decision_snapshot = {
         "symbol": opcion.simbolo,
         "analysis_cycle_id": str(ciclo_id),
@@ -382,6 +427,8 @@ def _congelar_y_guardar_propuesta(
             "cuantitativo": candidato.faltantes_cuantitativo,
             "eventos": candidato.faltantes_eventos,
         },
+        "tier_entrada": tier_entrada.value,
+        "segunda_ronda": None if segunda_ronda is None else segunda_ronda.to_dict(),
         "opportunity_score": str(score.puntaje_ponderado),
         "risk_level": opcion.nivel_riesgo,
         "confidence": confianza_global_consolidador,
@@ -426,5 +473,7 @@ def _congelar_y_guardar_propuesta(
             confianza_global=confianza_global_consolidador,
             decision_snapshot=decision_snapshot,
             factores=factores,
+            tier_entrada=tier_entrada,
+            segunda_ronda=None if segunda_ronda is None else segunda_ronda.to_dict(),
         ),
     )

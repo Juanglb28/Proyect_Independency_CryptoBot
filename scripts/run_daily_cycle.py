@@ -94,6 +94,10 @@ def main() -> int:
                 f"puntaje_ponderado={propuesta.puntaje_ponderado} "
                 f"supera_umbral_entrada={propuesta.supera_umbral_entrada}"
             )
+            if propuesta.tier_entrada is not None:
+                print(f"  tier_entrada={propuesta.tier_entrada.value}")
+            if propuesta.tier_entrada is not None and propuesta.tier_entrada.value == "MAYOR_RIESGO":
+                print("  ** ENTRADA DE MAYOR RIESGO: no supera el umbral normal; requiere aprobacion manual **")
             print(f"  tesis: {propuesta.tesis}")
             factores = get_factores_de_propuesta(session, propuesta.id)
             for factor in factores:

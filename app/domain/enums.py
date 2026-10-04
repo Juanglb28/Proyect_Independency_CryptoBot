@@ -53,3 +53,27 @@ class EstadoCiclo(str, Enum):
     AI_ANALYSIS = "AI_ANALYSIS"
     CONSOLIDATE = "CONSOLIDATE"
     FREEZE_DECISION_SNAPSHOT = "FREEZE_DECISION_SNAPSHOT"
+
+
+class TierEntrada(str, Enum):
+    """Clasificación de una `propuesta` según cómo (o si) calificaría para
+    una entrada — decisión del usuario (2026-10-04), ver
+    `app/domain/rules/entry_tier.py`.
+
+    - `NORMAL`: `puntaje_ponderado >= SCORE_MINIMO_ENTRADA` (55). Es la
+      regla original del plan, sin cambios.
+    - `MAYOR_RIESGO`: no superó 55, pero cayó en la zona cercana (>= 50) y
+      pasó TODAS las verificaciones de la segunda ronda. Es un tier
+      separado y etiquetado a propósito: la v1 existe para medir si el
+      score tiene poder predictivo (sección 1 del master prompt), y mezclar
+      estas entradas con las normales en una misma muestra impediría saber
+      si el criterio relajado rinde mejor o peor.
+    - `NINGUNO`: no califica por ninguna de las dos vías.
+
+    Se guarda como VARCHAR validado en Python (`native_enum=False`), igual
+    que `EstadoCiclo`, para no necesitar un `ALTER TYPE` si el criterio
+    evoluciona."""
+
+    NORMAL = "NORMAL"
+    MAYOR_RIESGO = "MAYOR_RIESGO"
+    NINGUNO = "NINGUNO"

@@ -26,7 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models.analysis import CicloAnalisis, Factor, Propuesta
-from app.domain.enums import EstadoCiclo
+from app.domain.enums import EstadoCiclo, TierEntrada
 
 
 # --- ciclos_analisis --------------------------------------------------------
@@ -119,6 +119,8 @@ class PropuestaRow:
     confianza_global: str
     decision_snapshot: dict
     factores: tuple[FactorRow, ...]
+    tier_entrada: TierEntrada | None = None
+    segunda_ronda: dict | None = None
 
 
 def save_propuesta(session: Session, row: PropuestaRow) -> uuid.UUID:
@@ -141,6 +143,8 @@ def save_propuesta(session: Session, row: PropuestaRow) -> uuid.UUID:
         fuentes=row.fuentes,
         confianza_global=row.confianza_global,
         decision_snapshot=row.decision_snapshot,
+        tier_entrada=row.tier_entrada,
+        segunda_ronda=row.segunda_ronda,
     )
     session.add(propuesta)
     session.flush()  # necesitamos propuesta.id para los factores

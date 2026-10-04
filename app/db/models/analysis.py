@@ -74,7 +74,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
-from app.domain.enums import EstadoCiclo
+from app.domain.enums import EstadoCiclo, TierEntrada
 
 
 class CicloAnalisis(Base):
@@ -121,6 +121,21 @@ class Propuesta(Base):
     calidad_datos: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
     puntaje_ponderado: Mapped[Decimal] = mapped_column(Numeric(6, 2), nullable=False)
     supera_umbral_entrada: Mapped[bool] = mapped_column(Boolean, nullable=False)
+
+    tier_entrada: Mapped[TierEntrada | None] = mapped_column(
+        Enum(TierEntrada, name="tier_entrada", native_enum=False, length=16, validate_strings=True),
+        nullable=True,
+    )
+    """`NORMAL` / `MAYOR_RIESGO` / `NINGUNO` (ver `app.domain.enums.TierEntrada`
+    y `app/domain/rules/entry_tier.py`). NULL en las filas anteriores a esta
+    columna (2026-10-04): esas propuestas se crearon antes de que existiera
+    el criterio, y rellenarlas retroactivamente sería reescribir historia
+    congelada (sección 14 del plan) — se dejan en NULL a propósito, no
+    como un valor inventado."""
+    segunda_ronda: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    """Evidencia de la segunda ronda (valores y veredicto de cada
+    verificación, y datos faltantes). NULL si la propuesta no cayó en la
+    zona `[50, 55)` y por lo tanto la segunda ronda nunca se evaluó."""
 
     tesis: Mapped[str] = mapped_column(Text, nullable=False)
     invalidacion: Mapped[str] = mapped_column(Text, nullable=False)

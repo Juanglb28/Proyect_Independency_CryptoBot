@@ -13,7 +13,7 @@ SÍ corren de verdad.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -24,7 +24,7 @@ from app.data.exchange_client import Candle
 from app.data.indicator_calculator import IndicatorRow, sma_indicator_name
 from app.data.prefilter import PrefilterScore
 from app.data.prefilter_pipeline import PrefilterRunResult
-from app.domain.enums import EstadoCiclo
+from app.domain.enums import EstadoCiclo, TierEntrada
 from app.orchestration.daily_cycle import run_daily_cycle
 from app.repositories.analysis import get_ciclo, get_factores_de_propuesta, get_propuestas_de_ciclo
 from app.repositories.candles import save_candles
@@ -89,7 +89,7 @@ def _fake_prefilter(symbols: list[str]):
     return fake
 
 
-def _make_fake_call_agent(calidad_por_simbolo: dict[str, str]):
+def _make_fake_call_agent(calidad_por_simbolo: dict[str, str], puntajes: dict[str, tuple[int, int, int, int]] | None = None):
     """`calidad_por_simbolo[symbol]` controla la `calidad_global` que el
     Auditor "reporta" para ese símbolo — el resto de la respuesta de cada
     agente es fija, suficiente para pasar los 4 schemas."""
@@ -129,16 +129,20 @@ def _make_fake_call_agent(calidad_por_simbolo: dict[str, str]):
             }
         elif "consolidador de análisis" in system_prompt:
             candidatos = datos["candidatos"]
+            def _p(simbolo):
+                # (tendencia_momentum, volumen_liquidez, posicion_rangos_ath, contexto_eventos)
+                return (puntajes or {}).get(simbolo, (70, 60, 50, 80))
+
             opciones = [
                 {
                     "simbolo": c["simbolo"],
                     "categoria": "principal",
                     "horizonte": "corto",
                     "nivel_riesgo": "medio",
-                    "tendencia_momentum": 70,
-                    "volumen_liquidez": 60,
-                    "posicion_rangos_ath": 50,
-                    "contexto_eventos": 80,
+                    "tendencia_momentum": _p(c["simbolo"])[0],
+                    "volumen_liquidez": _p(c["simbolo"])[1],
+                    "posicion_rangos_ath": _p(c["simbolo"])[2],
+                    "contexto_eventos": _p(c["simbolo"])[3],
                     "tesis": "tesis de prueba",
                     "invalidacion": "invalidación de prueba",
                     "escenario_adverso": {
@@ -208,6 +212,8 @@ def test_ciclo_completo_con_dos_candidatos_persiste_propuestas_y_factores(monkey
     assert {p.symbol for p in propuestas} == {"BTCUSDT", "ETHUSDT"}
     for propuesta in propuestas:
         assert propuesta.supera_umbral_entrada is True  # 70*.3+60*.2+50*.2+80*.3=67 * calidad 1.0
+        assert propuesta.tier_entrada == TierEntrada.NORMAL
+        assert propuesta.segunda_ronda is None  # fuera de la zona [50, 55): nunca se evalúa
         assert propuesta.decision_snapshot["symbol"] == propuesta.symbol
         assert propuesta.decision_snapshot["analysis_cycle_id"] == str(result.ciclo_id)
         assert "initial_stop" not in propuesta.decision_snapshot
@@ -293,3 +299,111 @@ def test_error_en_un_agente_marca_el_ciclo_como_fallido_y_relanza(monkeypatch, d
     assert ciclo.error_message is not None
     assert "no respondió" in ciclo.error_message
     assert ciclo.finished_at is not None
+
+
+# ---------------------------------------------------------------------------
+# Segunda ronda — entradas "de mayor riesgo" (decisión del usuario, 2026-10-04)
+# ---------------------------------------------------------------------------
+
+# (55*.3)+(40*.2)+(50*.2)+(55*.3) = 51.0 -> dentro de la zona [50, 55)
+_PUNTAJES_EN_ZONA = {"ETHUSDT": (55, 40, 50, 55)}
+# (40*.3)+(40*.2)+(40*.2)+(40*.3) = 40.0 -> por debajo de 50
+_PUNTAJES_BAJOS = {"ETHUSDT": (40, 40, 40, 40)}
+
+
+def _seed_para_segunda_ronda(session, *, rsi_por_tf: dict[str, str], ratio_sube: bool) -> None:
+    """ETHUSDT con RSI controlado en las 4 temporalidades, y 20 velas
+    diarias de ETH y BTC para que el ratio ETH/BTC suba (RSI 100) o baje
+    (RSI 0). BTC queda plano en 100."""
+    tiempos = ("1h", "4h", "12h", "1d")
+    candles = []
+    indicadores = []
+    # Cierre de la vela de hoy de ETH: continúa la serie diaria de abajo (sube
+    # 1 por día hasta 120, o baja 1 por día hasta 180) para que el ratio vs
+    # BTC (plano en 100) sea monótono y su RSI sea exactamente 100 o 0.
+    cierre_hoy = Decimal(120 if ratio_sube else 180)
+    for tf in tiempos:
+        candles.append(
+            Candle(
+                symbol="ETHUSDT", timeframe=tf, open_time=_OPEN_TIME, open=cierre_hoy, high=cierre_hoy + 5,
+                low=cierre_hoy - 5, close=cierre_hoy, volume=Decimal("1000"),
+            )
+        )
+        indicadores.append(IndicatorRow("ETHUSDT", tf, _OPEN_TIME, "RSI_14", Decimal(rsi_por_tf[tf])))
+
+    # Historia diaria para el ratio (incluye la vela de _OPEN_TIME ya agregada arriba para ETH)
+    for i in range(1, 20):
+        dia = _OPEN_TIME - timedelta(days=i)
+        cierre_eth = Decimal(100 + (20 - i) if ratio_sube else 200 - (20 - i))
+        candles.append(
+            Candle(symbol="ETHUSDT", timeframe="1d", open_time=dia, open=cierre_eth, high=cierre_eth,
+                   low=cierre_eth, close=cierre_eth, volume=Decimal("1"))
+        )
+    for i in range(0, 20):
+        dia = _OPEN_TIME - timedelta(days=i)
+        candles.append(
+            Candle(symbol="BTCUSDT", timeframe="1d", open_time=dia, open=Decimal("100"), high=Decimal("100"),
+                   low=Decimal("100"), close=Decimal("100"), volume=Decimal("1"))
+        )
+    save_candles(session, candles)
+    # indicadores 1d completos salvo el RSI, que se controla arriba
+    indicadores += [r for r in _indicators("ETHUSDT") if r.indicator_name != "RSI_14"]
+    save_indicators(session, indicadores)
+
+
+_RSI_FUERTE = {"1h": "55", "4h": "58", "12h": "60", "1d": "62"}
+
+
+def _correr_ciclo(monkeypatch, db_session, puntajes):
+    monkeypatch.setattr("app.orchestration.daily_cycle.run_prefilter", _fake_prefilter(["ETHUSDT"]))
+    monkeypatch.setattr(
+        "app.ai.agents._runner.call_agent",
+        _make_fake_call_agent({"ETHUSDT": "suficiente"}, puntajes=puntajes),
+    )
+    result = run_daily_cycle(db_session, _settings(), now=_OPEN_TIME)
+    (propuesta,) = get_propuestas_de_ciclo(db_session, result.ciclo_id)
+    return propuesta
+
+
+def test_zona_con_segunda_ronda_aprobada_queda_como_mayor_riesgo(monkeypatch, db_session):
+    _seed_para_segunda_ronda(db_session, rsi_por_tf=_RSI_FUERTE, ratio_sube=True)
+
+    propuesta = _correr_ciclo(monkeypatch, db_session, _PUNTAJES_EN_ZONA)
+
+    assert propuesta.puntaje_ponderado == Decimal("51.00")
+    assert propuesta.supera_umbral_entrada is False  # el umbral 55 NO cambió
+    assert propuesta.tier_entrada == TierEntrada.MAYOR_RIESGO
+    assert propuesta.segunda_ronda["elegible"] is True
+    assert propuesta.segunda_ronda["faltantes"] == []
+    assert propuesta.decision_snapshot["tier_entrada"] == "MAYOR_RIESGO"
+    assert propuesta.decision_snapshot["segunda_ronda"] == propuesta.segunda_ronda
+
+
+def test_zona_con_rsi_diario_en_sobrecompra_queda_ninguno_con_evidencia(monkeypatch, db_session):
+    rsi = dict(_RSI_FUERTE, **{"1d": "70.5"})
+    _seed_para_segunda_ronda(db_session, rsi_por_tf=rsi, ratio_sube=True)
+
+    propuesta = _correr_ciclo(monkeypatch, db_session, _PUNTAJES_EN_ZONA)
+
+    assert propuesta.tier_entrada == TierEntrada.NINGUNO
+    assert propuesta.segunda_ronda["elegible"] is False
+    assert propuesta.segunda_ronda["criterios"]["tope_sobrecompra"]["cumple"] is False
+
+
+def test_zona_con_ratio_btc_debil_queda_ninguno(monkeypatch, db_session):
+    _seed_para_segunda_ronda(db_session, rsi_por_tf=_RSI_FUERTE, ratio_sube=False)
+
+    propuesta = _correr_ciclo(monkeypatch, db_session, _PUNTAJES_EN_ZONA)
+
+    assert propuesta.tier_entrada == TierEntrada.NINGUNO
+    assert propuesta.segunda_ronda["criterios"]["fuerza_relativa_btc"]["cumple"] is False
+
+
+def test_por_debajo_de_50_no_se_evalua_la_segunda_ronda(monkeypatch, db_session):
+    _seed_para_segunda_ronda(db_session, rsi_por_tf=_RSI_FUERTE, ratio_sube=True)
+
+    propuesta = _correr_ciclo(monkeypatch, db_session, _PUNTAJES_BAJOS)
+
+    assert propuesta.puntaje_ponderado == Decimal("40.00")
+    assert propuesta.tier_entrada == TierEntrada.NINGUNO
+    assert propuesta.segunda_ronda is None
