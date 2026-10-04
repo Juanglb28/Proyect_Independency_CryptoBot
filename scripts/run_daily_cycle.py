@@ -96,6 +96,11 @@ def main() -> int:
             )
             if propuesta.tier_entrada is not None:
                 print(f"  tier_entrada={propuesta.tier_entrada.value}")
+            if propuesta.ciclos_consecutivos_en_zona:
+                print(
+                    f"  ciclos_consecutivos_en_zona={propuesta.ciclos_consecutivos_en_zona} "
+                    "(observacion; no afecta la entrada)"
+                )
             if propuesta.tier_entrada is not None and propuesta.tier_entrada.value == "MAYOR_RIESGO":
                 print("  ** ENTRADA DE MAYOR RIESGO: no supera el umbral normal; requiere aprobacion manual **")
             print(f"  tesis: {propuesta.tesis}")

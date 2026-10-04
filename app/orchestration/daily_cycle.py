@@ -70,7 +70,12 @@ from app.config import Settings
 from app.data.prefilter_pipeline import run_prefilter
 from app.data.relative_strength import calculate_ratio_rsi
 from app.domain.enums import EstadoCiclo
-from app.domain.rules.entry_tier import clasificar_tier, en_zona_segunda_ronda, evaluar_segunda_ronda
+from app.domain.rules.entry_tier import (
+    clasificar_tier,
+    contar_ciclos_consecutivos_en_zona,
+    en_zona_segunda_ronda,
+    evaluar_segunda_ronda,
+)
 from app.domain.rules.scoring import (
     PESO_CONTEXTO_EVENTOS,
     PESO_POSICION_RANGOS_ATH,
@@ -89,6 +94,7 @@ from app.repositories.analysis import (
     create_ciclo,
     finalizar_ciclo,
     get_ciclo,
+    get_puntajes_de_ciclos_previos,
     save_propuesta,
 )
 from app.repositories.candles import get_candles
@@ -414,6 +420,13 @@ def _congelar_y_guardar_propuesta(
         segunda_ronda=segunda_ronda,
     )
 
+    # Observación pedida por el usuario (2026-10-04): cuántos días seguidos
+    # lleva este activo cerca del umbral. NO decide ni cambia el tier.
+    ciclos_consecutivos_en_zona = contar_ciclos_consecutivos_en_zona(
+        score.puntaje_ponderado,
+        get_puntajes_de_ciclos_previos(session, opcion.simbolo, ciclo_id),
+    )
+
     decision_snapshot = {
         "symbol": opcion.simbolo,
         "analysis_cycle_id": str(ciclo_id),
@@ -428,6 +441,7 @@ def _congelar_y_guardar_propuesta(
             "eventos": candidato.faltantes_eventos,
         },
         "tier_entrada": tier_entrada.value,
+        "ciclos_consecutivos_en_zona": ciclos_consecutivos_en_zona,
         "segunda_ronda": None if segunda_ronda is None else segunda_ronda.to_dict(),
         "opportunity_score": str(score.puntaje_ponderado),
         "risk_level": opcion.nivel_riesgo,
@@ -475,5 +489,6 @@ def _congelar_y_guardar_propuesta(
             factores=factores,
             tier_entrada=tier_entrada,
             segunda_ronda=None if segunda_ronda is None else segunda_ronda.to_dict(),
+            ciclos_consecutivos_en_zona=ciclos_consecutivos_en_zona,
         ),
     )

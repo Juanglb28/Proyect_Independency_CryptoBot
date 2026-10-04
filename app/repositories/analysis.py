@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import Date, and_, cast, func, select
 from sqlalchemy.orm import Session
 
 from app.db.models.analysis import CicloAnalisis, Factor, Propuesta
@@ -121,6 +121,7 @@ class PropuestaRow:
     factores: tuple[FactorRow, ...]
     tier_entrada: TierEntrada | None = None
     segunda_ronda: dict | None = None
+    ciclos_consecutivos_en_zona: int | None = None
 
 
 def save_propuesta(session: Session, row: PropuestaRow) -> uuid.UUID:
@@ -145,6 +146,7 @@ def save_propuesta(session: Session, row: PropuestaRow) -> uuid.UUID:
         decision_snapshot=row.decision_snapshot,
         tier_entrada=row.tier_entrada,
         segunda_ronda=row.segunda_ronda,
+        ciclos_consecutivos_en_zona=row.ciclos_consecutivos_en_zona,
     )
     session.add(propuesta)
     session.flush()  # necesitamos propuesta.id para los factores
@@ -173,3 +175,39 @@ def get_propuestas_de_ciclo(session: Session, ciclo_id: uuid.UUID) -> list[Propu
 def get_factores_de_propuesta(session: Session, propuesta_id: uuid.UUID) -> list[Factor]:
     stmt = select(Factor).where(Factor.propuesta_id == propuesta_id).order_by(Factor.factor)
     return list(session.scalars(stmt))
+
+
+def get_puntajes_de_ciclos_previos(session: Session, symbol: str, ciclo_id: uuid.UUID) -> list[Decimal | None]:
+    """`puntaje_ponderado` de `symbol` en cada DÍA de análisis anterior al
+    del ciclo `ciclo_id`, del más reciente al más antiguo. Solo
+    persistencia: no interpreta la lista (eso es
+    `app.domain.rules.entry_tier.contar_ciclos_consecutivos_en_zona`).
+
+    - Solo cuentan ciclos que terminaron (`finished_at`) sin error
+      (`error_message` nulo): un ciclo fallido no produjo información.
+    - Se agrupa por día UTC y solo entran días ESTRICTAMENTE anteriores al
+      del ciclo actual, para que una segunda corrida el mismo día no cuente
+      como "el día anterior". Si hubo varios ciclos exitosos el mismo día,
+      se toma el mayor puntaje del símbolo.
+    - Un día con ciclo exitoso donde el símbolo no tuvo propuesta aparece
+      como `None` (no se sabe si estuvo cerca; ver el docstring de la
+      función de dominio)."""
+    actual = session.get(CicloAnalisis, ciclo_id)
+    if actual is None:
+        raise ValueError(f"ciclo_id {ciclo_id} no existe")
+
+    dia = cast(func.timezone("UTC", CicloAnalisis.started_at), Date)
+    dia_actual = cast(func.timezone("UTC", actual.started_at), Date)
+    stmt = (
+        select(func.max(Propuesta.puntaje_ponderado))
+        .select_from(CicloAnalisis)
+        .outerjoin(Propuesta, and_(Propuesta.ciclo_id == CicloAnalisis.id, Propuesta.symbol == symbol))
+        .where(
+            CicloAnalisis.finished_at.is_not(None),
+            CicloAnalisis.error_message.is_(None),
+            dia < dia_actual,
+        )
+        .group_by(dia)
+        .order_by(dia.desc())
+    )
+    return [None if valor is None else Decimal(valor) for valor in session.execute(stmt).scalars()]

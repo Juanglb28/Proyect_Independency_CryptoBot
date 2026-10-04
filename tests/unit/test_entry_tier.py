@@ -148,3 +148,31 @@ def test_en_zona_sin_segunda_ronda_evaluada_es_ninguno():
         clasificar_tier(puntaje_ponderado=Decimal("52"), supera_umbral_entrada=False, segunda_ronda=None)
         == TierEntrada.NINGUNO
     )
+
+
+# --- observación: ciclos consecutivos en la zona --------------------------------
+
+from app.domain.rules.entry_tier import contar_ciclos_consecutivos_en_zona  # noqa: E402
+
+
+def _d(valor):
+    return None if valor is None else Decimal(valor)
+
+
+@pytest.mark.parametrize(
+    "actual, previos, esperado",
+    [
+        ("52", [], 1),  # primer día en la zona
+        ("52", ["51"], 2),
+        ("52", ["51", "50"], 3),
+        ("52", ["51", "50", "49.99"], 3),  # 49.99 corta la racha: sale de la zona
+        ("52", ["54.99", "55"], 2),  # 55 ya no es zona (supera el umbral)
+        ("52", ["60", "51"], 1),  # un día fuera corta; lo anterior no cuenta
+        ("52", [None, "51"], 1),  # sin propuesta ese día: no se sabe -> corta (P3)
+        ("49.99", ["51", "52"], 0),  # hoy fuera de zona: racha 0
+        ("55", ["51"], 0),
+        ("50", ["50"], 2),  # borde inferior inclusivo
+    ],
+)
+def test_contar_ciclos_consecutivos_en_zona(actual, previos, esperado):
+    assert contar_ciclos_consecutivos_en_zona(Decimal(actual), [_d(p) for p in previos]) == esperado

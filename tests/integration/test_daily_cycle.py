@@ -26,7 +26,15 @@ from app.data.prefilter import PrefilterScore
 from app.data.prefilter_pipeline import PrefilterRunResult
 from app.domain.enums import EstadoCiclo, TierEntrada
 from app.orchestration.daily_cycle import run_daily_cycle
-from app.repositories.analysis import get_ciclo, get_factores_de_propuesta, get_propuestas_de_ciclo
+from app.repositories.analysis import (
+    PropuestaRow,
+    create_ciclo,
+    finalizar_ciclo,
+    get_ciclo,
+    get_factores_de_propuesta,
+    get_propuestas_de_ciclo,
+    save_propuesta,
+)
 from app.repositories.candles import save_candles
 from app.repositories.indicators import save_indicators
 
@@ -214,6 +222,7 @@ def test_ciclo_completo_con_dos_candidatos_persiste_propuestas_y_factores(monkey
         assert propuesta.supera_umbral_entrada is True  # 70*.3+60*.2+50*.2+80*.3=67 * calidad 1.0
         assert propuesta.tier_entrada == TierEntrada.NORMAL
         assert propuesta.segunda_ronda is None  # fuera de la zona [50, 55): nunca se evalúa
+        assert propuesta.ciclos_consecutivos_en_zona == 0  # 67 no está en la zona
         assert propuesta.decision_snapshot["symbol"] == propuesta.symbol
         assert propuesta.decision_snapshot["analysis_cycle_id"] == str(result.ciclo_id)
         assert "initial_stop" not in propuesta.decision_snapshot
@@ -407,3 +416,62 @@ def test_por_debajo_de_50_no_se_evalua_la_segunda_ronda(monkeypatch, db_session)
     assert propuesta.puntaje_ponderado == Decimal("40.00")
     assert propuesta.tier_entrada == TierEntrada.NINGUNO
     assert propuesta.segunda_ronda is None
+
+
+# --- observación de racha: días seguidos en la zona (2026-10-04) --------------------
+
+
+def _sembrar_dia_previo(session, *, dias_atras: int, puntaje: str) -> None:
+    """Un día de análisis previo, exitoso, donde ETHUSDT tuvo una propuesta
+    con ese puntaje ponderado."""
+    from dataclasses import replace
+
+    ciclo_id = create_ciclo(
+        session, started_at=_OPEN_TIME - timedelta(days=dias_atras), status=EstadoCiclo.PREFILTER
+    )
+    finalizar_ciclo(
+        session, ciclo_id, status=EstadoCiclo.FREEZE_DECISION_SNAPSHOT, finished_at=_OPEN_TIME,
+        cost_usd=Decimal("0.5"), error_message=None,
+    )
+    base = PropuestaRow(
+        ciclo_id=ciclo_id, symbol="ETHUSDT", categoria="principal", horizonte="corto", nivel_riesgo="medio",
+        puntaje_base=Decimal(puntaje), calidad_datos=Decimal(100), puntaje_ponderado=Decimal(puntaje),
+        supera_umbral_entrada=False, tesis="t", invalidacion="i",
+        escenario_adverso={"descripcion": "x", "desencadenante": "y", "probabilidad_relativa": "baja"},
+        comentario_chartista=None, fuentes=[], confianza_global="alta", decision_snapshot={}, factores=(),
+    )
+    save_propuesta(session, replace(base))
+
+
+def test_racha_cuenta_los_dias_previos_en_zona_y_el_actual(monkeypatch, db_session):
+    _seed_para_segunda_ronda(db_session, rsi_por_tf=_RSI_FUERTE, ratio_sube=True)
+    _sembrar_dia_previo(db_session, dias_atras=1, puntaje="52.00")
+    _sembrar_dia_previo(db_session, dias_atras=2, puntaje="50.50")
+    _sembrar_dia_previo(db_session, dias_atras=3, puntaje="47.00")  # fuera de zona: corta la racha
+
+    propuesta = _correr_ciclo(monkeypatch, db_session, _PUNTAJES_EN_ZONA)  # hoy: 51.00
+
+    assert propuesta.ciclos_consecutivos_en_zona == 3  # hoy + 2 previos
+    assert propuesta.decision_snapshot["ciclos_consecutivos_en_zona"] == 3
+
+
+def test_racha_larga_no_promueve_el_tier_si_la_segunda_ronda_no_aprueba(monkeypatch, db_session):
+    # La racha es SOLO observación: aunque lleve 3 días en la zona, si el
+    # ratio vs BTC es débil el tier sigue siendo NINGUNO.
+    _seed_para_segunda_ronda(db_session, rsi_por_tf=_RSI_FUERTE, ratio_sube=False)
+    _sembrar_dia_previo(db_session, dias_atras=1, puntaje="52.00")
+    _sembrar_dia_previo(db_session, dias_atras=2, puntaje="50.50")
+
+    propuesta = _correr_ciclo(monkeypatch, db_session, _PUNTAJES_EN_ZONA)
+
+    assert propuesta.ciclos_consecutivos_en_zona == 3
+    assert propuesta.tier_entrada == TierEntrada.NINGUNO
+
+
+def test_racha_es_cero_si_hoy_no_esta_en_la_zona(monkeypatch, db_session):
+    _seed_para_segunda_ronda(db_session, rsi_por_tf=_RSI_FUERTE, ratio_sube=True)
+    _sembrar_dia_previo(db_session, dias_atras=1, puntaje="52.00")
+
+    propuesta = _correr_ciclo(monkeypatch, db_session, _PUNTAJES_BAJOS)  # hoy: 40.00
+
+    assert propuesta.ciclos_consecutivos_en_zona == 0

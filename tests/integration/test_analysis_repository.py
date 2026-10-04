@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import update
 
+from app.db.models.analysis import Propuesta
 from app.domain.enums import EstadoCiclo
 from app.repositories.analysis import (
     FactorRow,
@@ -125,8 +127,93 @@ def test_todas_las_opciones_se_persisten_aunque_no_superen_el_umbral(db_session)
 def test_multiples_propuestas_del_mismo_ciclo_se_listan_en_orden(db_session):
     ciclo_id = create_ciclo(db_session, started_at=datetime.now(timezone.utc), status=EstadoCiclo.CONSOLIDATE)
 
-    save_propuesta(db_session, _propuesta_row(ciclo_id, symbol="BTCUSDT"))
-    save_propuesta(db_session, _propuesta_row(ciclo_id, symbol="SOLUSDT"))
+    primera = save_propuesta(db_session, _propuesta_row(ciclo_id, symbol="BTCUSDT"))
+    segunda = save_propuesta(db_session, _propuesta_row(ciclo_id, symbol="SOLUSDT"))
+
+    # `created_at` usa `now()` de Postgres, que es la hora de INICIO de la
+    # transacción: aquí ambas filas comparten transacción y empatarían, con
+    # un orden indefinido (el test era intermitente). En producción cada
+    # propuesta se confirma en su propia transacción y no hay empate. Se
+    # fijan tiempos distintos para probar lo que de verdad importa: que se
+    # listan por `created_at` ascendente.
+    ahora = datetime.now(timezone.utc)
+    db_session.execute(update(Propuesta).where(Propuesta.id == primera).values(created_at=ahora - timedelta(minutes=2)))
+    db_session.execute(update(Propuesta).where(Propuesta.id == segunda).values(created_at=ahora - timedelta(minutes=1)))
+    db_session.flush()
 
     propuestas = get_propuestas_de_ciclo(db_session, ciclo_id)
     assert [p.symbol for p in propuestas] == ["BTCUSDT", "SOLUSDT"]
+
+
+# --- get_puntajes_de_ciclos_previos (observación de racha, 2026-10-04) ------------
+
+from app.repositories.analysis import get_puntajes_de_ciclos_previos  # noqa: E402
+
+_BASE = datetime(2026, 10, 10, 15, 0, tzinfo=timezone.utc)
+
+
+def _ciclo_cerrado(session, *, dias_atras: int, puntaje: str | None, symbol: str = "LTCUSDT", error: str | None = None,
+                   terminado: bool = True, horas_extra: int = 0):
+    ciclo_id = create_ciclo(
+        session, started_at=_BASE - timedelta(days=dias_atras) + timedelta(hours=horas_extra), status=EstadoCiclo.PREFILTER
+    )
+    if terminado:
+        finalizar_ciclo(
+            session, ciclo_id, status=EstadoCiclo.CONSOLIDATE, finished_at=_BASE, cost_usd=Decimal("0.5"),
+            error_message=error,
+        )
+    if puntaje is not None:
+        fila = _propuesta_row(ciclo_id, symbol=symbol, supera=False)
+        from dataclasses import replace
+
+        save_propuesta(session, replace(fila, puntaje_ponderado=Decimal(puntaje)))
+    return ciclo_id
+
+
+def test_previos_del_mas_reciente_al_mas_antiguo_con_none_si_no_hubo_propuesta(db_session):
+    _ciclo_cerrado(db_session, dias_atras=3, puntaje="51.00")
+    _ciclo_cerrado(db_session, dias_atras=2, puntaje=None)  # ciclo exitoso sin propuesta de LTC
+    _ciclo_cerrado(db_session, dias_atras=1, puntaje="53.00")
+    actual = create_ciclo(db_session, started_at=_BASE, status=EstadoCiclo.PREFILTER)
+
+    assert get_puntajes_de_ciclos_previos(db_session, "LTCUSDT", actual) == [Decimal("53.00"), None, Decimal("51.00")]
+
+
+def test_ignora_ciclos_fallidos_y_no_terminados(db_session):
+    _ciclo_cerrado(db_session, dias_atras=3, puntaje="51.00")
+    _ciclo_cerrado(db_session, dias_atras=2, puntaje=None, error="falló un agente")
+    _ciclo_cerrado(db_session, dias_atras=1, puntaje="52.00", terminado=False)
+    actual = create_ciclo(db_session, started_at=_BASE, status=EstadoCiclo.PREFILTER)
+
+    # solo el del día 3: el fallido y el no terminado no produjeron información
+    assert get_puntajes_de_ciclos_previos(db_session, "LTCUSDT", actual) == [Decimal("51.00")]
+
+
+def test_otro_ciclo_del_mismo_dia_del_actual_no_cuenta_como_dia_anterior(db_session):
+    _ciclo_cerrado(db_session, dias_atras=1, puntaje="52.00")
+    _ciclo_cerrado(db_session, dias_atras=0, puntaje="53.00", horas_extra=-3)  # misma fecha UTC, 3h antes
+    actual = create_ciclo(db_session, started_at=_BASE, status=EstadoCiclo.PREFILTER)
+
+    assert get_puntajes_de_ciclos_previos(db_session, "LTCUSDT", actual) == [Decimal("52.00")]
+
+
+def test_varios_ciclos_exitosos_el_mismo_dia_previo_toman_el_mayor_puntaje(db_session):
+    _ciclo_cerrado(db_session, dias_atras=1, puntaje="50.50", horas_extra=-2)
+    _ciclo_cerrado(db_session, dias_atras=1, puntaje="53.00")
+    actual = create_ciclo(db_session, started_at=_BASE, status=EstadoCiclo.PREFILTER)
+
+    assert get_puntajes_de_ciclos_previos(db_session, "LTCUSDT", actual) == [Decimal("53.00")]
+
+
+def test_solo_considera_propuestas_del_simbolo_pedido(db_session):
+    _ciclo_cerrado(db_session, dias_atras=1, puntaje="52.00", symbol="ETHUSDT")
+    actual = create_ciclo(db_session, started_at=_BASE, status=EstadoCiclo.PREFILTER)
+
+    assert get_puntajes_de_ciclos_previos(db_session, "LTCUSDT", actual) == [None]
+
+
+def test_ciclo_inexistente_lanza_value_error(db_session):
+    import uuid
+
+    with pytest.raises(ValueError):
+        get_puntajes_de_ciclos_previos(db_session, "LTCUSDT", uuid.uuid4())

@@ -155,3 +155,38 @@ def clasificar_tier(
     if en_zona_segunda_ronda(puntaje_ponderado) and segunda_ronda is not None and segunda_ronda.elegible:
         return TierEntrada.MAYOR_RIESGO
     return TierEntrada.NINGUNO
+
+
+def contar_ciclos_consecutivos_en_zona(
+    puntaje_actual: Decimal, puntajes_previos: list[Decimal | None]
+) -> int:
+    """Cuántos días de análisis seguidos lleva un activo en la zona cercana
+    `[50, 55)`, contando el actual (observación pedida por el usuario,
+    2026-10-04: "un activo que queda periodos consecutivos cerca del umbral
+    es un patrón"). **Es solo una observación: no decide ninguna entrada.**
+    La v1 mide si el score predice; promoverla a criterio sería ajustar las
+    reglas con tres días de historia. Se guarda para compararla después
+    contra los resultados reales (Paso 9).
+
+    `puntajes_previos` va del día más reciente al más antiguo, un elemento
+    por cada día de análisis previo que terminó sin error (ver
+    `app/repositories/analysis.py::get_puntajes_de_ciclos_previos`):
+
+    - un puntaje en la zona prolonga la racha;
+    - un puntaje fuera de la zona la corta;
+    - `None` (el activo no tuvo propuesta ese día: no fue candidato, o el
+      Consolidador no lo devolvió) la corta también — no se sabe si estuvo
+      cerca, y suponerlo sería inventar un dato (P3).
+
+    Si el puntaje actual no está en la zona, devuelve 0. Cuenta días de
+    análisis exitosos, no días de calendario: un día sin ningún ciclo
+    exitoso (apagado, o un ciclo que falló) no existe en la lista y no
+    corta la racha."""
+    if not en_zona_segunda_ronda(puntaje_actual):
+        return 0
+    racha = 1
+    for puntaje in puntajes_previos:
+        if puntaje is None or not en_zona_segunda_ronda(puntaje):
+            break
+        racha += 1
+    return racha

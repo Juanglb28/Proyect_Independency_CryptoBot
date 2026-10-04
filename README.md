@@ -543,6 +543,28 @@ sin este criterio y rellenarlas sería reescribir historia congelada
 (sección 14 del plan). En la salida de `scripts/run_daily_cycle.py` una
 propuesta de este tier aparece marcada como `ENTRADA DE MAYOR RIESGO`.
 
+**Observación de persistencia (2026-10-04, solo registro).** El usuario
+planteó que un activo que queda varios días seguidos cerca del umbral es un
+patrón: "algo está a punto de suceder". Por ahora se guarda como
+OBSERVACIÓN, sin que decida ninguna entrada: con unos pocos días de
+historia no hay forma de validar la hipótesis, y volverla criterio ya sería
+el mismo ajuste de reglas mirando casos sueltos que se evitó al no bajar el
+umbral. Cada propuesta guarda `ciclos_consecutivos_en_zona` (migración
+`de1706e3afa6`): cuántos días de análisis seguidos, contando el actual, lleva
+el activo con puntaje en `[50, 55)` (`contar_ciclos_consecutivos_en_zona`,
+`app/domain/rules/entry_tier.py`; 0 si hoy no está en la zona). Reglas del
+conteo: un día con puntaje en la zona prolonga la racha; uno fuera de la
+zona la corta; **un día de análisis exitoso donde el activo no tuvo
+propuesta también la corta** (no se sabe si estuvo cerca, y suponerlo sería
+inventar un dato — recordar que `propuestas` solo guarda lo que el
+Consolidador devuelve, p. ej. 3 de 5 candidatos el 2026-10-03). Cuenta
+días de análisis exitosos, no días de calendario: un ciclo fallido o un día
+sin ejecución no corta la racha. Se agrupa por día UTC (varios ciclos el
+mismo día cuentan una vez, con el mayor puntaje). Cuando exista el módulo
+de resultados (Paso 9) se podrá comparar el desempeño de las entradas por
+días de racha y decidir si se promueve a criterio. Una racha larga NO
+cambia el tier (probado en `tests/integration/test_daily_cycle.py`).
+
 **Pendiente — Paso 8 (decisión del usuario, aún sin implementar porque no
 existe el motor de ejecución):** toda entrada de este tier requerirá
 APROBACIÓN MANUAL SIEMPRE y usará el tamaño mínimo ya existente (100 USD),

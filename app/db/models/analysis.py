@@ -69,7 +69,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Numeric, Text, func
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, Numeric, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -132,6 +132,12 @@ class Propuesta(Base):
     el criterio, y rellenarlas retroactivamente sería reescribir historia
     congelada (sección 14 del plan) — se dejan en NULL a propósito, no
     como un valor inventado."""
+    ciclos_consecutivos_en_zona: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """Días de análisis seguidos (contando este) en la zona cercana
+    `[50, 55)` — ver `app.domain.rules.entry_tier.contar_ciclos_consecutivos_en_zona`.
+    Solo observación: NO afecta `tier_entrada`. 0 si el puntaje de esta
+    propuesta no está en la zona; NULL en las filas anteriores a esta
+    columna (2026-10-04), que no se rellenan retroactivamente."""
     segunda_ronda: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     """Evidencia de la segunda ronda (valores y veredicto de cada
     verificación, y datos faltantes). NULL si la propuesta no cayó en la
