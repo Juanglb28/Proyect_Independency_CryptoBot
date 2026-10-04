@@ -10,11 +10,16 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from decimal import Decimal
 
 import pytest
 from pydantic import BaseModel
 
-from app.ai.agents._runner import AgentValidationError, run_json_agent
+from app.ai.agents._runner import (
+    MAX_REINTENTOS_POR_FALLO_DE_SCHEMA,
+    AgentValidationError,
+    run_json_agent,
+)
 from app.ai.client import AgentCallResult, AgentResponseError
 from app.ai.models import MODEL_ANALISTA
 from app.config import Settings
@@ -184,12 +189,14 @@ def test_llamada_que_no_cumple_el_schema_persiste_su_costo_real_y_relanza(monkey
     with pytest.raises(AgentValidationError):
         _run(monkeypatch)
 
-    assert len(capturado) == 1
-    row = capturado[0]
-    assert row.exitosa is False
-    assert row.respuesta is None
-    assert row.cost_usd > 0
-    assert "_DummySchema" in row.error_message or "DummySchema" in row.error_message
+    # El fake devuelve siempre lo mismo, así que el reintento también falla:
+    # dos intentos, dos filas de costo (ver MAX_REINTENTOS_POR_FALLO_DE_SCHEMA).
+    assert len(capturado) == 2
+    for row in capturado:
+        assert row.exitosa is False
+        assert row.respuesta is None
+        assert row.cost_usd > 0
+        assert "DummySchema" in row.error_message
 
 
 def test_llamada_exitosa_no_registra_ninguna_fila_de_fallo(monkeypatch):
@@ -204,3 +211,126 @@ def test_llamada_exitosa_no_registra_ninguna_fila_de_fallo(monkeypatch):
     assert len(capturado) == 1
     assert capturado[0].exitosa is True
     assert capturado[0].respuesta == {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Reintento ante fallo de schema (decisión del usuario, 2026-10-04)
+# ---------------------------------------------------------------------------
+
+
+def _patch_call_agent_secuencia(monkeypatch, textos: list[str], llamadas: list[int]):
+    """Devuelve `textos[0]`, `textos[1]`, ... en llamadas sucesivas, y deja
+    en `llamadas` un elemento por cada llamada real que se hizo."""
+
+    def fake_call_agent(settings, *, model, system_prompt, user_content, max_tokens=4096):
+        indice = len(llamadas)
+        llamadas.append(indice)
+        return AgentCallResult(raw_text=textos[min(indice, len(textos) - 1)], input_tokens=100, output_tokens=200)
+
+    monkeypatch.setattr("app.ai.agents._runner.call_agent", fake_call_agent)
+
+
+def test_se_recupera_si_el_segundo_intento_cumple_el_schema(monkeypatch):
+    llamadas: list[int] = []
+    _patch_call_agent_secuencia(monkeypatch, ["{}", json.dumps({"ok": True})], llamadas)
+    capturado: list = []
+    _patch_save_llamada_ia(monkeypatch, capture=capturado)
+
+    resultado = _run(monkeypatch)
+
+    assert len(llamadas) == 2
+    assert resultado.output.ok is True
+    assert resultado.intentos == 2
+    # una fila fallida (intento 1) y una exitosa (intento 2)
+    assert [row.exitosa for row in capturado] == [False, True]
+    # el costo del paso suma AMBOS intentos: es lo que se facturó
+    assert resultado.cost_usd == capturado[0].cost_usd + capturado[1].cost_usd
+    assert resultado.input_tokens == 200
+    assert resultado.output_tokens == 400
+
+
+def test_se_rinde_tras_un_solo_reintento_y_relanza(monkeypatch):
+    llamadas: list[int] = []
+    _patch_call_agent_secuencia(monkeypatch, ["{}"], llamadas)
+    capturado: list = []
+    _patch_save_llamada_ia(monkeypatch, capture=capturado)
+
+    with pytest.raises(AgentValidationError):
+        _run(monkeypatch)
+
+    assert MAX_REINTENTOS_POR_FALLO_DE_SCHEMA == 1
+    assert len(llamadas) == MAX_REINTENTOS_POR_FALLO_DE_SCHEMA + 1  # nunca un tercer intento
+    assert len(capturado) == 2
+    assert all(row.exitosa is False for row in capturado)
+
+
+def test_json_invalido_no_se_reintenta(monkeypatch):
+    llamadas: list[int] = []
+    _patch_call_agent_secuencia(monkeypatch, ["esto no es json", json.dumps({"ok": True})], llamadas)
+    capturado: list = []
+    _patch_save_llamada_ia(monkeypatch, capture=capturado)
+
+    with pytest.raises(AgentResponseError):
+        _run(monkeypatch)
+
+    assert len(llamadas) == 1
+    assert len(capturado) == 1
+
+
+def test_truncado_por_max_tokens_no_se_reintenta(monkeypatch):
+    llamadas: list[int] = []
+    tokens = AgentCallResult(raw_text="{incompleto", input_tokens=100, output_tokens=4096)
+
+    def fake_call_agent(settings, *, model, system_prompt, user_content, max_tokens=4096):
+        llamadas.append(1)
+        raise AgentResponseError("se cortó por max_tokens", tokens=tokens)
+
+    monkeypatch.setattr("app.ai.agents._runner.call_agent", fake_call_agent)
+    capturado: list = []
+    _patch_save_llamada_ia(monkeypatch, capture=capturado)
+
+    with pytest.raises(AgentResponseError):
+        _run(monkeypatch)
+
+    assert len(llamadas) == 1
+    assert len(capturado) == 1
+
+
+def test_fallo_de_extra_validate_no_se_reintenta(monkeypatch):
+    # Un id/fuente inventado es una señal de integridad de datos, no ruido
+    # de formato: no se reintenta (ver MAX_REINTENTOS_POR_FALLO_DE_SCHEMA).
+    llamadas: list[int] = []
+    _patch_call_agent_secuencia(monkeypatch, [json.dumps({"ok": True})], llamadas)
+    capturado: list = []
+    _patch_save_llamada_ia(monkeypatch, capture=capturado)
+
+    def rechaza(_output):
+        raise AgentValidationError("fuente inexistente")
+
+    with pytest.raises(AgentValidationError):
+        run_json_agent(
+            session=object(),
+            settings=_settings(),
+            agente="agente_de_prueba",
+            modelo=MODEL_ANALISTA,
+            prompt_version="v1",
+            system_prompt="...",
+            datos={},
+            schema=_DummySchema,
+            extra_validate=rechaza,
+        )
+
+    assert len(llamadas) == 1
+    assert len(capturado) == 1
+
+
+def test_exito_a_la_primera_reporta_un_solo_intento(monkeypatch):
+    _patch_call_agent(monkeypatch, output_tokens=50)
+    capturado: list = []
+    _patch_save_llamada_ia(monkeypatch, capture=capturado)
+
+    resultado = _run(monkeypatch)
+
+    assert resultado.intentos == 1
+    assert resultado.cost_usd == capturado[0].cost_usd
+    assert isinstance(resultado.cost_usd, Decimal)

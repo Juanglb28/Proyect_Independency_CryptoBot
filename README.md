@@ -352,6 +352,26 @@ con su costo real desde el fix del 2026-10-02 descrito más abajo (sección
 "Control de gastos de la API de Anthropic") — en el momento en que se
 escribió este párrafo todavía era una brecha conocida, ya cerrada.
 
+**Bug real (2026-10-04) — reintento ante fallo de schema:** la corrida de
+las 10am abortó entera porque el Analista de eventos agregó un campo
+`fecha` en cada evento comparable que su schema estricto (`extra="forbid"`)
+no permite. Las fechas eran reales (del catálogo), no inventadas: fue una
+desviación puntual del modelo, ya que las dos corridas anteriores pasaron
+con el mismo prompt. Como el ciclo abortó, ese día no hubo propuestas y se
+perdió el trabajo ya pagado de los demás candidatos. Decisión del usuario:
+`run_json_agent` reintenta UNA vez (`MAX_REINTENTOS_POR_FALLO_DE_SCHEMA` en
+`app/ai/agents/_runner.py`) cuando la respuesta no cumple el schema
+(`AgentSchemaError`, subtipo de `AgentValidationError`). Cada intento
+fallido deja su propia fila de costo en `llamadas_ia`, y
+`AgentRunResult.cost_usd` suma todos los intentos (lo realmente facturado);
+`AgentRunResult.intentos` dice cuántos hizo falta. **No se reintenta**: una
+respuesta cortada por `max_tokens` (se repetiría igual), JSON inválido (no
+es un problema de schema) ni un fallo de `extra_validate` (p. ej. el
+Consolidador citando una fuente que no existe: es una señal de integridad de
+datos, no ruido de formato). Se aplica a los cuatro agentes porque todos
+pasan por `run_json_agent`. Es un parámetro de costo fijo en código, no una
+variable de entorno.
+
 **Consolidador (Agente 5) — diseño co-construido con el usuario el
 2026-09-29**: el plan (sección 7.2) nunca llegó a especificar su JSON de
 "SALIDA" (a diferencia de los otros tres) y su tabla de ponderación

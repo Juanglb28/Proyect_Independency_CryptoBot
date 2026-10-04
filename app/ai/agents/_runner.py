@@ -22,6 +22,7 @@ import logging
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -52,6 +53,24 @@ próximo corte, y para ir acumulando datos reales de uso por agente en vez
 de seguir ajustando `max_tokens` a ojo."""
 
 
+MAX_REINTENTOS_POR_FALLO_DE_SCHEMA = 1
+"""Cuántas veces se REPITE una llamada cuya respuesta no cumplió el schema
+del agente, antes de abortar (decisión del usuario, 2026-10-04). Bug real
+(2026-10-04): el Analista de eventos agregó un campo `fecha` que su schema
+estricto (`extra="forbid"`) no permite, y el ciclo entero abortó —
+perdiendo el trabajo ya pagado de los demás candidatos — aunque las dos
+corridas anteriores, con el mismo prompt, habían pasado. Reintentar UNA
+vez cuesta una llamada extra solo cuando hay falla.
+
+Es un parámetro de costo fijo en código, no una variable de entorno
+(sección 10 del master prompt). Solo aplica a `AgentSchemaError`: una
+respuesta cortada por `max_tokens` o con JSON inválido no se reintenta (la
+primera se repetiría igual y la segunda no es un problema de schema), ni
+tampoco un fallo de `extra_validate` (p. ej. el Consolidador citando una
+fuente que no existe en el catálogo: es una señal de integridad de datos,
+no ruido de formato, y reintentar esa decisión es una pregunta distinta)."""
+
+
 class AgentValidationError(Exception):
     """El JSON del modelo parseó correctamente, pero no cumple el schema
     esperado del agente (campo faltante, valor fuera de las opciones
@@ -63,6 +82,13 @@ class AgentValidationError(Exception):
     """
 
 
+class AgentSchemaError(AgentValidationError):
+    """Subtipo de `AgentValidationError`: el JSON parseó bien pero no cumple
+    el schema Pydantic del agente. Es el ÚNICO fallo que `run_json_agent`
+    reintenta (ver `MAX_REINTENTOS_POR_FALLO_DE_SCHEMA`). Sigue siendo un
+    `AgentValidationError`, así que quien ya captura ese tipo no cambia."""
+
+
 def _persistir_llamada_fallida(
     session: Session,
     *,
@@ -72,7 +98,7 @@ def _persistir_llamada_fallida(
     ciclo_id: uuid.UUID | None,
     call_result: AgentCallResult | None,
     exc: Exception,
-) -> None:
+) -> tuple[int, int, Decimal] | None:
     """Registra en `llamadas_ia` el costo real de una llamada que falló
     DESPUÉS de que la API respondiera (JSON inválido, truncada por
     `max_tokens`, o con forma distinta al schema del agente) — Anthropic la
@@ -86,10 +112,15 @@ def _persistir_llamada_fallida(
     devolvió, y la falla fue después: JSON inválido o schema incorrecto).
     Si ninguna de las dos está disponible (un error antes de recibir
     cualquier respuesta de la API, que normalmente tampoco cobra Anthropic),
-    no se persiste nada — no hay tokens reales que registrar."""
+    no se persiste nada — no hay tokens reales que registrar.
+
+    Devuelve `(input_tokens, output_tokens, cost_usd)` de lo que se cobró, o
+    `None` si no hubo respuesta que cobrar — `run_json_agent` lo necesita
+    para sumar el costo de un intento fallido al total del paso cuando
+    reintenta."""
     tokens = getattr(exc, "tokens", None) or call_result
     if tokens is None:
-        return
+        return None
 
     cost_usd = calculate_cost_usd(
         modelo,
@@ -113,6 +144,7 @@ def _persistir_llamada_fallida(
             ciclo_id=ciclo_id,
         ),
     )
+    return tokens.input_tokens, tokens.output_tokens, cost_usd
 
 
 @dataclass(frozen=True)
@@ -124,7 +156,12 @@ class AgentRunResult:
     llamada_id: uuid.UUID
     input_tokens: int
     output_tokens: int
-    cost_usd: object  # Decimal — evitar el import solo para el tipo aquí
+    cost_usd: Decimal
+    intentos: int = 1
+    """Cantidad de llamadas que costó este paso (1 si salió a la primera).
+    `input_tokens`/`output_tokens`/`cost_usd` son el TOTAL de todos los
+    intentos — lo que realmente se facturó por este paso — no solo los del
+    intento exitoso; `llamada_id` es el del intento exitoso."""
 
 
 def run_json_agent(
@@ -170,56 +207,85 @@ def run_json_agent(
     llama (la excepción se relanza igual)."""
     user_content = json.dumps(datos, ensure_ascii=False, default=str)
 
-    call_result: AgentCallResult | None = None
-    try:
-        call_result = call_agent(
-            settings,
-            model=modelo,
-            system_prompt=system_prompt,
-            user_content=user_content,
-            max_tokens=max_tokens,
-        )
+    # Lo que costaron los intentos FALLIDOS de este paso (se suma al del
+    # intento exitoso, para que el costo del ciclo refleje lo facturado).
+    input_fallidos = 0
+    output_fallidos = 0
+    costo_fallidos = Decimal(0)
 
-        if call_result.output_tokens >= max_tokens * _RATIO_ALERTA_CERCA_DEL_LIMITE:
-            logger.warning(
-                "El agente '%s' usó %d de %d tokens de salida permitidos (%.0f%%) en esta "
-                "llamada — terminó bien, pero cerca del límite. Considerar subir su "
-                "max_tokens antes de que la próxima corrida lo corte a mitad de JSON.",
-                agente,
-                call_result.output_tokens,
-                max_tokens,
-                100 * call_result.output_tokens / max_tokens,
-                extra={
-                    "ciclo_id": str(ciclo_id) if ciclo_id else None,
-                    "agente": agente,
-                    "modelo": modelo,
-                    "output_tokens": call_result.output_tokens,
-                    "max_tokens": max_tokens,
-                },
+    for intento in range(1, MAX_REINTENTOS_POR_FALLO_DE_SCHEMA + 2):
+        call_result: AgentCallResult | None = None
+        try:
+            call_result = call_agent(
+                settings,
+                model=modelo,
+                system_prompt=system_prompt,
+                user_content=user_content,
+                max_tokens=max_tokens,
             )
 
-        parsed = parse_agent_json(call_result.raw_text)
+            if call_result.output_tokens >= max_tokens * _RATIO_ALERTA_CERCA_DEL_LIMITE:
+                logger.warning(
+                    "El agente '%s' usó %d de %d tokens de salida permitidos (%.0f%%) en esta "
+                    "llamada — terminó bien, pero cerca del límite. Considerar subir su "
+                    "max_tokens antes de que la próxima corrida lo corte a mitad de JSON.",
+                    agente,
+                    call_result.output_tokens,
+                    max_tokens,
+                    100 * call_result.output_tokens / max_tokens,
+                    extra={
+                        "ciclo_id": str(ciclo_id) if ciclo_id else None,
+                        "agente": agente,
+                        "modelo": modelo,
+                        "output_tokens": call_result.output_tokens,
+                        "max_tokens": max_tokens,
+                    },
+                )
 
-        try:
-            output = schema.model_validate(parsed)
-        except ValidationError as exc:
-            raise AgentValidationError(
-                f"La respuesta de '{agente}' no cumple el schema {schema.__name__}: {exc}"
-            ) from exc
+            parsed = parse_agent_json(call_result.raw_text)
 
-        if extra_validate is not None:
-            extra_validate(output)
-    except (AgentResponseError, AgentValidationError) as exc:
-        _persistir_llamada_fallida(
-            session,
-            agente=agente,
-            modelo=modelo,
-            prompt_version=prompt_version,
-            ciclo_id=ciclo_id,
-            call_result=call_result,
-            exc=exc,
-        )
-        raise
+            try:
+                output = schema.model_validate(parsed)
+            except ValidationError as exc:
+                raise AgentSchemaError(
+                    f"La respuesta de '{agente}' no cumple el schema {schema.__name__}: {exc}"
+                ) from exc
+
+            if extra_validate is not None:
+                extra_validate(output)
+        except (AgentResponseError, AgentValidationError) as exc:
+            cobrado = _persistir_llamada_fallida(
+                session,
+                agente=agente,
+                modelo=modelo,
+                prompt_version=prompt_version,
+                ciclo_id=ciclo_id,
+                call_result=call_result,
+                exc=exc,
+            )
+            if cobrado is not None:
+                input_fallidos += cobrado[0]
+                output_fallidos += cobrado[1]
+                costo_fallidos += cobrado[2]
+
+            if isinstance(exc, AgentSchemaError) and intento <= MAX_REINTENTOS_POR_FALLO_DE_SCHEMA:
+                logger.warning(
+                    "La respuesta del agente '%s' no cumplió su schema (intento %d de %d); "
+                    "se reintenta la llamada. Error: %s",
+                    agente,
+                    intento,
+                    MAX_REINTENTOS_POR_FALLO_DE_SCHEMA + 1,
+                    str(exc)[:300],
+                    extra={
+                        "ciclo_id": str(ciclo_id) if ciclo_id else None,
+                        "agente": agente,
+                        "modelo": modelo,
+                        "intento": intento,
+                    },
+                )
+                continue
+            raise
+        break
 
     cost_usd = calculate_cost_usd(
         modelo,
@@ -246,7 +312,8 @@ def run_json_agent(
     return AgentRunResult(
         output=output,
         llamada_id=llamada_id,
-        input_tokens=call_result.input_tokens,
-        output_tokens=call_result.output_tokens,
-        cost_usd=cost_usd,
+        input_tokens=call_result.input_tokens + input_fallidos,
+        output_tokens=call_result.output_tokens + output_fallidos,
+        cost_usd=cost_usd + costo_fallidos,
+        intentos=intento,
     )

@@ -101,11 +101,13 @@ def test_run_auditor_datos_raises_on_schema_mismatch(monkeypatch):
     # Una respuesta que no cumple el schema no debe quedar registrada como
     # si fuera una interpretación válida (respuesta=None) — pero bug real
     # 2026-10-02: Anthropic cobró esta llamada igual, así que SÍ debe
-    # quedar un registro de auditoría marcado como fallido.
-    assert len(saved) == 1
-    assert saved[0].exitosa is False
-    assert saved[0].respuesta is None
-    assert saved[0].cost_usd > 0
+    # quedar un registro de auditoría marcado como fallido. El fake devuelve
+    # siempre la misma respuesta inválida, así que el reintento (decisión
+    # 2026-10-04) también falla: dos intentos, dos filas de costo.
+    assert len(saved) == 2
+    assert all(row.exitosa is False for row in saved)
+    assert all(row.respuesta is None for row in saved)
+    assert all(row.cost_usd > 0 for row in saved)
 
 
 # ---------------------------------------------------------------------------
