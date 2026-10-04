@@ -77,3 +77,62 @@ class TierEntrada(str, Enum):
     NORMAL = "NORMAL"
     MAYOR_RIESGO = "MAYOR_RIESGO"
     NINGUNO = "NINGUNO"
+
+
+class LadoOrden(str, Enum):
+    """Lado de una orden. En v1 (spot, sin apalancamiento ni cortos — sección
+    3 del plan) `BUY` solo abre/aumenta una posición LONG y `SELL` solo la
+    reduce o cierra."""
+
+    BUY = "BUY"
+    SELL = "SELL"
+
+
+class IntencionOrden(str, Enum):
+    """Para qué existe una orden (`ordenes.intencion`). Los valores de salida
+    son EXACTAMENTE los valores controlados de `exit_reason` de la sección
+    8.4 del plan (así `trade_results.exit_reason` sale directo de la orden de
+    salida, sin traducir); `ENTRY` es la única que abre una posición.
+
+    Decisión del usuario (2026-10-04): este diseño de `ordenes` queda
+    aprobado antes de escribir la migración — ver README, "Decisiones del
+    Paso 8". Se guarda como VARCHAR validado (`native_enum=False`), igual
+    que `EstadoCiclo`."""
+
+    ENTRY = "ENTRY"
+    STOP_LOSS = "STOP_LOSS"
+    TAKE_PROFIT_PARTIAL = "TAKE_PROFIT_PARTIAL"
+    TRAILING_STOP = "TRAILING_STOP"
+    MANUAL_APPROVAL_EXIT = "MANUAL_APPROVAL_EXIT"
+    SYSTEM_DRAWDOWN = "SYSTEM_DRAWDOWN"
+    RECONCILIATION_EXIT = "RECONCILIATION_EXIT"
+    EMERGENCY_STOP = "EMERGENCY_STOP"
+    OTHER = "OTHER"
+
+
+class EstadoOrden(str, Enum):
+    """Estado de `ordenes.estado` (decisión del usuario, 2026-10-04).
+
+    - `PENDING_APPROVAL`: entrada que exige aprobación manual (mayor riesgo,
+      o sobre 200 USD) y todavía no se resolvió. Vive aquí y no en
+      `propuestas` para que la propuesta y su snapshot sigan siendo historia
+      congelada (sección 14 del plan).
+    - `FILLED`: ejecutada en paper. Una orden paper se ejecuta en la misma
+      transacción que actualiza la posición — por eso no hay un estado
+      intermedio "enviada/sin llenar" todavía (P5): si en el futuro existe un
+      exchange real con latencia, se agrega con su propio caso de prueba.
+    - `REJECTED`: el usuario la rechazó, o la validación de riesgo la bloqueó.
+    - `EXPIRED`: no se aprobó antes de las 00:00 UTC del día del ciclo."""
+
+    PENDING_APPROVAL = "PENDING_APPROVAL"
+    FILLED = "FILLED"
+    REJECTED = "REJECTED"
+    EXPIRED = "EXPIRED"
+
+
+class EstadoPosicion(str, Enum):
+    """`posiciones.status`: `OPEN` mientras quede cantidad, `CLOSED` cuando
+    la cantidad restante llega a 0 (un cierre parcial sigue siendo `OPEN`)."""
+
+    OPEN = "OPEN"
+    CLOSED = "CLOSED"

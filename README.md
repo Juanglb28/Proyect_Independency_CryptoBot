@@ -610,6 +610,32 @@ propuesta en `PENDING_APPROVAL` consume cupo de las 4 posiciones o de las 3
 operaciones por día antes de ser aprobada (el criterio natural sería que
 solo cuenta al ejecutarse).
 
+**Tablas creadas (migración `f3cbb4cdb7d1`, 2026-10-04):** `posiciones` y
+`ordenes`, con el diseño aprobado por el usuario (modelos en
+`app/db/models/positions.py` y `orders.py`; enums `LadoOrden`,
+`IntencionOrden`, `EstadoOrden`, `EstadoPosicion` en
+`app/domain/enums.py`). Son tablas nuevas y vacías: no tocan datos
+existentes. Lo que garantiza la base de datos por sí sola (P5), cubierto por
+`tests/integration/test_orders_positions_schema.py`:
+
+- Un símbolo no puede tener dos posiciones `OPEN` a la vez (índice único
+  parcial `uq_posiciones_symbol_abierta`).
+- Una propuesta abre a lo sumo una posición, y tiene a lo sumo una orden
+  `ENTRY` (índice único parcial `uq_ordenes_entrada_por_propuesta`), aunque
+  un reintento cambie el `client_order_id`, que además es único.
+- Coherencia estado/cantidad: `OPEN` siempre con cantidad restante > 0;
+  `CLOSED` siempre con 0 y `closed_at`; una orden `FILLED` siempre trae
+  cantidad, precio de ejecución, comisión y fecha de ejecución; trailing
+  activo exige su precio máximo de referencia.
+- Dinero y precios en `NUMERIC`, fechas en `TIMESTAMPTZ`, enums como
+  `VARCHAR` validado (agregar un estado no requiere `ALTER TYPE`).
+
+Los cupos (4 abiertas, 3 por día, 1 de mayor riesgo) se calcularán
+consultando estas tablas, sin contadores aparte. Todavía no hay repositorios
+ni servicios sobre ellas: llegan junto con `risk.py` y los managers. Para
+aplicarla: `docker compose run --rm app alembic upgrade head` (y lo mismo
+sobre la base `_test`, ver "Tests").
+
 Sigue pendiente, y depende de datos reales (no del Paso 8): fórmula
 definitiva del pre-filtro, evento comparable, ajuste final del scoring,
 ventanas del backtest, calibración numérica para capital real y si la racha
@@ -969,7 +995,8 @@ app/
 │   └── daily_cycle.py         # run_daily_cycle: el ciclo real completo (Paso 7)
 ├── execution/, results/, ui/
 │   # paquetes reservados por la arquitectura del plan (sección 15.1),
-│   # todavía vacíos: se irán poblando fase a fase (Paso 8/9/10).
+│   # todavía vacíos: se irán poblando fase a fase (Paso 8/9/10). Las
+│   # tablas del Paso 8 (`ordenes`, `posiciones`) ya existen en `db/models/`.
 ├── repositories/
 │   ├── health.py           # health check de base de datos
 │   ├── candles.py          # persistencia + lectura idempotente de velas
@@ -1125,7 +1152,8 @@ prompt — "no sobreimplementar"):
   propuestas (sus reglas ya están decididas: ver "Decisiones del Paso 8") — `propuestas` queda como el registro de TODO lo que el
   Consolidador propuso, sin decidir todavía cuál se convierte en una
   posición real (Paso 8: `RISK_VALIDATION` en adelante de la sección 15.6).
-- Motor de ejecución, órdenes, posiciones y monitoreo — ninguna credencial
+- Motor de ejecución, órdenes, posiciones y monitoreo (las TABLAS `ordenes`
+  y `posiciones` ya existen; falta toda la lógica sobre ellas) — ninguna credencial
   de Binance se usa todavía; ni el cliente de velas ni el backfill la
   necesitan.
 - Cálculo de resultados y métricas de performance.
