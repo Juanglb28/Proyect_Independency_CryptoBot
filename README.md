@@ -963,7 +963,10 @@ al abrir): los precios de BTC y de los 20 pares observados en ese instante.
    > 0. Con menos de 3 operaciones con score: `MUESTRA_INSUFICIENTE`; de 3 a 29:
    `PRELIMINAR` (se calcula pero el plan pide 30); desde 30: `EVALUABLE`.
 
-### Derivado por mí (el usuario puede corregirlo)
+### Derivado del plan y aprobado por el usuario (2026-10-05)
+
+Estos supuestos los propuse yo (el plan no los define) y el usuario los aprobó
+explícitamente el 2026-10-05; cambiarlos requiere una nueva decisión.
 
 - **Registrar nunca bloquea operar.** Los snapshots y el `trade_result` se
   escriben en savepoints propios, después de la orden: si fallan, se registra el
