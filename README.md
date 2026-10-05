@@ -584,9 +584,11 @@ inventa). Todas se suman a las reglas fijas ya cerradas en la sección 9 del
 plan (stop -8%, TP 50% en +12%, trailing 6%, pausa en -15%, máx. 4
 posiciones, 100-250 USD, aprobación manual sobre 200 USD, score mínimo 55,
 3 operaciones por día, `client_order_id`, archivo `PARAR`, monitor cada
-60 s). **Todavía no hay servicios de ejecución ni monitor**: existen las
-reglas puras (`risk.py`, `execution.py`), las tablas y sus repositorios;
-falta el servicio que los conecta.
+60 s). Ya existen las reglas puras (`risk.py`, `execution.py`), las tablas y
+sus repositorios, el servicio de entradas y, desde el 2026-10-05, el
+**monitor de 60 s con los cierres, el equity, la pausa automática por
+drawdown, la reconciliación y `PARAR`** (ver "Monitor, cierres, equity y
+pausa", más abajo).
 
 | Tema | Decisión |
 |---|---|
@@ -604,6 +606,12 @@ falta el servicio que los conecta.
 | Entradas rechazadas o expiradas | **Devuelven todo lo que reservaban**: cupo de posición, tope de mayor riesgo y la entrada del día. Por eso la "entrada del día" cuenta solo órdenes `ENTRY` en `PENDING_APPROVAL` o `FILLED`. |
 | Estado de la pausa por drawdown | Tabla nueva `eventos_sistema`, **solo-agregar** (un trigger rechaza `UPDATE`/`DELETE`). Estado actual = tipo del último evento. **Reanudar fija un pico de equity nuevo igual al equity de ese momento** (si no, `equity <= pico × 0,85` volvería a pausar al instante) y guarda el pico anterior como registro. |
 | Entradas pendientes de aprobación | **Reservan cupo**: una orden `PENDING_APPROVAL` cuenta para las 4 posiciones, las 3 entradas del día y, si es de mayor riesgo, el tope de 1, hasta que se apruebe, rechace o expire. Evita que una entrada aprobada tarde rompa los topes. |
+| Cálculo del equity (2026-10-05) | **1.000 USD de capital + P&L neto realizado (comisiones incluidas) + P&L no realizado de las posiciones abiertas al último precio observado.** Se calcula como caja + valor de mercado (la comisión de entrada de una posición abierta se descuenta desde que se paga). Si falta el precio de alguna posición abierta, ese chequeo NO guarda equity: no se inventa un precio. |
+| Dónde se guarda el pico de equity (2026-10-05) | Tabla nueva `equity_observaciones`, **solo-agregar**: una fila por chequeo del monitor con equity y pico vigentes (~1.440 filas/día). El pico vigente es el de la última fila; sin filas, el capital. Sirve además de curva de equity para el Paso 9. |
+| Aprobar durante la pausa (2026-10-05) | **Bloqueado** (rechazar sí se permite). Confirmado por el usuario. |
+| Arranque con posiciones abiertas (2026-10-05) | El primer chequeo tras un reinicio revisa las posiciones con el **precio actual** y aplica las reglas de salida de inmediato; **nunca se cierra nada "por reinicio"**. |
+| Archivo `PARAR` (derivado del plan) | Bloquea solo las operaciones **nuevas** (abrir y aprobar entradas), como la pausa. El monitor sigue vigilando y ejecutando stops: el plan dice que "si Juan no responde, el stop sigue activo". |
+| Reconciliación al arrancar (derivado del plan) | En paper no hay exchange contra el cual comparar, así que verifica que `posiciones` y `ordenes` cuenten la misma historia. Ante cualquier discrepancia el monitor **se detiene sin actuar** (el plan: "notificar, bloquear operación hasta resolver"). |
 | Desempate de la selección | Orden: tier (NORMAL antes que MAYOR_RIESGO) → puntaje ponderado descendente → símbolo alfabético → id de propuesta. El plan no define el desempate; hace falta uno para que el resultado sea reproducible (ciclo y backtest). Solo es determinismo, no una preferencia por un activo; fácil de cambiar. |
 
 **Derivado del plan, sin pregunta aparte (corregir si no es lo que quieres):**
@@ -726,7 +734,7 @@ verifica). Qué hace:
   Binance, sin credenciales, solo símbolos de la whitelist, nunca un precio
   inventado ni viejo.
 
-**Decisión derivada (corregir si no es lo que quieres):** aprobar una entrada
+**Confirmado por el usuario (2026-10-05):** aprobar una entrada
 mientras el sistema está pausado por drawdown se **bloquea**. La pausa
 significa "no se abren entradas nuevas" y aprobar es abrir una, aunque su cupo
 se reservara antes de la pausa. Rechazarla sigue permitido.
@@ -813,6 +821,93 @@ Sigue pendiente, y depende de datos reales (no del Paso 8): fórmula
 definitiva del pre-filtro, evento comparable, ajuste final del scoring,
 ventanas del backtest, calibración numérica para capital real y si la racha
 en zona pasa de observación a criterio.
+
+## Monitor, cierres, equity y pausa (Paso 8, 2026-10-05)
+
+Todo sigue siendo dinero SIMULADO: no se usa ninguna credencial de Binance
+(solo el ticker público de precios) y nada de esto importa IA (un test de
+arquitectura lo verifica).
+
+**Qué hace un chequeo (`app/execution/monitor.py::run_monitor_tick`)**, en una
+sola transacción:
+
+1. toma el candado del equity (un solo monitor o reanudación a la vez);
+2. **reconcilia** el estado (`app/execution/reconciliation.py`); si algo no
+   cuadra lanza `ReconciliationBlocked` y no toca nada;
+3. expira las entradas pendientes vencidas (devuelve sus cupos);
+4. para cada posición abierta pide el precio y aplica las reglas
+   (`app/execution/position_manager.py`): stop -8% → cierre total;
+   +12% → vende el 50% y activa el trailing; trailing 6% desde el máximo →
+   cierra el resto. La orden de salida (`FILLED`, al precio **observado**) y
+   el cambio de la posición se escriben juntos o no se escribe nada; el
+   `client_order_id` es `exit-<posición>-<intención>`, así que un reintento no
+   vende dos veces. Cada posición va en su propio savepoint: el error de una no
+   deshace las demás;
+5. si TODAS las posiciones tuvieron precio y ninguna falló: calcula el equity,
+   guarda una fila en `equity_observaciones` con el pico vigente y, si el
+   drawdown llegó a -15% (la igualdad exacta ya pausa), registra la pausa en
+   `eventos_sistema`. Si falta un precio o hubo un error, ese chequeo NO
+   guarda equity.
+
+**Sin IA y sin comprar nada:** la pausa solo bloquea entradas nuevas; las
+posiciones abiertas siguen vigiladas y sus stops activos, también con `PARAR`.
+
+**Comandos de terminal** (cada uno es una transacción):
+
+```
+docker compose run --rm app python -m scripts.monitor              # un chequeo
+docker compose run --rm app python -m scripts.monitor --loop       # cada 60 s hasta Ctrl+C
+docker compose run --rm app python -m scripts.system_control status
+docker compose run --rm app python -m scripts.system_control resume
+```
+
+El monitor solo vigila **mientras corre y el PC está encendido** (limitación
+de correr en local): si estuvo apagado, el primer chequeo al volver revisa las
+posiciones con el precio de ese momento y aplica las reglas de salida de
+inmediato. Códigos de salida del chequeo único: 0 bien, 1 faltó un precio o
+una posición dio error, 2 la reconciliación detectó discrepancias. En
+`--loop` el monitor sigue tras un fallo de precio o de base de datos y solo
+se detiene (código 2) ante una discrepancia de reconciliación.
+
+**Reanudar (`system_control resume`)** es siempre manual. Necesita el equity de
+ese momento (precio de todas las posiciones abiertas; si falta uno no reanuda).
+Escribe el evento `REANUDACION` con el pico anterior y fija el pico nuevo igual
+al equity actual, y una fila de `equity_observaciones` con el mismo pico.
+
+**Parada de emergencia:** crear un archivo vacío llamado `PARAR` en la raíz del
+proyecto (la carpeta que contiene `app/`) frena las entradas nuevas (abrir y
+aprobar) sin reiniciar nada; borrarlo suelta el freno. `system_control status`
+avisa si está presente. Está en `.gitignore`.
+
+**Reconciliación de v1:** para cada posición verifica que tenga exactamente una
+orden de entrada ejecutada que coincida con su cantidad y precio, que
+`cantidad restante = inicial - ventas ejecutadas`, que `take_profit_hit`
+coincida con la existencia de la venta de TP parcial, que sus órdenes sean del
+mismo símbolo y que, si está abierta, su símbolo siga en la lista autorizada; y
+que ninguna orden ejecutada quede sin posición. No corrige nada. Cuando exista
+Binance real se agregará la comparación contra el exchange.
+
+**Tabla nueva `equity_observaciones` (migración `c5dbbf4b3553`):** solo-agregar
+(trigger que rechaza `UPDATE`/`DELETE`), con `peak_equity_usd >= equity_usd` y,
+si el origen es `REANUDACION`, `pico = equity`. Para aplicarla:
+`docker compose run --rm app alembic upgrade head` y lo mismo sobre la base
+`_test` (ver "Tests").
+
+**Corregido en este bloque:** `ordenes.created_at` usaba el reloj de la base de
+datos mientras que "entradas de hoy" se decide con el `now` del servicio; con
+una fecha de prueba distinta de la real, el tope de 3 entradas por día fallaba
+(dos tests empezaron a fallar al cambiar el día). Ahora los servicios guardan
+`created_at = now` (el reloj lógico), que además es lo reproducible para el
+backtest.
+
+Pendiente para el Paso 11 (necesita Telegram): los avisos de escalamiento (caída
+>5% en una hora, volumen >3σ, Binance caído >5 min) y empaquetar el monitor
+como proceso programado (APScheduler). Tests:
+`tests/unit/test_equity_rules.py`, `tests/unit/test_reconciliation.py`,
+`tests/unit/test_emergency_stop.py`, `tests/integration/test_position_manager.py`,
+`tests/integration/test_monitor.py`, `tests/integration/test_monitor_scripts.py`,
+`tests/integration/test_equity_observaciones.py`,
+`tests/integration/test_emergency_stop_entries.py`.
 
 ## Orquestación del ciclo diario (Paso 7 del plan)
 
@@ -1207,10 +1302,17 @@ app/
 ├── orchestration/
 │   ├── candidate_pipeline.py  # arma el bloque DATOS de cada agente desde la base (Paso 7)
 │   └── daily_cycle.py         # run_daily_cycle: el ciclo real completo (Paso 7)
-├── execution/, results/, ui/
+├── execution/              # motor de ejecución paper (Paso 8), sin IA
+│   ├── price_source.py     # precio del ticker público de Binance (sin credenciales)
+│   ├── order_manager.py    # entradas: abrir, aprobar, rechazar, expirar
+│   ├── position_manager.py # cierres: stop, TP parcial, trailing (órdenes de salida)
+│   ├── monitor.py          # un chequeo de 60 s: reconciliar, vigilar, equity, pausa
+│   ├── reconciliation.py   # el estado de posiciones y órdenes cuadra
+│   ├── system_control.py   # estado del sistema y reanudación manual
+│   └── emergency_stop.py   # archivo PARAR
+├── results/, ui/
 │   # paquetes reservados por la arquitectura del plan (sección 15.1),
-│   # todavía vacíos: se irán poblando fase a fase (Paso 8/9/10). Las
-│   # tablas del Paso 8 (`ordenes`, `posiciones`) ya existen en `db/models/`.
+│   # todavía vacíos (Paso 9/10).
 ├── repositories/
 │   ├── health.py           # health check de base de datos
 │   ├── candles.py          # persistencia + lectura idempotente de velas
@@ -1366,13 +1468,14 @@ prompt — "no sobreimplementar"):
   propuestas (sus reglas ya están decididas: ver "Decisiones del Paso 8") — `propuestas` queda como el registro de TODO lo que el
   Consolidador propuso, sin decidir todavía cuál se convierte en una
   posición real (Paso 8: `RISK_VALIDATION` en adelante de la sección 15.6).
-- Monitor de posiciones (60 s), cierres (stop, objetivo parcial, trailing),
-  cálculo de equity y pausa automática por drawdown, reconciliación al
-  arrancar y parada de emergencia (`PARAR`). Ya existen las tablas, los
-  repositorios, `risk.py`, la selección, la apertura de entradas y su
-  aprobación manual — ninguna credencial
-  de Binance se usa todavía; ni el cliente de velas ni el backfill la
-  necesitan.
+- Monitor como proceso permanente y programado (APScheduler, Paso 11) y los
+  avisos de escalamiento por Telegram (caída >5% en una hora, volumen >3σ,
+  Binance caído >5 min): hoy el monitor se lanza a mano con
+  `scripts.monitor --loop` y solo vigila mientras corre. `trade_snapshots`,
+  `trade_results` y `performance_metrics` (Paso 9): las salidas ya quedan como
+  órdenes `FILLED`, de donde se construirá el resultado definitivo. Ninguna
+  credencial de Binance se usa todavía; ni el cliente de velas, ni el backfill,
+  ni el monitor la necesitan.
 - Cálculo de resultados y métricas de performance.
 - Interfaz Streamlit.
 - Conexión a Telegram.

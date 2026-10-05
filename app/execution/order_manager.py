@@ -41,10 +41,11 @@ Garantías (P5):
   2026-10-04), no sobre el precio del análisis. El `decision_snapshot` de la
   propuesta no se toca nunca.
 
-Decisión derivada (no preguntada, ver README): aprobar una entrada mientras
-el sistema está pausado por drawdown se BLOQUEA. La pausa significa "no se
-abren entradas nuevas"; aprobar es abrir una, aunque su cupo se reservara
-antes de la pausa. Rechazarla sigue permitido.
+Aprobar una entrada mientras el sistema está pausado por drawdown se BLOQUEA
+(confirmado por el usuario el 2026-10-05). La pausa significa "no se abren
+entradas nuevas"; aprobar es abrir una, aunque su cupo se reservara antes de
+la pausa. Rechazarla sigue permitido. Lo mismo vale mientras exista el
+archivo `PARAR` (`app.execution.emergency_stop`).
 """
 
 from __future__ import annotations
@@ -71,6 +72,7 @@ from app.domain.rules.risk import (
     calculate_initial_levels,
     sistema_pausado,
 )
+from app.execution.emergency_stop import EmergencyStop, FileEmergencyStop
 from app.execution.price_source import PriceSource, PriceUnavailable
 from app.repositories.analysis import get_propuesta, get_propuestas_de_ciclo
 from app.repositories.orders import (
@@ -106,6 +108,7 @@ class ResultadoAprobacion(str, Enum):
     EXPIRADA = "EXPIRADA"
     NO_PENDIENTE = "NO_PENDIENTE"
     BLOQUEADA_POR_PAUSA = "BLOQUEADA_POR_PAUSA"
+    BLOQUEADA_POR_PARADA = "BLOQUEADA_POR_PARADA"
     SIN_PRECIO = "SIN_PRECIO"
 
 
@@ -141,7 +144,9 @@ def _limites_del_dia_utc(now: datetime) -> tuple[datetime, datetime]:
     return inicio, inicio + timedelta(days=1)
 
 
-def build_cupos(session: Session, now: datetime) -> SituacionDeCupos:
+def build_cupos(
+    session: Session, now: datetime, *, emergency_stop: EmergencyStop | None = None
+) -> SituacionDeCupos:
     """Foto de cupos para `select_entries`, con las entradas pendientes
     RESERVANDO cupo (decisión del 2026-10-04):
 
@@ -149,7 +154,9 @@ def build_cupos(session: Session, now: datetime) -> SituacionDeCupos:
     - entradas de hoy = órdenes `ENTRY` pendientes o ejecutadas creadas en el
       día UTC de `now` (rechazadas y expiradas no cuentan: devuelven el cupo);
     - mayor riesgo = abiertas + pendientes cuya propuesta es `MAYOR_RIESGO`;
-    - símbolos = los de las posiciones abiertas y los de las pendientes.
+    - símbolos = los de las posiciones abiertas y los de las pendientes;
+    - parada de emergencia = existe el archivo `PARAR` (ver
+      `app.execution.emergency_stop`).
     """
     _exigir_utc(now)
     abiertas = list_open_posiciones(session)
@@ -178,6 +185,7 @@ def build_cupos(session: Session, now: datetime) -> SituacionDeCupos:
         mayor_riesgo_abiertas=mayor_riesgo,
         simbolos_abiertos=frozenset([p.symbol for p in abiertas] + [o.symbol for o in pendientes]),
         sistema_pausado=sistema_pausado(ultimo_evento.event_type if ultimo_evento else None),
+        parada_emergencia=(emergency_stop or FileEmergencyStop()).is_active(),
     )
 
 
@@ -266,6 +274,7 @@ def _ejecutar_entrada_automatica(
             execution_price=price,
             fee=fee,
             filled_at=now,
+            created_at=now,
         ),
     )
     if not creada:  # pragma: no cover - descartado arriba; solo una carrera
@@ -290,6 +299,7 @@ def _crear_entrada_pendiente(
             estado=EstadoOrden.PENDING_APPROVAL,
             requested_usd=requested_usd,
             expires_at=vence,
+            created_at=now,
         ),
     )
     resultado = ResultadoEntrada.PENDIENTE_APROBACION if creada else ResultadoEntrada.YA_PROCESADA
@@ -320,12 +330,13 @@ def open_entries(
     *,
     now: datetime,
     price_source: PriceSource,
+    emergency_stop: EmergencyStop | None = None,
 ) -> ResultadoAperturaEntradas:
     """Procesa los candidatos de un ciclo (ver el docstring del módulo)."""
     _exigir_utc(now)
     expiradas = expire_pending_entries(session, now)
 
-    cupos = build_cupos(session, now)
+    cupos = build_cupos(session, now, emergency_stop=emergency_stop)
     seleccion = select_entries(candidatos, cupos)
 
     procesadas: list[EntradaProcesada] = []
@@ -364,11 +375,17 @@ def open_entries(
 
 
 def approve_pending_entry(
-    session: Session, orden_id: uuid.UUID, *, now: datetime, price_source: PriceSource
+    session: Session,
+    orden_id: uuid.UUID,
+    *,
+    now: datetime,
+    price_source: PriceSource,
+    emergency_stop: EmergencyStop | None = None,
 ) -> ResultadoAprobacion:
     """Aprueba una entrada `PENDING_APPROVAL` y la ejecuta en paper al precio
     de este momento. Si venció, la expira en vez de ejecutarla; si el sistema
-    está pausado por drawdown, la bloquea (ver el docstring del módulo)."""
+    está pausado por drawdown o existe el archivo `PARAR`, la bloquea (ver el
+    docstring del módulo)."""
     _exigir_utc(now)
     orden = get_orden(session, orden_id)
     if orden is None:
@@ -389,6 +406,8 @@ def approve_pending_entry(
     ultimo_evento = get_ultimo_evento_sistema(session)
     if sistema_pausado(ultimo_evento.event_type if ultimo_evento else None):
         return ResultadoAprobacion.BLOQUEADA_POR_PAUSA
+    if (emergency_stop or FileEmergencyStop()).is_active():
+        return ResultadoAprobacion.BLOQUEADA_POR_PARADA
 
     try:
         price = price_source.get_price(orden.symbol)

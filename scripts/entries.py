@@ -48,6 +48,10 @@ _MENSAJES_APROBACION = {
         "El sistema está pausado por drawdown: no se abren entradas nuevas. "
         "La orden sigue pendiente (puedes rechazarla)."
     ),
+    ResultadoAprobacion.BLOQUEADA_POR_PARADA: (
+        "Existe el archivo PARAR: no se abren entradas nuevas. "
+        "La orden sigue pendiente (puedes rechazarla)."
+    ),
     ResultadoAprobacion.SIN_PRECIO: "No se pudo obtener un precio válido de Binance; la orden sigue pendiente.",
 }
 

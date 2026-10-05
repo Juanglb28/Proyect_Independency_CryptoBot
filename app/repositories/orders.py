@@ -62,6 +62,11 @@ class OrdenRow:
     resolved_at: datetime | None = None
     filled_at: datetime | None = None
     detail: str | None = None
+    created_at: datetime | None = None
+    """Momento LÓGICO de la orden (el `now` del servicio). Si es `None`, la
+    base de datos pone su reloj. Los servicios lo pasan siempre: así "entradas
+    de hoy" se cuenta con el mismo reloj con que se decide (reproducible y sin
+    depender de la hora real de la máquina)."""
 
 
 def create_orden(session: Session, row: OrdenRow) -> tuple[uuid.UUID, bool]:
@@ -87,6 +92,8 @@ def create_orden(session: Session, row: OrdenRow) -> tuple[uuid.UUID, bool]:
         "filled_at": row.filled_at,
         "detail": row.detail,
     }
+    if row.created_at is not None:
+        values["created_at"] = row.created_at
     stmt = (
         pg_insert(Orden)
         .values(**values)

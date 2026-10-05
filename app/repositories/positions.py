@@ -107,6 +107,12 @@ def list_open_posiciones(session: Session) -> list[Posicion]:
     )
 
 
+def list_posiciones(session: Session) -> list[Posicion]:
+    """Todas las posiciones (abiertas y cerradas), de la más antigua a la más
+    reciente, con desempate por `id`. Para la reconciliación."""
+    return list(session.execute(select(Posicion).order_by(Posicion.opened_at, Posicion.id)).scalars())
+
+
 def count_open_posiciones(session: Session) -> int:
     return int(
         session.execute(

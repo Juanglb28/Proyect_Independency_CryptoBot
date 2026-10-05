@@ -106,3 +106,14 @@ def db_session(db_engine) -> Iterator[Session]:
         session.close()
         outer_transaction.rollback()
         connection.close()
+
+
+@pytest.fixture(autouse=True)
+def _sin_archivo_parar(tmp_path, monkeypatch):
+    """Ningún test debe depender de que exista (o no) un archivo `PARAR` real
+    en la raíz del proyecto de quien corre la suite: se apunta a una ruta
+    temporal vacía. Los tests de la parada de emergencia crean ese archivo
+    ahí o inyectan su propio `EmergencyStop`."""
+    from app.execution import emergency_stop
+
+    monkeypatch.setattr(emergency_stop, "PARAR_PATH", tmp_path / "PARAR")

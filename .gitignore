@@ -1,6 +1,9 @@
 # Secretos y configuración local
 .env
 
+# Interruptor de emergencia (archivo vacío que frena las entradas nuevas)
+/PARAR
+
 # Python
 __pycache__/
 *.py[cod]
@@ -23,3 +26,7 @@ pgdata/
 .vscode/
 .idea/
 .DS_Store
+
+# Cobertura (coverage.py)
+.coverage
+htmlcov/

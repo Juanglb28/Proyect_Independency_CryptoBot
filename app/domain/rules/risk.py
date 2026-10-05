@@ -39,11 +39,12 @@ razonable), así que aquí solo se valida el tope absoluto de 250 USD.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import ROUND_DOWN, ROUND_HALF_EVEN, Decimal
 from enum import Enum
 
-from app.domain.enums import IntencionOrden, TierEntrada, TipoEventoSistema
+from app.domain.enums import IntencionOrden, LadoOrden, TierEntrada, TipoEventoSistema
 from app.domain.symbols import ALLOWED_SYMBOLS
 
 # --- Reglas fijas de la sección 9 del plan -------------------------------
@@ -267,6 +268,59 @@ def evaluate_position(estado: EstadoParaMonitor, observed_price: Decimal) -> Dec
 # --- Drawdown del sistema ------------------------------------------------
 
 
+@dataclass(frozen=True)
+class OrdenEjecutada:
+    """Una orden `FILLED` tal como la necesita el cálculo de equity."""
+
+    side: LadoOrden
+    quantity: Decimal
+    execution_price: Decimal
+    fee: Decimal
+
+
+@dataclass(frozen=True)
+class PosicionMarcada:
+    """Una posición abierta valorada al precio observado en este chequeo."""
+
+    remaining_quantity: Decimal
+    observed_price: Decimal
+
+
+def calculate_equity(
+    *,
+    initial_capital: Decimal,
+    filled_orders: Sequence[OrdenEjecutada],
+    open_positions: Sequence[PosicionMarcada],
+) -> Decimal:
+    """Equity = capital inicial + P&L neto realizado (comisiones incluidas) +
+    P&L no realizado de las posiciones abiertas al precio observado
+    (decisión del 2026-10-05).
+
+    Se calcula como caja + valor de mercado, lo que es exactamente esa suma:
+
+    - caja = capital - Σ(compras: cantidad × precio + comisión)
+                     + Σ(ventas: cantidad × precio - comisión);
+    - valor de mercado = Σ(cantidad restante × precio observado).
+
+    La comisión de entrada de una posición todavía abierta se descuenta desde
+    el momento en que se paga (es dinero que ya salió), no al cerrar.
+    Reconstruible en cualquier momento a partir de `ordenes` y `posiciones`;
+    no depende de ningún contador guardado.
+
+    Sin redondeos intermedios (los productos son exactos en `Decimal`); solo
+    el resultado final se redondea a la escala de USD de la base."""
+    _exigir_positivo("initial_capital", initial_capital)
+    caja = initial_capital
+    for orden in filled_orders:
+        valor = orden.quantity * orden.execution_price
+        if orden.side == LadoOrden.BUY:
+            caja -= valor + orden.fee
+        else:
+            caja += valor - orden.fee
+    mercado = sum((p.remaining_quantity * p.observed_price for p in open_positions), Decimal(0))
+    return _usd(caja + mercado)
+
+
 def update_peak_equity(peak_equity: Decimal, equity: Decimal) -> Decimal:
     """El pico de equity solo sube (nunca se reduce)."""
     _exigir_positivo("peak_equity", peak_equity)
@@ -306,6 +360,7 @@ def sistema_pausado(ultimo_evento: TipoEventoSistema | None) -> bool:
 
 class MotivoRechazoEntrada(str, Enum):
     SISTEMA_PAUSADO = "SISTEMA_PAUSADO"
+    PARADA_DE_EMERGENCIA = "PARADA_DE_EMERGENCIA"
     SIMBOLO_NO_PERMITIDO = "SIMBOLO_NO_PERMITIDO"
     TIER_NO_CALIFICA = "TIER_NO_CALIFICA"
     SIMBOLO_YA_ABIERTO = "SIMBOLO_YA_ABIERTO"
@@ -339,6 +394,10 @@ class SituacionDeCupos:
     mayor_riesgo_abiertas: int
     simbolos_abiertos: frozenset[str]
     sistema_pausado: bool
+    parada_emergencia: bool = False
+    """El archivo `PARAR` existe (sección 9 del plan: detiene toda operación
+    nueva sin matar el proceso). Como la pausa, solo bloquea entradas
+    nuevas: las posiciones abiertas siguen vigiladas y sus stops activos."""
 
 
 @dataclass(frozen=True)
@@ -365,6 +424,8 @@ def validate_entry(
 
     if cupos.sistema_pausado:
         motivos.append(MotivoRechazoEntrada.SISTEMA_PAUSADO)
+    if cupos.parada_emergencia:
+        motivos.append(MotivoRechazoEntrada.PARADA_DE_EMERGENCIA)
     if symbol not in ALLOWED_SYMBOLS:
         motivos.append(MotivoRechazoEntrada.SIMBOLO_NO_PERMITIDO)
     if tier == TierEntrada.NINGUNO:

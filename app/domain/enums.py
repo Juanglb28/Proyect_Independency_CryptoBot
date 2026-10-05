@@ -157,3 +157,17 @@ class TipoEventoSistema(str, Enum):
 
     PAUSA_DRAWDOWN = "PAUSA_DRAWDOWN"
     REANUDACION = "REANUDACION"
+
+
+class OrigenObservacionEquity(str, Enum):
+    """Quién escribió una fila de `equity_observaciones`.
+
+    - `MONITOR`: un chequeo normal del monitor (cada 60 s).
+    - `REANUDACION`: el usuario reanudó a mano tras una pausa por drawdown; la
+      fila fija el pico de equity nuevo igual al equity de ese momento.
+
+    Se guarda como VARCHAR validado (`native_enum=False`), igual que el resto
+    de enums."""
+
+    MONITOR = "MONITOR"
+    REANUDACION = "REANUDACION"

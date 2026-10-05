@@ -9,10 +9,11 @@ from app.db.models.ai_calls import LlamadaIA
 from app.db.models.analysis import CicloAnalisis
 from app.db.models.candles import Vela
 from app.db.models.event_analysis import AnalisisEvento
+from app.db.models.equity import EquityObservacion
 from app.db.models.events import Evento
 from app.db.models.indicators import Indicador
 from app.db.models.orders import Orden
 from app.db.models.positions import Posicion
 from app.db.models.system_events import EventoSistema
 
-__all__ = ["Vela", "Indicador", "Evento", "CicloAnalisis", "AnalisisEvento", "LlamadaIA", "Orden", "Posicion", "EventoSistema"]
+__all__ = ["Vela", "Indicador", "Evento", "CicloAnalisis", "AnalisisEvento", "LlamadaIA", "Orden", "Posicion", "EventoSistema", "EquityObservacion"]
