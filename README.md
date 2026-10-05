@@ -1066,6 +1066,35 @@ configurada):
 schtasks /run /tn "CryptoTradingPlatform_DailyCycle"
 ```
 
+**Si el PC está apagado a la hora programada (hallazgo 2026-10-05):** una
+tarea creada con `schtasks /create` no trae activada la opción "ejecutar
+lo antes posible si se perdió el inicio programado". Con el PC apagado a
+las 10:00, Windows simplemente se salta esa corrida y no queda ningún log
+(el script ni siquiera arrancó: `logs/` no tiene archivo de ese día). Para
+que, al encender el PC, la tarea corra sola lo antes posible, activar esa
+opción una sola vez (PowerShell):
+
+```powershell
+$s = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 2)
+Set-ScheduledTask -TaskName "CryptoTradingPlatform_DailyCycle" -Settings $s
+```
+
+Comprobar el último resultado de la tarea (`LastRunTime` y
+`LastTaskResult`; 0 = terminó bien):
+
+```powershell
+Get-ScheduledTaskInfo -TaskName "CryptoTradingPlatform_DailyCycle"
+```
+
+Dos límites que conviene conocer: la tarea solo corre con tu sesión de
+Windows iniciada (es el comportamiento de `schtasks /create` sin `/ru`),
+así que con el PC encendido pero sin iniciar sesión tampoco corre; y un
+ciclo que arranca después de las 19:00 hora de Colombia (00:00 UTC) cae en
+el **día UTC siguiente**, lo que cambia a qué día cuentan sus entradas y
+cuándo vencen las aprobaciones pendientes. Si el ciclo del día se perdió,
+correrlo a mano con `powershell -File scripts\run_daily_cycle.ps1` antes
+de esa hora.
+
 **Costo estimado:** ~$0.49 USD por ciclo con candidatos reales (sección 4.3
 del plan proyecta 12-20 llamadas diarias, por debajo de 8 USD/mes) — 30
 días de ciclos completos rondan los 15 USD/mes.
