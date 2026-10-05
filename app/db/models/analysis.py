@@ -54,9 +54,10 @@ versión de modelo y de prompt de cada agente. Deliberadamente NO incluye
 `app/domain/rules/risk.py`; crearlo sin ninguna posición real que proteger
 sería sobreimplementar (sección 29 del master prompt).
 
-    TODO — DECISIÓN PENDIENTE (Paso 8): agregar `initial_stop`/
-    `initial_target` al decision_snapshot cuando exista
-    `app/domain/rules/risk.py` con las reglas fijas de la sección 19.
+    DECIDIDO (Paso 8): `initial_stop`/`initial_target` NO se agregan aquí. Se
+    calculan al abrir la posición sobre el precio de EJECUCIÓN real y quedan
+    inmutables en `posiciones.initial_stop_price`/`initial_target_price`; este
+    snapshot no se reescribe.
 
 Una vez creada, ninguna fila de `Propuesta` (ni su `decision_snapshot`) se
 modifica — es historia congelada (sección 14: "no modificar

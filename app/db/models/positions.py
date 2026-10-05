@@ -35,7 +35,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import Boolean, CheckConstraint, DateTime, Enum, ForeignKey, Index, Numeric, func, text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -99,6 +99,13 @@ class Posicion(Base):
     trailing_peak_price: Mapped[Decimal | None] = mapped_column(Numeric(30, 12), nullable=True)
     """Precio máximo observado desde que se activó el trailing, actualizado
     en cada chequeo y nunca a la baja (derivado del plan, ver README)."""
+
+    reference_prices_at_entry: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    """Precios observados al abrir de BTC y de los pares del universo
+    (`{"BTCUSDT": "67000.5", ...}`, precios como texto para no pasar por
+    float), para el benchmark de la operación (Paso 9, decisión del
+    2026-10-05). Se escribe UNA vez al crear la posición y nunca cambia. Solo
+    trae los pares cuyo precio se pudo obtener: lo que falta no se inventa."""
 
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

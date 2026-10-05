@@ -217,3 +217,11 @@ def test_resume_sin_estar_pausado_y_sin_precio(db_session):
     assert "no estaba pausado" in "\n".join(_control(db_session, "resume"))
     _pausar(db_session)
     assert "SIN_PRECIO" in "\n".join(_control(db_session, "resume", {}))
+
+
+def test_format_tick_avisa_de_resultados_reparados(db_session):
+    import dataclasses
+
+    res = run_monitor_tick(db_session, now=_t(1), price_source=FakePrices({}), initial_capital=CAPITAL)
+    texto = "\n".join(format_tick(dataclasses.replace(res, resultados_reparados=2), _t(1)))
+    assert "generados por reparación: 2" in texto

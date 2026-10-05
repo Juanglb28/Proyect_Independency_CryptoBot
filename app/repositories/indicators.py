@@ -8,6 +8,9 @@ de negocio). No calcula nada — eso vive en
 
 from __future__ import annotations
 
+from datetime import datetime
+from decimal import Decimal
+
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
@@ -109,3 +112,26 @@ def get_indicators(session: Session, symbol: str, timeframe: str) -> list[Indica
         )
         for row in rows
     ]
+
+
+def get_latest_indicator_value(
+    session: Session, *, symbol: str, timeframe: str, indicator_name: str, calculated_at_or_before: datetime
+) -> Decimal | None:
+    """Último valor de un indicador con `calculated_at <= límite`, o `None`.
+
+    `calculated_at` es el `open_time` de la vela sobre la que se calculó. Quien
+    llama resta la duración de la temporalidad al instante de decisión para
+    usar solo velas YA CERRADAS en ese instante (sin look-ahead, sección 15
+    del plan); esta capa solo aplica el límite que recibe.
+    """
+    return session.execute(
+        select(Indicador.value)
+        .where(
+            Indicador.symbol == symbol,
+            Indicador.timeframe == timeframe,
+            Indicador.indicator_name == indicator_name,
+            Indicador.calculated_at <= calculated_at_or_before,
+        )
+        .order_by(Indicador.calculated_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()

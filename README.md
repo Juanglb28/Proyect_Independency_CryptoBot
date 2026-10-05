@@ -909,6 +909,113 @@ como proceso programado (APScheduler). Tests:
 `tests/integration/test_equity_observaciones.py`,
 `tests/integration/test_emergency_stop_entries.py`.
 
+## Resultados, snapshots y métricas (Paso 9, 2026-10-05)
+
+Todo sigue siendo dinero SIMULADO y sin IA: las fórmulas viven en
+`app/domain/rules/results.py` (puras, `Decimal`, 100% cubiertas) y los
+servicios de `app/results/` solo juntan datos, llaman a esas funciones y
+guardan. El flujo del plan (sección 8.2):
+
+```
+decisión → posición → trade_snapshots → trade_result → performance_metrics
+```
+
+**Qué guarda cada tabla (todas con `NUMERIC`, `TIMESTAMPTZ` en UTC):**
+
+| Tabla | Qué es | Reglas en la base de datos |
+|---|---|---|
+| `trade_snapshots` | Trayectoria de una posición abierta: un snapshot por chequeo (`SCHEDULED`) y uno por evento (`ENTRY`, `PARTIAL_TAKE_PROFIT`, `TRAILING_ACTIVATED`, `TRAILING_UPDATED`, `SYSTEM_PAUSED`, `EXIT`) | Solo-agregar (trigger). Único por `(posición, instante, estado)`: un reintento no duplica |
+| `trade_results` | Resultado definitivo de una operación cerrada: P&L bruto/neto, comisiones, R-multiple, MAE/MFE, scores iniciales, estado de tesis, motivo de salida, benchmark | Solo-agregar (trigger). Un solo resultado por posición (`position_id` único). CHECK de coherencia |
+| `performance_metrics` | Métricas agregadas: global, por activo y por tercil del score | Derivada y reconstruible: recalcular el mismo periodo REEMPLAZA la fila |
+
+Además `posiciones.reference_prices_at_entry` (JSONB, se escribe una sola vez
+al abrir): los precios de BTC y de los 20 pares observados en ese instante.
+
+### Decisiones del Paso 9 (cerradas con el usuario el 2026-10-05)
+
+1. **Salidas parciales → un solo resultado.** `exit_quantity` = suma de las
+   ventas; `exit_price` = promedio ponderado por cantidad; `exit_fee` = suma de
+   comisiones; `exit_order_id`, `exit_time` y `exit_reason` son los de la orden
+   que CERRÓ la posición (p. ej. `TRAILING_STOP`). El P&L usa el flujo real de
+   órdenes, no un único precio de salida.
+2. **`thesis_status` por desenlace**, sin leer el texto libre de la invalidación
+   ni usar un LLM. En orden: `STOP_LOSS` → `INVALIDATED`; salida ajena a la tesis
+   (manual, drawdown del sistema, reconciliación, emergencia, otra) →
+   `INCONCLUSIVE`; P&L neto > 0 con TP parcial ejecutado → `CONFIRMED`; P&L neto
+   > 0 sin TP → `PARTIALLY_CONFIRMED`; cualquier otro caso → `INCONCLUSIVE`. Cuando
+   la invalidación sea una condición medible (cambio del esquema del
+   Consolidador) se podrá refinar; hoy no lo es.
+3. **Benchmark con precios OBSERVADOS al abrir y al cerrar** (idea del usuario,
+   en vez de las velas, que solo se ingieren una vez al día). El monitor de 60 s
+   ya consulta precios; al abrir se guardan los de BTC y los 20 pares, y al
+   cerrar se vuelven a consultar. `btc_return_during_trade_pct` es el retorno de
+   BTC entre ambos instantes y `market_return_during_trade_pct` el promedio
+   SIMPLE de los 20 pares. Si falta el precio de cualquier par en cualquiera de
+   los dos instantes, el campo queda `NULL` (nunca se inventa ni se promedia con
+   menos pares). Costo: ~20 consultas extra solo al abrir y al cerrar.
+4. **`score_discrimination`** = expectancy del tercil superior − la del
+   inferior, con expectancy = P&L neto medio en USD (todas las posiciones son de
+   100 USD). Score = `puntaje_ponderado` inicial. Orden descendente, empates por
+   fecha de entrada y luego por id; `k = n // 3` por extremo, el resto queda fuera.
+   Bootstrap de 1.000 iteraciones con semilla fija (`20261005`): remuestreo con
+   reemplazo, terciles recalculados en cada remuestreo, IC 95% por rango más
+   cercano (elementos 25 y 975 de 1.000). Discrimina si el límite inferior es
+   > 0. Con menos de 3 operaciones con score: `MUESTRA_INSUFICIENTE`; de 3 a 29:
+   `PRELIMINAR` (se calcula pero el plan pide 30); desde 30: `EVALUABLE`.
+
+### Derivado por mí (el usuario puede corregirlo)
+
+- **Registrar nunca bloquea operar.** Los snapshots y el `trade_result` se
+  escriben en savepoints propios, después de la orden: si fallan, se registra el
+  error y el stop/entrada sigue su curso. El monitor repara en cada chequeo las
+  posiciones cerradas sin resultado (`ensure_trade_results`; sin precios de
+  salida, así que sus benchmarks quedan `NULL`).
+- **Sin `trade_snapshots.trade_result_id`.** El plan lo lista, pero rellenarlo al
+  cerrar exigiría ACTUALIZAR un snapshot, y la regla del propio plan es no
+  sobrescribirlos. El vínculo es `position_id`.
+- **Snapshots que no se emiten todavía:** `TARGET_REACHED` (coincide siempre con
+  `PARTIAL_TAKE_PROFIT`), `STOP_UPDATED` (el stop no se mueve en v1; el trailing se
+  ve en `TRAILING_UPDATED`), `RISK_ALERT` (escalamientos, Paso 11) y
+  `RECONCILIATION` (el monitor se detiene sin precios ante una discrepancia).
+  Son valores válidos de `system_state`.
+- **Columnas de un snapshot:** `quantity` es la cantidad ANTES de la venta en
+  `PARTIAL_TAKE_PROFIT` y `EXIT`; `unrealized_pnl` = `cantidad × (precio −
+  entrada)` sin comisiones; `stop_price` es el stop inicial o, con trailing, su
+  nivel (máximo × 94%); `target_price` es `NULL` tras el TP parcial;
+  `distance_to_stop_pct` = `(precio − stop) / precio × 100`; `market_volume` es
+  `NULL` (la fuente de precios solo entrega precio); `atr` y `relative_volume`
+  son de la temporalidad de 1h; todos los indicadores salen de velas ya CERRADAS
+  en ese instante (sin look-ahead) y pueden tener horas de antigüedad, porque se
+  recalculan una vez al día.
+- **`capital_at_entry`** = equity de la última observación anterior a la entrada,
+  o el capital paper si no había ninguna. No interviene en ningún cálculo de v1.
+- **`initial_risk_score` e `initial_confidence_score` quedan `NULL`:** el sistema
+  solo produce un score numérico (`puntaje_ponderado` → `initial_opportunity_score`);
+  riesgo y confianza son cualitativos (están en el `decision_snapshot`).
+- **`total_return_pct`** = P&L neto sobre el capital inicial del sistema;
+  `max_drawdown_*` se guardan negativos (o 0) como en la fórmula del plan, y solo
+  en el alcance `GLOBAL` (curva de `equity_observaciones`); el benchmark de
+  periodo (BTC comprado y mantenido, velas de 1h ya cerradas) también solo en
+  `GLOBAL`; `expectancy_pct` usa perdedoras/total como probabilidad de perder
+  (los equilibrios aportan 0).
+- **No existe el alcance "estrategia"** de `performance_metrics`: no hay
+  versiones de estrategia registradas todavía.
+- **`TODO — DECISIÓN PENDIENTE`:** mecanismo de corrección auditable de un
+  `trade_result` (el plan pide "nueva versión", no reescribir). Ninguna regla de
+  v1 lo necesita; hasta definirlo, una corrección exige una decisión humana.
+
+### Comandos
+
+```
+docker compose run --rm app python -m scripts.results trades                 # operaciones cerradas
+docker compose run --rm app python -m scripts.results performance [--days 30]  # recalcula y muestra métricas
+docker compose run --rm app python -m scripts.results validate               # ¿el score discrimina?
+```
+
+`performance` guarda en `performance_metrics`; `validate` no guarda nada. Hasta
+tener ~30 operaciones el resultado de `validate` es solo orientativo
+(`PRELIMINAR`): el plan fija ese mínimo para dar una respuesta.
+
 ## Orquestación del ciclo diario (Paso 7 del plan)
 
 ```bash
@@ -1310,7 +1417,13 @@ app/
 │   ├── reconciliation.py   # el estado de posiciones y órdenes cuadra
 │   ├── system_control.py   # estado del sistema y reanudación manual
 │   └── emergency_stop.py   # archivo PARAR
-├── results/, ui/
+├── results/                # resultados de operaciones (Paso 9), sin IA
+│   ├── snapshot_service.py     # trade_snapshots: trayectoria solo-agregar
+│   ├── trade_result_service.py # trade_results: resultado único e inmutable por posición
+│   ├── benchmark_service.py    # benchmark del periodo (BTC, velas 1h cerradas)
+│   ├── performance_service.py  # performance_metrics (derivadas, reconstruibles)
+│   └── validation_service.py   # ¿el score discrimina? (bootstrap)
+├── ui/
 │   # paquetes reservados por la arquitectura del plan (sección 15.1),
 │   # todavía vacíos (Paso 9/10).
 ├── repositories/
@@ -1323,6 +1436,7 @@ app/
 │   └── analysis.py         # persistencia de ciclos_analisis/propuestas/factores
 migrations/                # Alembic
 scripts/
+├── results.py                    # CLI: trades / performance / validate (Paso 9)
 ├── backfill_candles.py          # CLI: backfill histórico completo
 ├── calculate_indicators.py      # CLI: cálculo masivo de indicadores
 ├── verify_indicators.py         # CLI: verificación de integridad de indicadores
@@ -1431,6 +1545,12 @@ puede y no puede hacer cada capa.
   (con `decision_snapshot` congelado) y `factores`. Comando
   `python -m scripts.run_daily_cycle`. Ver "Orquestación del ciclo diario
   (Paso 7 del plan)" más arriba.
+- Resultados, snapshots y métricas (Paso 9): `trade_snapshots` y
+  `trade_results` solo-agregar (triggers), `performance_metrics` derivadas y
+  reconstruibles, fórmulas puras en `app/domain/rules/results.py`
+  (`calculate_trade_result`, `calculate_performance`,
+  `validate_score_discrimination`) y comandos `python -m scripts.results`.
+  Ver "Resultados, snapshots y métricas (Paso 9)" más arriba.
 - Tests unitarios (configuración, validaciones del cliente de Binance,
   dispatch de `main`, lógica de paginación del backfill con una fuente
   falsa, fórmulas de indicadores y de análisis de eventos contra casos
@@ -1460,10 +1580,10 @@ prompt — "no sobreimplementar"):
   catálogo real ya cargado (Fase 2). `analisis_eventos` es el insumo, no
   esa definición.
 - Agente 1 (Entrevistador, conversacional — diferido a Paso 10/Streamlit).
-- Conectar `risk.py` al `decision_snapshot`: el módulo ya existe, pero
-  `decision_snapshot` todavía no incluye `initial_stop`/`initial_target`
-  (`TODO — DECISIÓN PENDIENTE` en `app/db/models/analysis.py`): se agregan
-  cuando exista el servicio que abre posiciones.
+- `initial_stop`/`initial_target` NO están en el `decision_snapshot` (que no
+  se reescribe): se calculan al ABRIR sobre el precio de ejecución real y quedan
+  inmutables en `posiciones.initial_stop_price` / `initial_target_price`
+  (decisión del Paso 8).
 - Validación de riesgo, aprobación (manual u órdenes paper) y ejecución de
   propuestas (sus reglas ya están decididas: ver "Decisiones del Paso 8") — `propuestas` queda como el registro de TODO lo que el
   Consolidador propuso, sin decidir todavía cuál se convierte en una
@@ -1471,12 +1591,14 @@ prompt — "no sobreimplementar"):
 - Monitor como proceso permanente y programado (APScheduler, Paso 11) y los
   avisos de escalamiento por Telegram (caída >5% en una hora, volumen >3σ,
   Binance caído >5 min): hoy el monitor se lanza a mano con
-  `scripts.monitor --loop` y solo vigila mientras corre. `trade_snapshots`,
-  `trade_results` y `performance_metrics` (Paso 9): las salidas ya quedan como
-  órdenes `FILLED`, de donde se construirá el resultado definitivo. Ninguna
-  credencial de Binance se usa todavía; ni el cliente de velas, ni el backfill,
-  ni el monitor la necesitan.
-- Cálculo de resultados y métricas de performance.
+  `scripts.monitor --loop` y solo vigila mientras corre. Ninguna credencial de
+  Binance se usa todavía; ni el cliente de velas, ni el backfill, ni el monitor
+  la necesitan.
+- Corrección auditable de un `trade_result` y alcance "estrategia" de las
+  métricas (ver "Resultados, snapshots y métricas"), y los snapshots
+  `RISK_ALERT` (Paso 11).
+- Ajuste de pesos o umbrales con los resultados: el plan lo prohíbe sin
+  registrar antes una nueva versión de estrategia (sección 8.7).
 - Interfaz Streamlit.
 - Conexión a Telegram.
 

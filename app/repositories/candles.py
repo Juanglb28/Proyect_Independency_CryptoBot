@@ -8,6 +8,9 @@ eso vive en `app/data/candle_ingestion.py`.
 
 from __future__ import annotations
 
+from datetime import datetime
+from decimal import Decimal
+
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
@@ -93,3 +96,36 @@ def get_candles(session: Session, symbol: str, timeframe: str) -> list[Candle]:
         )
         for row in rows
     ]
+
+
+def get_close_at_or_before(
+    session: Session, symbol: str, timeframe: str, *, open_time_at_or_before: datetime
+) -> tuple[datetime, Decimal] | None:
+    """`(open_time, close)` de la última vela con `open_time <= límite`, o
+    `None`. Quien llama calcula el límite para que la vela ya esté CERRADA en
+    el instante que le interesa (`instante - duración de la vela`)."""
+    row = session.execute(
+        select(Vela.open_time, Vela.close)
+        .where(Vela.symbol == symbol, Vela.timeframe == timeframe, Vela.open_time <= open_time_at_or_before)
+        .order_by(Vela.open_time.desc())
+        .limit(1)
+    ).one_or_none()
+    return None if row is None else (row[0], row[1])
+
+
+def get_closes_between(
+    session: Session, symbol: str, timeframe: str, *, open_time_from: datetime, open_time_to: datetime
+) -> list[tuple[datetime, Decimal]]:
+    """`(open_time, close)` de las velas con `open_time` en `[desde, hasta]`,
+    de la más antigua a la más reciente."""
+    rows = session.execute(
+        select(Vela.open_time, Vela.close)
+        .where(
+            Vela.symbol == symbol,
+            Vela.timeframe == timeframe,
+            Vela.open_time >= open_time_from,
+            Vela.open_time <= open_time_to,
+        )
+        .order_by(Vela.open_time.asc())
+    ).all()
+    return [(r[0], r[1]) for r in rows]

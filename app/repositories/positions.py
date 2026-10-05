@@ -46,6 +46,9 @@ class PosicionRow:
     initial_stop_price: Decimal
     initial_target_price: Decimal
     opened_at: datetime
+    reference_prices_at_entry: dict | None = None
+    """Precios de referencia al abrir (ver `Posicion.reference_prices_at_entry`);
+    se guardan tal cual y no se pueden modificar después."""
 
 
 def create_posicion(session: Session, row: PosicionRow) -> tuple[uuid.UUID, bool]:
@@ -65,6 +68,7 @@ def create_posicion(session: Session, row: PosicionRow) -> tuple[uuid.UUID, bool
             initial_stop_price=row.initial_stop_price,
             initial_target_price=row.initial_target_price,
             opened_at=row.opened_at,
+            reference_prices_at_entry=row.reference_prices_at_entry,
         )
         .on_conflict_do_nothing(index_elements=["proposal_id"])
         .returning(Posicion.id)

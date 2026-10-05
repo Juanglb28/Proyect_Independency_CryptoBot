@@ -29,6 +29,10 @@ _PROHIBIDO: dict[str, tuple[str, ...]] = {
     "repositories": ("anthropic", "app.ai", "streamlit", "app.ui", "app.domain.rules", "app.execution"),
     # La UI no toca SQL ni la base directamente (UI -> servicios -> repositorios).
     "ui": ("sqlalchemy", "psycopg", "app.db", "app.repositories", "anthropic"),
+    # Medición y validación: calculan y guardan resultados, sin IA, sin UI y
+    # sin depender del motor de ejecución (la dependencia va al revés: el
+    # monitor registra sus resultados a través de `results`).
+    "results": ("anthropic", "app.ai", "streamlit", "app.ui", "app.execution"),
     # La capa de datos no ejecuta órdenes ni depende de la ejecución.
     "data": ("app.execution", "streamlit", "app.ui"),
 }

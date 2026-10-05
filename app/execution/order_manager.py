@@ -65,6 +65,7 @@ from app.domain.rules.execution import (
     EntradaDescartada,
     select_entries,
 )
+from app.domain.rules.results import serialize_prices
 from app.domain.rules.risk import (
     SituacionDeCupos,
     calculate_entry_quantity,
@@ -74,6 +75,8 @@ from app.domain.rules.risk import (
 )
 from app.execution.emergency_stop import EmergencyStop, FileEmergencyStop
 from app.execution.price_source import PriceSource, PriceUnavailable
+from app.execution.reference_prices import fetch_reference_prices
+from app.execution.results_recorder import record_entry
 from app.repositories.analysis import get_propuesta, get_propuestas_de_ciclo
 from app.repositories.orders import (
     OrdenRow,
@@ -85,7 +88,7 @@ from app.repositories.orders import (
     list_pending_orders_expired_at,
     resolve_pending_order,
 )
-from app.repositories.positions import PosicionRow, create_posicion, list_open_posiciones
+from app.repositories.positions import PosicionRow, create_posicion, get_posicion, list_open_posiciones
 from app.repositories.system_events import get_ultimo_evento_sistema
 
 logger = logging.getLogger(__name__)
@@ -214,8 +217,19 @@ def _valores_de_ejecucion(requested_usd: Decimal, price: Decimal):
 
 
 def _abrir_posicion(
-    session: Session, *, proposal_id: uuid.UUID, symbol: str, quantity: Decimal, price: Decimal, niveles, now: datetime
+    session: Session,
+    *,
+    proposal_id: uuid.UUID,
+    symbol: str,
+    quantity: Decimal,
+    price: Decimal,
+    niveles,
+    now: datetime,
+    price_source: PriceSource,
 ) -> uuid.UUID:
+    # Precios de referencia para el benchmark de la operación (Paso 9): los
+    # observados ahora mismo; el del propio símbolo es el de ejecución.
+    referencia = fetch_reference_prices(price_source, known={symbol: price})
     posicion_id, creada = create_posicion(
         session,
         PosicionRow(
@@ -226,6 +240,7 @@ def _abrir_posicion(
             initial_stop_price=niveles.stop_price,
             initial_target_price=niveles.target_price,
             opened_at=now,
+            reference_prices_at_entry=serialize_prices(referencia),
         ),
     )
     if not creada:
@@ -257,6 +272,7 @@ def _ejecutar_entrada_automatica(
         price=price,
         niveles=niveles,
         now=now,
+        price_source=price_source,
     )
     orden_id, creada = create_orden(
         session,
@@ -279,6 +295,7 @@ def _ejecutar_entrada_automatica(
     )
     if not creada:  # pragma: no cover - descartado arriba; solo una carrera
         raise RuntimeError(f"client_order_id {client_order_id!r} apareció durante la ejecución")
+    record_entry(session, get_posicion(session, posicion_id), now=now)
     return EntradaProcesada(
         candidato.proposal_id, candidato.symbol, ResultadoEntrada.ABIERTA, orden_id=orden_id, posicion_id=posicion_id
     )
@@ -423,6 +440,7 @@ def approve_pending_entry(
         price=price,
         niveles=niveles,
         now=now,
+        price_source=price_source,
     )
     resuelta = resolve_pending_order(
         session,
@@ -440,6 +458,7 @@ def approve_pending_entry(
         # para revertir también la posición recién creada.
         raise RuntimeError(f"La orden {orden.id} dejó de estar pendiente durante la aprobación")
 
+    record_entry(session, get_posicion(session, posicion_id), now=now)
     _log("entrada aprobada", orden_id=orden.id, symbol=orden.symbol, posicion_id=posicion_id)
     return ResultadoAprobacion.APROBADA
 

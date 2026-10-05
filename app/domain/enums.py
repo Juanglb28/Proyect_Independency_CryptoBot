@@ -171,3 +171,59 @@ class OrigenObservacionEquity(str, Enum):
 
     MONITOR = "MONITOR"
     REANUDACION = "REANUDACION"
+
+
+class EstadoSnapshot(str, Enum):
+    """`trade_snapshots.system_state` (sección 8.5 del plan). `SCHEDULED` es
+    el snapshot de rutina de cada chequeo de 60 s; el resto son eventos.
+
+    Los que el sistema escribe HOY: `SCHEDULED`, `ENTRY`,
+    `PARTIAL_TAKE_PROFIT`, `TRAILING_ACTIVATED`, `TRAILING_UPDATED`,
+    `SYSTEM_PAUSED` y `EXIT`. `TARGET_REACHED` coincide siempre con
+    `PARTIAL_TAKE_PROFIT` (en v1 el objetivo ES el TP parcial) y no se
+    escribe aparte. `STOP_UPDATED` (el stop no se mueve en v1; el trailing
+    se refleja en `TRAILING_UPDATED`), `RISK_ALERT` (escalamientos, Paso 11)
+    y `RECONCILIATION` (el monitor se detiene sin precios ante una
+    discrepancia) existen como valor válido pero ningún código los emite
+    todavía.
+
+    Se guarda como VARCHAR validado (`native_enum=False`)."""
+
+    SCHEDULED = "SCHEDULED"
+    ENTRY = "ENTRY"
+    STOP_UPDATED = "STOP_UPDATED"
+    TARGET_REACHED = "TARGET_REACHED"
+    PARTIAL_TAKE_PROFIT = "PARTIAL_TAKE_PROFIT"
+    TRAILING_ACTIVATED = "TRAILING_ACTIVATED"
+    TRAILING_UPDATED = "TRAILING_UPDATED"
+    RISK_ALERT = "RISK_ALERT"
+    SYSTEM_PAUSED = "SYSTEM_PAUSED"
+    EXIT = "EXIT"
+    RECONCILIATION = "RECONCILIATION"
+
+
+class EstadoTesis(str, Enum):
+    """`trade_results.thesis_status` (sección 8.4 del plan). Lo asigna una
+    regla determinista por desenlace (decisión del usuario, 2026-10-05); el
+    LLM no interviene. Ver `app.domain.rules.results.classify_thesis`."""
+
+    CONFIRMED = "CONFIRMED"
+    PARTIALLY_CONFIRMED = "PARTIALLY_CONFIRMED"
+    INVALIDATED = "INVALIDATED"
+    INCONCLUSIVE = "INCONCLUSIVE"
+
+
+class AlcanceMetricas(str, Enum):
+    """`performance_metrics.scope_type` (sección 8.6 del plan).
+
+    - `GLOBAL`: todas las operaciones del periodo (`scope_key` NULL).
+    - `SYMBOL`: las de un activo (`scope_key` = símbolo).
+    - `SCORE_TERCIL`: las de un tercil del score inicial (`scope_key` =
+      `SUPERIOR`, `MEDIO` o `INFERIOR`).
+
+    El alcance "estrategia" del plan no existe todavía: no hay versiones de
+    estrategia registradas. Se agrega cuando existan."""
+
+    GLOBAL = "GLOBAL"
+    SYMBOL = "SYMBOL"
+    SCORE_TERCIL = "SCORE_TERCIL"

@@ -143,6 +143,14 @@ def calculate_fee(quantity: Decimal, execution_price: Decimal) -> Decimal:
 # --- Monitoreo de una posición abierta -----------------------------------
 
 
+def calculate_trailing_stop(peak_price: Decimal) -> Decimal:
+    """Nivel de salida del trailing: `máximo × (1 - 6%)`, a la escala de
+    precio. Es la ÚNICA definición de ese nivel (la usan `evaluate_position`
+    y los snapshots de la trayectoria)."""
+    _exigir_positivo("peak_price", peak_price)
+    return _precio(peak_price * (_UNO - TRAILING_PCT))
+
+
 @dataclass(frozen=True)
 class EstadoParaMonitor:
     """Lo mínimo de `posiciones` que necesita la regla de monitoreo."""
@@ -204,7 +212,7 @@ def evaluate_position(estado: EstadoParaMonitor, observed_price: Decimal) -> Dec
         if estado.trailing_peak_price is None:
             raise ValueError("estado incoherente: trailing activo sin trailing_peak_price")
         peak = max(estado.trailing_peak_price, observed_price)
-        trailing_stop = _precio(peak * (_UNO - TRAILING_PCT))
+        trailing_stop = calculate_trailing_stop(peak)
         if observed_price <= trailing_stop:
             return DecisionMonitor(
                 accion=AccionMonitor.CERRAR_TOTAL,
@@ -251,7 +259,7 @@ def evaluate_position(estado: EstadoParaMonitor, observed_price: Decimal) -> Dec
             take_profit_hit=True,
             trailing_active=True,
             trailing_peak_price=observed_price,
-            trailing_stop_price=_precio(observed_price * (_UNO - TRAILING_PCT)),
+            trailing_stop_price=calculate_trailing_stop(observed_price),
         )
 
     return DecisionMonitor(

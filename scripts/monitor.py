@@ -63,6 +63,8 @@ def format_tick(result: ResultadoTick, now: datetime) -> list[str]:
             )
     if result.expiradas:
         lineas.append(f"  Entradas pendientes expiradas: {result.expiradas}")
+    if result.resultados_reparados:
+        lineas.append(f"  Resultados de operaciones cerradas generados por reparación: {result.resultados_reparados}")
     if result.pausa_registrada:
         lineas.append(
             "  *** PAUSA POR DRAWDOWN: el sistema no abrirá entradas nuevas hasta que lo reanudes "

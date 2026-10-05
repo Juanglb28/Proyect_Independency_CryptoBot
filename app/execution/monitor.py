@@ -22,6 +22,12 @@ llama):
    llegó a -15%, registra la pausa. Si falta un precio o hubo un error NO se
    escribe equity: nunca se inventa un precio para rellenar un hueco (P3).
 
+Paso 9 (resultados): tras cada chequeo se registran los snapshots de la
+trayectoria y, si la posición se cerró, su `trade_result`
+(`app.execution.results_recorder`). Registrar NUNCA bloquea operar: cada
+escritura va en su propio savepoint y un fallo solo se registra en el log; al
+inicio de cada chequeo se repara cualquier posición cerrada sin resultado.
+
 Arranque (decisión del 2026-10-05): el primer chequeo tras un reinicio es
 un chequeo más. Revisa las posiciones abiertas con el precio ACTUAL y aplica
 las reglas de salida de inmediato; nunca se cierra nada "por reinicio".
@@ -57,6 +63,7 @@ from app.execution.order_manager import expire_pending_entries
 from app.execution.position_manager import ResultadoChequeo, check_position
 from app.execution.price_source import PriceSource, PriceUnavailable
 from app.execution.reconciliation import Discrepancia, reconcile
+from app.execution.results_recorder import capture_state, record_check, record_pause
 from app.repositories.equity import (
     EquityObservacionRow,
     acquire_equity_lock,
@@ -66,6 +73,7 @@ from app.repositories.equity import (
 from app.repositories.orders import list_orders
 from app.repositories.positions import list_open_posiciones
 from app.repositories.system_events import EventoSistemaRow, append_evento_sistema, get_ultimo_evento_sistema
+from app.results.trade_result_service import ensure_trade_results
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +102,9 @@ class ResultadoTick:
     sin_precio: tuple[str, ...] = ()
     errores: tuple[ErrorDePosicion, ...] = ()
     expiradas: int = 0
+    resultados_reparados: int = 0
+    """Posiciones cerradas sin `trade_result` cuyo resultado se generó en este
+    chequeo (barrido de reparación)."""
     equity: Decimal | None = None
     peak_equity: Decimal | None = None
     drawdown_pct: Decimal | None = None
@@ -149,6 +160,9 @@ def run_monitor_tick(
         raise ReconciliationBlocked(discrepancias)
 
     expiradas = expire_pending_entries(session, now)
+    reparados, fallidos = ensure_trade_results(session, initial_capital=initial_capital)
+    if fallidos:
+        _log("no se pudo reparar el trade_result de alguna posición cerrada", level=logging.ERROR, fallidos=fallidos)
 
     chequeos: list[ResultadoChequeo] = []
     sin_precio: list[str] = []
@@ -163,9 +177,11 @@ def run_monitor_tick(
             _log("sin precio válido", level=logging.WARNING, symbol=posicion.symbol)
             continue
         precios[posicion.symbol] = precio
+        antes = capture_state(posicion)
         try:
             with session.begin_nested():
-                chequeos.append(check_position(session, posicion, precio, now=now))
+                resultado = check_position(session, posicion, precio, now=now)
+            chequeos.append(resultado)
         except Exception as exc:  # noqa: BLE001 - se registra y el resto de posiciones sigue
             errores.append(ErrorDePosicion(posicion.symbol, posicion.id, f"{type(exc).__name__}: {exc}"))
             logger.error(
@@ -173,12 +189,23 @@ def run_monitor_tick(
                 exc_info=True,
                 extra={"component": _COMPONENT, "symbol": posicion.symbol, "position_id": str(posicion.id)},
             )
+            continue
+        record_check(
+            session,
+            posicion,
+            antes=antes,
+            resultado=resultado,
+            now=now,
+            price_source=price_source,
+            initial_capital=initial_capital,
+        )
 
     base = dict(
         chequeos=tuple(chequeos),
         sin_precio=tuple(sin_precio),
         errores=tuple(errores),
         expiradas=expiradas,
+        resultados_reparados=reparados,
     )
 
     if sin_precio or errores:
@@ -223,6 +250,7 @@ def run_monitor_tick(
             ),
         )
         if pausa_registrada:
+            record_pause(session, list_open_posiciones(session), precios, now=now)
             _log(
                 "PAUSA por drawdown",
                 level=logging.WARNING,

@@ -74,3 +74,25 @@ def append_observacion(session: Session, row: EquityObservacionRow) -> int:
 def list_observaciones(session: Session) -> list[EquityObservacion]:
     """Todas las observaciones, de la más antigua a la más reciente."""
     return list(session.execute(select(EquityObservacion).order_by(EquityObservacion.id)).scalars())
+
+
+def list_observaciones_between(session: Session, *, desde: datetime, hasta: datetime) -> list[EquityObservacion]:
+    """Observaciones con `observed_at` en `[desde, hasta]` (inclusivos), de la
+    más antigua a la más reciente (empates por `id`)."""
+    return list(
+        session.execute(
+            select(EquityObservacion)
+            .where(EquityObservacion.observed_at >= desde, EquityObservacion.observed_at <= hasta)
+            .order_by(EquityObservacion.observed_at, EquityObservacion.id)
+        ).scalars()
+    )
+
+
+def get_ultima_observacion_hasta(session: Session, hasta: datetime) -> EquityObservacion | None:
+    """La última observación con `observed_at <= hasta`, o `None`."""
+    return session.execute(
+        select(EquityObservacion)
+        .where(EquityObservacion.observed_at <= hasta)
+        .order_by(EquityObservacion.observed_at.desc(), EquityObservacion.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()

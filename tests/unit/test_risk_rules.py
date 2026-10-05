@@ -495,3 +495,12 @@ def test_sistema_pausado_depende_solo_del_ultimo_evento():
     assert sistema_pausado(None) is False
     assert sistema_pausado(TipoEventoSistema.PAUSA_DRAWDOWN) is True
     assert sistema_pausado(TipoEventoSistema.REANUDACION) is False
+
+
+def test_calculate_trailing_stop_es_maximo_por_94_porciento_y_rechaza_no_positivo():
+    from app.domain.rules.risk import calculate_trailing_stop
+
+    assert calculate_trailing_stop(D("120")) == D("112.8")
+    assert calculate_trailing_stop(D("112")) == D("105.28")
+    with pytest.raises(ValueError):
+        calculate_trailing_stop(D("0"))
