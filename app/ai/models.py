@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 MODEL_ANALISTA = "claude-sonnet-5-5"
+MODEL_ENTREVISTADOR = MODEL_ANALISTA  # Agente 1: rol "Sonnet" (sección 7.1 del plan)
 MODEL_AUDITOR = "claude-haiku-4-5-20251001"
 MODEL_CONSOLIDADOR = "claude-opus-5-5"
 

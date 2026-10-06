@@ -401,9 +401,9 @@ persistir nada en `factores`/`propuestas`/`ciclos_analisis` — para eso está
 `scripts/run_daily_cycle.py`. Útil para inspeccionar la salida cruda de un
 agente sobre un símbolo puntual sin gastar en los otros candidatos del día.
 
-**Diferido deliberadamente**: el Agente 1 (Entrevistador) es conversacional
-multi-turno y su perfil de salida no tiene tabla asignada en el plan —
-se construirá junto con Streamlit (Paso 10).
+**Implementado en el Paso 10b (ver "Interfaz local")**: el Agente 1 (Entrevistador) es conversacional
+multi-turno; su perfil se guarda en la tabla nueva `perfil_usuario` (el plan no
+le asignaba una) y es solo informativo.
 
 ## Control de gastos de la API de Anthropic
 
@@ -1052,8 +1052,7 @@ test exige subir su versión.
 
 ### Decisiones (cerradas con el usuario)
 
-- 10a es solo lectura; las acciones de la UI son 10c (hecho) y el Agente 1
-  (Entrevistador) va en 10b.
+- 10a es solo lectura; 10c (acciones) y 10b (Entrevistador) ya están hechos.
 - Las lecturas viven en un paquete nuevo, `app/services/`; la UI solo importa
   `app.services.views` (y los enums del dominio para los filtros).
 - **La solo-lectura la garantiza la base**: `read_session()` abre la transacción
@@ -1092,6 +1091,41 @@ Cómo funciona y qué garantiza:
 - **Seguridad:** sin credenciales (el precio sale del ticker público); el
   contenedor sigue publicado solo en `127.0.0.1`. **No se puede crear ni borrar
   el archivo `PARAR` desde la interfaz** (se hace a mano, como antes).
+
+### Perfil de inversión (Paso 10b)
+
+Página **Perfil**: una entrevista con el Agente 1 (Entrevistador) de hasta 8
+preguntas, una a la vez, con el prompt de la sección 7.2 del plan. Al terminar
+muestra el perfil propuesto y **solo se guarda si lo confirmas**.
+
+Decisiones (cerradas con el usuario el 2026-10-06):
+
+- **Es informativo.** El perfil no entra al contexto de ningún agente, ni al
+  score, ni a ninguna regla: así se conserva P1/P2, la reproducibilidad y la
+  medición de si el score predice algo. Un test de arquitectura verifica que
+  nada fuera de `services/interview.py` y `services/profile.py` toca su tabla.
+  Si algún día debe influir, será una decisión nueva (versionar prompt y perfil
+  en el `decision_snapshot`).
+- **Tabla nueva `perfil_usuario`, solo-agregar** (un trigger rechaza UPDATE y
+  DELETE; rangos con restricciones). Cada entrevista guardada es una fila; la
+  vigente es la más reciente y las anteriores quedan como historia. Migración
+  `57b7cfeafc9b`: **ejecuta `alembic upgrade head`** tras actualizar.
+- **Qué se guarda:** solo el perfil final (el JSON de la sección 7.2) con el
+  modelo y la versión del prompt. **Las respuestas del usuario no se guardan
+  como texto.** Las preguntas del agente y el costo de cada llamada quedan en
+  `llamadas_ia` (y cuentan en el costo y el saldo estimado de la página Sistema).
+- **Privacidad:** tus respuestas viajan a Anthropic (es una llamada al modelo) y
+  el perfil se queda en tu base local. Tope de 2000 caracteres por respuesta.
+- **El límite de 8 preguntas lo impone el código:** tras la octava respuesta el
+  código pide el JSON final con un mensaje de cierre (`[SISTEMA] ...`); si el
+  modelo aún pregunta, se muestra un error y se puede reintentar o reiniciar.
+- **Sin herramientas (P4):** el agente solo recibe y devuelve texto; no importa
+  nada de ejecución ni de datos de mercado (test). La interfaz y los servicios no
+  usan credenciales del exchange (test).
+- La conversación vive en la sesión del navegador (no es estado operativo): si
+  recargas la página, empiezas de nuevo. Necesita `ANTHROPIC_API_KEY` en `.env`.
+- Un perfil fuera del formato (campo faltante, valor fuera de rango) se rechaza,
+  nunca se corrige; la llamada fallida igual queda registrada con su costo.
 
 ### Limitaciones conocidas (mostradas tal cual en pantalla)
 
@@ -1486,6 +1520,7 @@ app/
 │   ├── schemas.py          # schemas Pydantic de la salida de cada agente
 │   ├── prompts/            # un prompt de sistema por agente
 │   └── agents/
+│       ├── interviewer.py      # Agente 1 — Entrevistador (conversacional, informativo; Paso 10b)
 │       ├── _runner.py          # orquestación JSON-in/JSON-out compartida (2, 3, 4)
 │       ├── quantitative.py     # Agente 2 — Analista cuantitativo
 │       ├── events.py           # Agente 3 — Analista de eventos
@@ -1510,7 +1545,9 @@ app/
 │   └── validation_service.py   # ¿el score discrimina? (bootstrap)
 ├── services/               # lecturas para la interfaz (Paso 10a) y acciones (Paso 10c)
 │   ├── session.py          # read_session(): transacción READ ONLY
-│   ├── commands.py         # aprobar/rechazar entrada y reanudar (la única escritura)
+│   ├── commands.py         # aprobar/rechazar entrada y reanudar (escritura)
+│   ├── interview.py        # entrevista del Agente 1 y guardado del perfil (escritura + IA)
+│   ├── profile.py          # perfil vigente (lectura)
 │   ├── views.py            # fachada que importa la UI (una función por vista)
 │   └── dashboard.py, positions.py, trades.py, performance.py,
 │       validation.py, decisions.py, system.py
@@ -1526,6 +1563,7 @@ app/
 │   ├── events.py           # persistencia con upsert del catálogo de eventos
 │   ├── event_analysis.py   # persistencia idempotente de analisis_eventos
 │   ├── ai_calls.py         # persistencia de llamadas_ia
+│   ├── perfil_usuario.py   # perfil del Entrevistador (solo-agregar; informativo)
 │   └── analysis.py         # persistencia de ciclos_analisis/propuestas/factores
 migrations/                # Alembic
 scripts/
@@ -1656,6 +1694,7 @@ puede y no puede hacer cada capa.
   análisis de eventos, verificación de indicadores contra
   corrupción/borrado real en Postgres).
 
+- Agente 1 (Entrevistador) con su página de entrevista y la tabla `perfil_usuario` (Paso 10b).
 - Interfaz Streamlit (Paso 10a y 10c): `app/ui/` (8 páginas, componentes,
   catálogo de definiciones versionado) sobre `app/services/` (lecturas en
   transacción `READ ONLY`; acciones manuales con confirmación). Ver "Interfaz local".
@@ -1676,7 +1715,8 @@ prompt — "no sobreimplementar"):
   sección 17 del plan: explícitamente pendiente hasta explorarla con el
   catálogo real ya cargado (Fase 2). `analisis_eventos` es el insumo, no
   esa definición.
-- Agente 1 (Entrevistador, conversacional — diferido al Paso 10b).
+- Efecto del perfil sobre el análisis o las decisiones: ninguno por diseño (es
+  informativo). Si se quisiera, requiere una decisión nueva.
 - `initial_stop`/`initial_target` NO están en el `decision_snapshot` (que no
   se reescribe): se calculan al ABRIR sobre el precio de ejecución real y quedan
   inmutables en `posiciones.initial_stop_price` / `initial_target_price`

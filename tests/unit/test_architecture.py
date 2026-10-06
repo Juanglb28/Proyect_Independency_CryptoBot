@@ -44,6 +44,8 @@ _PROHIBIDO: dict[str, tuple[str, ...]] = {
     "results": ("anthropic", "app.ai", "streamlit", "app.ui", "app.execution"),
     # La capa de datos no ejecuta órdenes ni depende de la ejecución.
     "data": ("app.execution", "streamlit", "app.ui"),
+    # Los agentes de IA no tienen acceso a la ejecución ni al exchange (P2/P4).
+    "ai": ("app.execution", "ccxt", "app.data.exchange_client", "streamlit", "app.ui"),
 }
 
 
@@ -72,10 +74,14 @@ _PROHIBIDO["services"] = _PROHIBIDO["services"] + ("app.execution",)
 # escribe (aprobar/rechazar entradas, reanudar) y por eso el único que puede
 # importar estos módulos de ejecución. Es una excepción por ARCHIVO, no por capa.
 _ARCHIVO_DE_ACCIONES = "services/commands.py"
+# Paso 10b: `services/interview.py` es el ÚNICO servicio que llama a un agente
+# de IA (el Entrevistador, informativo y sin herramientas).
+_ARCHIVO_DE_ENTREVISTA = "services/interview.py"
 _EXCEPCIONES_POR_ARCHIVO: dict[str, tuple[str, ...]] = {
     _ARCHIVO_DE_ACCIONES: (
         "app.execution.order_manager", "app.execution.price_source", "app.execution.system_control",
     ),
+    _ARCHIVO_DE_ENTREVISTA: ("app.ai.agents.interviewer",),
 }
 
 
@@ -147,4 +153,43 @@ def test_las_excepciones_por_archivo_no_se_amplian_sin_querer():
         "services/commands.py": (
             "app.execution.order_manager", "app.execution.price_source", "app.execution.system_control",
         ),
+        "services/interview.py": ("app.ai.agents.interviewer",),
     }
+
+
+def _importadores(prefijo: str) -> set[str]:
+    return {
+        archivo.relative_to(_APP).as_posix()
+        for archivo in sorted(_APP.rglob("*.py"))
+        if any(m == prefijo or m.startswith(prefijo + ".") for m in _imports(archivo))
+    }
+
+
+def test_solo_la_interfaz_importa_la_entrevista():
+    assert all(x.startswith("ui/") for x in _importadores("app.services.interview")), _importadores("app.services.interview")
+
+
+def test_el_perfil_es_informativo_nada_de_decision_lo_lee():
+    """Decisión del usuario (2026-10-06): el perfil no tiene efecto en agentes,
+    score ni reglas. Solo el servicio que lo guarda y el que lo muestra pueden
+    tocar su repositorio o su tabla."""
+    permitidos = {
+        "services/interview.py", "services/profile.py", "repositories/perfil_usuario.py",
+        "db/models/__init__.py", "db/models/perfil_usuario.py",
+    }
+    for prefijo in ("app.repositories.perfil_usuario", "app.db.models.perfil_usuario"):
+        assert _importadores(prefijo) <= permitidos, (prefijo, _importadores(prefijo) - permitidos)
+    assert _importadores("app.services.profile") <= {"services/views.py"}
+
+
+def test_el_entrevistador_no_toca_ejecucion_ni_exchange():
+    """P4: el agente que recibe texto libre del usuario no importa nada de ejecución/datos de mercado."""
+    modulos = _imports(_APP / "ai" / "agents" / "interviewer.py")
+    assert not [m for m in modulos if m.startswith(("app.execution", "app.data", "ccxt"))], modulos
+
+
+def test_la_interfaz_y_los_servicios_no_usan_credenciales_del_exchange():
+    for capa in ("ui", "services"):
+        for archivo in sorted((_APP / capa).rglob("*.py")):
+            texto = archivo.read_text(encoding="utf-8").lower()
+            assert "binance_api" not in texto, archivo

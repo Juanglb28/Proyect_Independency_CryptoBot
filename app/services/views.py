@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from app.services.dashboard import DashboardView, get_dashboard
 from app.services.decisions import CicloDetalle, CicloResumen, get_ciclo_detalle, list_ciclos
 from app.services.performance import PerformanceView, get_performance_view
+from app.services.profile import PerfilView, get_perfil_view
 from app.services.positions import PosicionesView, get_positions_view
 from app.services.session import read_session, settings
 from app.services.system import SistemaView, get_system_view
@@ -81,3 +82,8 @@ def sistema() -> SistemaView:
             saldo_declarado_usd=cfg.anthropic_saldo_declarado_usd,
             saldo_declarado_en=cfg.anthropic_saldo_declarado_en,
         )
+
+
+def perfil() -> PerfilView:
+    with read_session() as s:
+        return get_perfil_view(s)

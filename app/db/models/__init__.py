@@ -14,9 +14,10 @@ from app.db.models.events import Evento
 from app.db.models.indicators import Indicador
 from app.db.models.orders import Orden
 from app.db.models.performance import PerformanceMetric
+from app.db.models.perfil_usuario import PerfilUsuario
 from app.db.models.positions import Posicion
 from app.db.models.snapshots import TradeSnapshot
 from app.db.models.system_events import EventoSistema
 from app.db.models.trade_results import TradeResultModel
 
-__all__ = ["Vela", "Indicador", "Evento", "CicloAnalisis", "AnalisisEvento", "LlamadaIA", "Orden", "Posicion", "EventoSistema", "EquityObservacion", "TradeSnapshot", "TradeResultModel", "PerformanceMetric"]
+__all__ = ["Vela", "Indicador", "Evento", "CicloAnalisis", "AnalisisEvento", "LlamadaIA", "Orden", "Posicion", "EventoSistema", "EquityObservacion", "TradeSnapshot", "TradeResultModel", "PerformanceMetric", "PerfilUsuario"]

@@ -20,28 +20,20 @@ import logging
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
-from functools import lru_cache
 
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
-from app.db.session import get_engine, get_sessionmaker, session_scope
+from app.db.session import session_scope
 from app.execution.order_manager import ResultadoAprobacion, approve_pending_entry, reject_pending_entry
 from app.execution.price_source import BinanceTickerPriceSource, PriceSource
 from app.execution.system_control import ResultadoReanudacion, resume_system
+from app.services._escritura import ResultadoAccion, escritura_factory
 from app.services.session import settings
 
 logger = logging.getLogger(__name__)
 _COMPONENT = "services.commands"
-
-
-@dataclass(frozen=True)
-class ResultadoAccion:
-    ok: bool
-    codigo: str
-    mensaje: str
 
 
 _MENSAJES_APROBACION = {
@@ -61,15 +53,10 @@ _MENSAJES_APROBACION = {
 _ERROR_GENERICO = "No se pudo completar la acción y no se cambió nada. Revisa los registros e inténtalo de nuevo."
 
 
-@lru_cache(maxsize=1)
-def _factory() -> sessionmaker[Session]:
-    return get_sessionmaker(get_engine(settings()))
-
-
 @contextmanager
 def _abrir_sesion() -> Iterator[Session]:
     """Sesión de ESCRITURA (commit al salir bien, rollback si falla)."""
-    with session_scope(_factory()) as session:
+    with session_scope(escritura_factory()) as session:
         yield session
 
 

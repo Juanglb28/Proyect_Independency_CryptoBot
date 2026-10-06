@@ -26,7 +26,9 @@ if _RAIZ not in sys.path:
 import streamlit as st  # noqa: E402
 
 from app.ui.definitions import CATALOG_VERSION  # noqa: E402
-from app.ui.pages import analisis, dashboard, decisiones, operaciones, performance, posiciones, sistema, validacion  # noqa: E402
+from app.ui.pages import (  # noqa: E402
+    analisis, dashboard, decisiones, operaciones, performance, perfil, posiciones, sistema, validacion,
+)
 
 PAGINAS = (
     ("Dashboard", "dashboard", dashboard.render),
@@ -36,6 +38,7 @@ PAGINAS = (
     ("Performance", "performance", performance.render),
     ("Validación de estrategia", "validacion", validacion.render),
     ("Decisiones", "decisiones", decisiones.render),
+    ("Perfil", "perfil", perfil.render),
     ("Sistema", "sistema", sistema.render),
 )
 

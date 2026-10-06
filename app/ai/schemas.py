@@ -166,3 +166,26 @@ class ConsolidadorOutput(_AgentOutputBase):
                 f'máximo 2 opciones "menor_riesgo" (sección 7.2 del plan), llegaron {len(menor_riesgo)}'
             )
         return self
+
+
+# ---------------------------------------------------------------------------
+# Agente 1 — Entrevistador (Paso 10b)
+# ---------------------------------------------------------------------------
+
+
+class PerfilUsuarioOutput(_AgentOutputBase):
+    """Reproduce el bloque "SALIDA" del Agente 1 (sección 7.2 del plan). Los
+    rangos son los mismos que las restricciones de la tabla `perfil_usuario`:
+    una respuesta fuera de rango es un fallo de schema, nunca se corrige."""
+
+    horizonte_meses: int = Field(gt=0)
+    perdida_maxima_pct: float = Field(ge=0, le=100)
+    experiencia: Literal["ninguna", "basica", "intermedia", "avanzada"]
+    activos_excluidos: list[str]
+    tolerancia_declarada: str
+    objetivo_rentabilidad_pct: float = Field(ge=0)
+    objetivo_es_realista: bool
+    disponibilidad_aprobacion: str
+    pct_patrimonio: float = Field(ge=0, le=100)
+    contradicciones_detectadas: list[str]
+    confianza_perfil: Literal["alta", "media", "baja"]

@@ -18,7 +18,7 @@ from app.services import commands, views
 from tests.integration.test_commands import _pausar_sin_posiciones, _pendiente
 from tests.integration.test_results_pipeline import FakePrices, _abrir, _t, _universo, seis_operaciones  # noqa: F401
 
-PAGINAS = ["dashboard", "analisis", "posiciones", "operaciones", "performance", "validacion", "decisiones", "sistema"]
+PAGINAS = ["dashboard", "analisis", "posiciones", "operaciones", "performance", "validacion", "decisiones", "perfil", "sistema"]
 TIEMPO = 60
 _APP_UI = Path(__file__).resolve().parents[2] / "app" / "ui" / "app.py"
 
@@ -256,3 +256,97 @@ def test_un_fallo_de_la_accion_se_muestra_como_aviso_sin_traza(con_acciones, db_
     _boton(at, "Confirmar").click().run()
     assert not at.exception
     assert any("no se cambió nada" in w.value for w in at.warning)
+
+
+# --- perfil / entrevista (Paso 10b) ---
+
+
+@pytest.fixture
+def entrevista(ui, db_session, monkeypatch):
+    """Entrevista con el modelo simulado y escritura en la sesión de prueba."""
+    import json
+
+    from app.ai.agents import interviewer
+    from app.config import get_settings
+    from app.services import interview
+    from tests.integration.test_interview import ModeloSimulado
+    from tests.unit.test_interviewer_unit import PERFIL
+
+    @contextmanager
+    def _sesion():
+        yield db_session
+
+    monkeypatch.setattr(interview, "_abrir_sesion", _sesion)
+    monkeypatch.setattr(interview, "settings", lambda: get_settings().model_copy(update={"anthropic_api_key": "k"}))
+
+    def preparar(*respuestas):
+        modelo = ModeloSimulado(*respuestas)
+        monkeypatch.setattr(interviewer, "call_chat", modelo)
+        return modelo
+
+    return ui, preparar, json.dumps(PERFIL)
+
+
+def test_perfil_sin_datos_invita_a_iniciar_la_entrevista(ui):
+    at = ui("perfil")
+    assert "Todavía no hay un perfil guardado" in _textos(at)
+    assert any(b.label == "Iniciar entrevista" for b in at.button)
+    assert "no cambia el análisis" in _textos(at)  # deja claro que es informativo
+
+
+def test_entrevista_completa_hasta_guardar_el_perfil(entrevista, db_session):
+    ui_, preparar, perfil_json = entrevista
+    modelo = preparar("¿Cuál es tu horizonte?", "¿Qué pérdida toleras?", perfil_json)
+    at = ui_("perfil")
+    _boton(at, "Iniciar entrevista").click().run()
+    assert not at.exception
+    assert any("¿Cuál es tu horizonte?" in m.value for m in at.chat_message[0].markdown)
+    assert "Pregunta 1 de 8" in _textos(at)
+
+    at.chat_input[0].set_value("24 meses").run()
+    assert "Pregunta 2 de 8" in _textos(at)
+    at.chat_input[0].set_value("20 %").run()
+    assert "Perfil propuesto" in _textos(at) and not at.chat_input  # ya no pide más respuestas
+    assert len(modelo.llamadas) == 3
+
+    _boton(at, "Guardar este perfil").click().run()
+    assert any("GUARDAR este perfil" in w.value for w in at.warning)
+    _boton(at, "Confirmar").click().run()
+    assert not at.exception
+    assert any("Perfil guardado" in s.value for s in at.success)
+    assert "Perfil vigente" in _textos(at) and any(b.label == "Rehacer la entrevista" for b in at.button)
+    from app.services.profile import get_perfil_view
+
+    assert get_perfil_view(db_session).vigente.horizonte_meses == 24
+
+
+def test_entrevista_sin_confirmar_no_guarda_nada(entrevista, db_session):
+    ui_, preparar, perfil_json = entrevista
+    preparar("¿Horizonte?", perfil_json)
+    at = ui_("perfil")
+    _boton(at, "Iniciar entrevista").click().run()
+    at.chat_input[0].set_value("12 meses").run()
+    _boton(at, "Guardar este perfil").click().run()
+    _boton(at, "Cancelar").click().run()
+    from app.services.profile import get_perfil_view
+
+    assert get_perfil_view(db_session).vigente is None
+
+
+def test_un_fallo_del_modelo_se_muestra_y_se_puede_reintentar(entrevista):
+    ui_, preparar, _ = entrevista
+    preparar("   ", "¿Horizonte?")  # primero vacío (error), luego una pregunta
+    at = ui_("perfil")
+    _boton(at, "Iniciar entrevista").click().run()
+    assert any("vacío" in e.value for e in at.error)
+    _boton(at, "Reintentar").click().run()
+    assert not at.error and any("¿Horizonte?" in m.value for m in at.chat_message[0].markdown)
+
+
+def test_cancelar_la_entrevista_vuelve_al_inicio(entrevista):
+    ui_, preparar, _ = entrevista
+    preparar("¿Horizonte?")
+    at = ui_("perfil")
+    _boton(at, "Iniciar entrevista").click().run()
+    _boton(at, "Cancelar la entrevista").click().run()
+    assert any(b.label == "Iniciar entrevista" for b in at.button) and not at.chat_message

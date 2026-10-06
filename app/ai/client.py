@@ -96,6 +96,38 @@ def call_agent(
 ) -> AgentCallResult:
     """Envía `system_prompt` (cacheable) y `user_content` (el bloque DATOS,
     sin cachear) y devuelve el texto crudo de la respuesta, sin validar."""
+    return _enviar(
+        settings,
+        model=model,
+        system_prompt=system_prompt,
+        messages=[{"role": "user", "content": user_content}],
+        max_tokens=max_tokens,
+    )
+
+
+def call_chat(
+    settings: Settings,
+    *,
+    model: str,
+    system_prompt: str,
+    messages: list[dict[str, str]],
+    max_tokens: int = 2048,
+) -> AgentCallResult:
+    """Igual que `call_agent` pero con una conversación de varios turnos
+    (`messages`: lista de `{"role": "user"|"assistant", "content": str}`,
+    empezando y terminando en `user`). Solo la usa el Entrevistador (Agente 1,
+    Paso 10b): sigue sin herramientas ni acceso a nada más que texto (P4)."""
+    return _enviar(settings, model=model, system_prompt=system_prompt, messages=messages, max_tokens=max_tokens)
+
+
+def _enviar(
+    settings: Settings,
+    *,
+    model: str,
+    system_prompt: str,
+    messages: list[dict[str, str]],
+    max_tokens: int,
+) -> AgentCallResult:
     if not settings.anthropic_api_key:
         raise RuntimeError(
             "ANTHROPIC_API_KEY no está configurada. Ver .env.example — esta "
@@ -115,7 +147,7 @@ def call_agent(
                 "cache_control": {"type": "ephemeral"},
             }
         ],
-        messages=[{"role": "user", "content": user_content}],
+        messages=messages,
     )
 
     raw_text = "".join(block.text for block in response.content if block.type == "text")
