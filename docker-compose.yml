@@ -29,6 +29,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # Mismo nombre de imagen que `ui`: un solo `docker compose build`
+    # actualiza las dos (antes eran imágenes separadas y `pytest` en `app`
+    # fallaba con "No module named 'streamlit'" tras agregar la dependencia).
+    image: crypto-trading-platform:dev
     container_name: crypto_trading_app
     depends_on:
       postgres:
@@ -63,6 +67,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    image: crypto-trading-platform:dev
     container_name: crypto_trading_ui
     depends_on:
       postgres:

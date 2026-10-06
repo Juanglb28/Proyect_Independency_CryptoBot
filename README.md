@@ -68,7 +68,10 @@ Por ejemplo:
 El repo completo se monta como volumen dentro del contenedor (ver
 Dockerfile), así que los cambios de código se reflejan sin reconstruir la
 imagen — solo agregar o cambiar una dependencia en `pyproject.toml`
-requiere `docker compose build app` antes de volver a correr algo.
+requiere `docker compose build` antes de volver a correr algo. Los servicios
+`app` y `ui` comparten la misma imagen (`crypto-trading-platform:dev`), así que
+ese único comando actualiza ambos; si cambió una dependencia, reinicia también
+la interfaz con `docker compose up -d ui`.
 
 Este camino no reemplaza el venv nativo — es una alternativa completa: no
 hace falta instalar Python en el sistema ni crear un `.venv` si vas a usar
@@ -1030,7 +1033,7 @@ terminal (`scripts.entries`, `scripts.system_control`) y hacen lo mismo.
 ### Cómo abrirla
 
 ```
-docker compose build app          # una vez: instala Streamlit en la imagen
+docker compose build              # una vez (y al cambiar dependencias): imagen compartida con `app`
 docker compose up -d ui
 ```
 
