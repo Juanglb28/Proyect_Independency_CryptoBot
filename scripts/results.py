@@ -42,8 +42,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _fmt(valor, sufijo: str = "") -> str:
-    return "n/d" if valor is None else f"{valor}{sufijo}"
+def _fmt(valor, sufijo: str = "", decimales: int | None = 2) -> str:
+    """Solo presentación: nunca notación científica (`0E-8`) y, salvo que se pida
+    `decimales=None` (precios, que pueden necesitar muchos), 2 decimales. No cambia
+    ningún valor guardado ni calculado."""
+    if valor is None:
+        return "n/d"
+    if isinstance(valor, Decimal):
+        if decimales is None:
+            texto = format(valor.normalize(), "f")
+        else:
+            texto = format(valor.quantize(Decimal(1).scaleb(-decimales)), "f")
+        return f"{texto}{sufijo}"
+    return f"{valor}{sufijo}"
 
 
 def format_metrics(m: PerformanceMetrics) -> list[str]:
@@ -51,7 +62,7 @@ def format_metrics(m: PerformanceMetrics) -> list[str]:
     return [
         f"[{alcance}] operaciones={m.total_trades} (ganadoras {m.winning_trades}, perdedoras {m.losing_trades}, "
         f"equilibrio {m.breakeven_trades})  win rate={_fmt(m.win_rate_pct, '%')}",
-        f"    P&L neto={m.net_pnl} USD (bruto {m.gross_pnl}, comisiones {m.total_fees})  "
+        f"    P&L neto={_fmt(m.net_pnl)} USD (bruto {_fmt(m.gross_pnl)}, comisiones {_fmt(m.total_fees)})  "
         f"expectancy={_fmt(m.expectancy_per_trade, ' USD')}  profit factor={_fmt(m.profit_factor)}  "
         f"R medio={_fmt(m.average_r_multiple)}",
         f"    drawdown máximo={_fmt(m.max_drawdown_pct, '%')}  benchmark BTC: retorno={_fmt(m.benchmark_return_pct, '%')} "
@@ -67,10 +78,10 @@ def format_validation(r: ValidationReport) -> list[str]:
         lineas.append("No se puede formar el tercio superior e inferior todavía.")
     else:
         lineas += [
-            f"Tercil de {r.tercil_size} operaciones: expectancy alta {r.high_score_expectancy} USD, "
-            f"baja {r.low_score_expectancy} USD  ->  discriminación {r.score_discrimination} USD",
+            f"Tercil de {r.tercil_size} operaciones: expectancy alta {_fmt(r.high_score_expectancy)} USD, "
+            f"baja {_fmt(r.low_score_expectancy)} USD  ->  discriminación {_fmt(r.score_discrimination)} USD",
             f"IC {r.confidence_level_pct}% por bootstrap ({r.iterations} iteraciones, semilla {r.seed}): "
-            f"[{r.ci_lower}, {r.ci_upper}]",
+            f"[{_fmt(r.ci_lower)}, {_fmt(r.ci_upper)}]",
             "Discrimina (límite inferior > 0): " + ("SÍ" if r.discriminates else "no")
             + ("  [orientativo: muestra preliminar]" if r.status == EstadoValidacion.PRELIMINAR else ""),
         ]
@@ -87,7 +98,8 @@ def run_command(session: Session, args: argparse.Namespace, *, now: datetime, in
             return ["Todavía no hay operaciones cerradas."]
         return [
             f"{r.exit_time:%Y-%m-%d %H:%M} {r.symbol:<9} score={_fmt(r.initial_opportunity_score)} "
-            f"entrada={r.entry_price} salida={r.exit_price} P&L neto={r.net_pnl} ({r.net_return_pct}%) "
+            f"entrada={_fmt(r.entry_price, decimales=None)} salida={_fmt(r.exit_price, decimales=None)} "
+            f"P&L neto={_fmt(r.net_pnl)} USD ({_fmt(r.net_return_pct)}%) "
             f"R={_fmt(r.realized_r_multiple)} MAE={_fmt(r.mae_pct, '%')} MFE={_fmt(r.mfe_pct, '%')} "
             f"{r.thesis_status.value} {r.exit_reason.value}"
             for r in filas

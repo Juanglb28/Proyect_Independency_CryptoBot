@@ -31,9 +31,9 @@ def test_trades_lista_cada_operacion_cerrada(db_session, seis_operaciones):  # n
 def test_performance_muestra_y_guarda_las_metricas(db_session, seis_operaciones):  # noqa: F811
     lineas = _correr(db_session, "performance")
     texto = "\n".join(lineas)
-    assert "[GLOBAL] operaciones=6" in texto and "win rate=50.000000%" in texto
+    assert "[GLOBAL] operaciones=6" in texto and "win rate=50.00%" in texto
     assert "[SYMBOL BTCUSDT]" in texto and "[SCORE_TERCIL SUPERIOR]" in texto
-    assert "discriminación=20.379600" in texto
+    assert "discriminación=20.38" in texto
     assert _correr(db_session, "performance", "--days", "60")[0].startswith("Periodo:")
 
 
@@ -41,3 +41,8 @@ def test_validate_imprime_el_intervalo_y_la_advertencia_de_muestra_preliminar(db
     texto = "\n".join(_correr(db_session, "validate"))
     assert "PRELIMINAR" in texto and "bootstrap (1000 iteraciones" in texto and "orientativo" in texto
     assert "Tercil de 2 operaciones" in texto
+
+
+def test_performance_sin_operaciones_no_imprime_notacion_cientifica(db_session):
+    texto = "\n".join(_correr(db_session, "performance"))
+    assert "0E-" not in texto and "P&L neto=0.00 USD (bruto 0.00, comisiones 0.00)" in texto
