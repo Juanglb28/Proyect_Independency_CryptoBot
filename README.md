@@ -1443,9 +1443,22 @@ esto, los tests corrían contra la misma base que ya tenía velas reales
 backfillizadas, y algunos empezaron a fallar por contar o chocar con esas
 filas reales — ver `tests/conftest.py::_resolve_test_database_url`).
 
+**Cada migración nueva se aplica a las DOS bases** (la real y la de pruebas);
+si solo se aplica a la real, los tests fallan con `relation "..." does not
+exist` (pasó con `perfil_usuario`, Paso 10b). Un solo comando lo hace por ti:
+
+```bash
+docker compose run --rm app python -m scripts.migrate_all
+```
+
+(o `python -m scripts.migrate_all` fuera de Docker). Corre `alembic upgrade head`
+primero sobre la base real y luego sobre `<nombre>_test` (o `TEST_DATABASE_URL`
+si la definiste); se detiene en el primer fallo y no imprime las URLs. Es
+idempotente: si ya están al día, no cambia nada.
+
 **Máquina limpia:** `docker compose up -d` ya crea ambas bases
-automáticamente (ver `docker/init-test-db.sql`) — solo falta aplicar las
-migraciones a las dos:
+automáticamente (ver `docker/init-test-db.sql`) — solo falta migrarlas con el
+comando de arriba. Equivalente manual, por si lo necesitas:
 
 ```bash
 alembic upgrade head
@@ -1464,7 +1477,7 @@ el volumen, así que hay que crear la base de pruebas a mano, una sola vez:
 docker exec -it crypto_trading_postgres psql -U crypto -d crypto_trading -c "CREATE DATABASE crypto_trading_test OWNER crypto;"
 ```
 
-y después aplicar las migraciones a esa base con el comando de arriba.
+y después migrar con `python -m scripts.migrate_all`.
 
 Una vez que la base de pruebas exista y tenga las migraciones aplicadas,
 `pytest` la usa automáticamente — no hace falta tocar `.env` (los tests
