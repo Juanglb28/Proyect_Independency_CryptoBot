@@ -68,12 +68,23 @@ _EXCEPCIONES: dict[str, tuple[str, ...]] = {
 }
 _PROHIBIDO["services"] = _PROHIBIDO["services"] + ("app.execution",)
 
+# Paso 10c: `app/services/commands.py` es el ÚNICO módulo de servicios que
+# escribe (aprobar/rechazar entradas, reanudar) y por eso el único que puede
+# importar estos módulos de ejecución. Es una excepción por ARCHIVO, no por capa.
+_ARCHIVO_DE_ACCIONES = "services/commands.py"
+_EXCEPCIONES_POR_ARCHIVO: dict[str, tuple[str, ...]] = {
+    _ARCHIVO_DE_ACCIONES: (
+        "app.execution.order_manager", "app.execution.price_source", "app.execution.system_control",
+    ),
+}
+
 
 def _violaciones(capa: str) -> list[str]:
     encontradas = []
     for archivo in sorted((_APP / capa).rglob("*.py")):
+        por_archivo = _EXCEPCIONES_POR_ARCHIVO.get(archivo.relative_to(_APP).as_posix(), ())
         for modulo in sorted(_imports(archivo)):
-            if any(modulo == e or modulo.startswith(e + ".") for e in _EXCEPCIONES.get(capa, ())):
+            if any(modulo == e or modulo.startswith(e + ".") for e in (*_EXCEPCIONES.get(capa, ()), *por_archivo)):
                 continue
             for prohibido in _PROHIBIDO[capa]:
                 if modulo == prohibido or modulo.startswith(prohibido + "."):
@@ -111,3 +122,29 @@ def test_los_servicios_solo_importan_los_modulos_de_ejecucion_permitidos():
     assert _EXCEPCIONES["services"] == (
         "app.execution.system_control", "app.execution.reconciliation", "app.execution.emergency_stop",
     )
+
+
+def test_solo_la_interfaz_importa_las_acciones_y_las_lecturas_no():
+    """`commands` (escribe) lo usa únicamente la interfaz. Ningún servicio de
+    lectura —ni la fachada `views`— lo importa: la solo-lectura de las vistas
+    depende de esa separación."""
+    importadores = []
+    for archivo in sorted(_APP.rglob("*.py")):
+        relativo = archivo.relative_to(_APP).as_posix()
+        if relativo == _ARCHIVO_DE_ACCIONES:
+            continue
+        if any(m == "app.services.commands" or m.startswith("app.services.commands.") for m in _imports(archivo)):
+            importadores.append(relativo)
+        if "from app.services import" in archivo.read_text(encoding="utf-8") and relativo.startswith("services/"):
+            lineas = [x for x in archivo.read_text(encoding="utf-8").splitlines() if x.startswith("from app.services import")]
+            if any("commands" in x for x in lineas):
+                importadores.append(relativo)
+    assert all(x.startswith("ui/") for x in importadores), importadores
+
+
+def test_las_excepciones_por_archivo_no_se_amplian_sin_querer():
+    assert _EXCEPCIONES_POR_ARCHIVO == {
+        "services/commands.py": (
+            "app.execution.order_manager", "app.execution.price_source", "app.execution.system_control",
+        ),
+    }

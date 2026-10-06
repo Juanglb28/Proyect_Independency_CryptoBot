@@ -1019,10 +1019,13 @@ docker compose run --rm app python -m scripts.results validate               # �
 tener ~30 operaciones el resultado de `validate` es solo orientativo
 (`PRELIMINAR`): el plan fija ese mínimo para dar una respuesta.
 
-## Interfaz local (Paso 10a, solo lectura)
+## Interfaz local (Paso 10a lectura, Paso 10c acciones)
 
-Interfaz Streamlit para mirar los resultados. **Solo lectura**: no aprueba,
-rechaza ni reanuda nada (eso queda para el Paso 10c; hoy se hace por terminal).
+Interfaz Streamlit para mirar los resultados. Todas las páginas **leen** en una
+transacción de solo lectura. Las **únicas acciones** (Paso 10c) son tres, siempre
+con confirmación en dos pasos: aprobar una entrada pendiente, rechazarla y
+reanudar el sistema tras una pausa por drawdown. Siguen existiendo los comandos de
+terminal (`scripts.entries`, `scripts.system_control`) y hacen lo mismo.
 
 ### Cómo abrirla
 
@@ -1049,8 +1052,8 @@ test exige subir su versión.
 
 ### Decisiones (cerradas con el usuario)
 
-- 10a es solo lectura; el Agente 1 (Entrevistador) va en 10b y las acciones de
-  la UI en 10c.
+- 10a es solo lectura; las acciones de la UI son 10c (hecho) y el Agente 1
+  (Entrevistador) va en 10b.
 - Las lecturas viven en un paquete nuevo, `app/services/`; la UI solo importa
   `app.services.views` (y los enums del dominio para los filtros).
 - **La solo-lectura la garantiza la base**: `read_session()` abre la transacción
@@ -1061,6 +1064,34 @@ test exige subir su versión.
   existentes; no inventan cifras nuevas.
 - **Seguridad:** el contenedor escucha en `0.0.0.0` pero el puerto solo se
   publica en `127.0.0.1` del PC. La UI no recibe credenciales de Binance.
+
+### Acciones manuales (Paso 10c)
+
+| Acción | Dónde | Qué hace |
+|---|---|---|
+| Aprobar entrada | Posiciones | Abre la posición paper al precio de Binance **de ese momento** (stop -8 % y objetivo +12 % sobre ese precio). |
+| Rechazar entrada | Posiciones | Libera los cupos que reservaba; motivo opcional. Permitido aun en pausa. |
+| Reanudar el sistema | Sistema (solo aparece si está pausado) | Reinicia el pico de equity al equity del momento; el pico anterior queda registrado. |
+
+Cómo funciona y qué garantiza:
+
+- **Dos pasos:** el botón solo muestra qué va a pasar; nada se ejecuta hasta
+  pulsar *Confirmar* (o se cancela). El resultado se muestra una vez, arriba.
+- **Mismas reglas que la terminal:** `app/services/commands.py` llama a las
+  mismas funciones de `app/execution` (`approve_pending_entry`,
+  `reject_pending_entry`, `resume_system`). No hay reglas nuevas: aprobar sigue
+  bloqueado en pausa y con el archivo `PARAR`, las entradas vencidas se expiran y
+  sin precio válido no se ejecuta nada (el botón de aprobar aparece
+  deshabilitado en pausa o con PARAR).
+- **Una transacción por acción:** si algo falla no queda nada a medias y la
+  pantalla muestra un mensaje claro (el detalle va al registro, sin secretos).
+  Repetir una aprobación no duplica la entrada (`client_order_id`).
+- **Separación:** `commands.py` es el único módulo de `app/services` que escribe y
+  el único que puede importar `order_manager`, `price_source` y `system_control`;
+  ningún servicio de lectura lo importa (test de arquitectura).
+- **Seguridad:** sin credenciales (el precio sale del ticker público); el
+  contenedor sigue publicado solo en `127.0.0.1`. **No se puede crear ni borrar
+  el archivo `PARAR` desde la interfaz** (se hace a mano, como antes).
 
 ### Limitaciones conocidas (mostradas tal cual en pantalla)
 
@@ -1477,8 +1508,9 @@ app/
 │   ├── benchmark_service.py    # benchmark del periodo (BTC, velas 1h cerradas)
 │   ├── performance_service.py  # performance_metrics (derivadas, reconstruibles)
 │   └── validation_service.py   # ¿el score discrimina? (bootstrap)
-├── services/               # lecturas para la interfaz (Paso 10a), solo lectura
+├── services/               # lecturas para la interfaz (Paso 10a) y acciones (Paso 10c)
 │   ├── session.py          # read_session(): transacción READ ONLY
+│   ├── commands.py         # aprobar/rechazar entrada y reanudar (la única escritura)
 │   ├── views.py            # fachada que importa la UI (una función por vista)
 │   └── dashboard.py, positions.py, trades.py, performance.py,
 │       validation.py, decisions.py, system.py
@@ -1624,9 +1656,9 @@ puede y no puede hacer cada capa.
   análisis de eventos, verificación de indicadores contra
   corrupción/borrado real en Postgres).
 
-- Interfaz Streamlit de solo lectura (Paso 10a): `app/ui/` (8 páginas,
-  componentes, catálogo de definiciones versionado) sobre `app/services/` (lecturas
-  en transacción `READ ONLY`). Ver "Interfaz local".
+- Interfaz Streamlit (Paso 10a y 10c): `app/ui/` (8 páginas, componentes,
+  catálogo de definiciones versionado) sobre `app/services/` (lecturas en
+  transacción `READ ONLY`; acciones manuales con confirmación). Ver "Interfaz local".
 
 ## Qué NO está implementado
 
@@ -1664,8 +1696,8 @@ prompt — "no sobreimplementar"):
   `RISK_ALERT` (Paso 11).
 - Ajuste de pesos o umbrales con los resultados: el plan lo prohíbe sin
   registrar antes una nueva versión de estrategia (sección 8.7).
-- Acciones desde la interfaz (aprobar, rechazar, reanudar): Paso 10c. La interfaz de
-  hoy es de solo lectura.
+- Desde la interfaz no se puede abrir un ciclo, cerrar una posición a mano, crear/borrar
+  el archivo `PARAR` ni cambiar ninguna regla de riesgo (fuera de alcance de 10c).
 - Análisis por factor (`factor_analysis`) en la interfaz: pendiente.
 - Conexión a Telegram.
 

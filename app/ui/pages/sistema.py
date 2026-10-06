@@ -1,15 +1,17 @@
-"""Sistema: salud de la base, datos, monitor, reconciliación y costo de IA (solo lectura)."""
+"""Sistema: salud de la base, datos, monitor, reconciliación y costo de IA; reanudar tras una pausa (con confirmación)."""
 
 from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
 
-from app.services import views
+from app.services import commands, views
 from app.ui.components import format as f
+from app.ui.components.confirm_action import confirm_action, show_last_action_result
 
 
 def render() -> None:
+    show_last_action_result()
     v = views.sistema()
     st.title("Sistema")
     st.caption("Datos al " + f.fecha(v.generado_en))
@@ -19,6 +21,17 @@ def render() -> None:
     a.metric("Estado", "PARADA DE EMERGENCIA" if v.parada_emergencia else ("PAUSADO" if v.sistema_pausado else "Activo"))
     b.metric("Posiciones abiertas", v.posiciones_abiertas)
     c.metric("Último dato del monitor", f.duracion(v.edad_monitor), help=f.fecha(v.ultima_observacion_monitor))
+
+    if v.sistema_pausado:
+        st.subheader("Reanudar tras la pausa por drawdown")
+        st.caption(f"Equity: {f.usd(v.equity_actual)} · pico vigente: {f.usd(v.pico_equity)}")
+        confirm_action(
+            "reanudar", "Reanudar el sistema",
+            "Vas a REANUDAR el sistema. El pico de equity se reinicia al equity de este momento (el pico anterior "
+            f"queda registrado; hoy es {f.usd(v.pico_equity)}). Hace falta el precio de todas las posiciones abiertas; "
+            "si falta alguno no se reanuda. Si el archivo PARAR existe, las entradas nuevas siguen bloqueadas.",
+            lambda _motivo: commands.reanudar_sistema(),
+        )
 
     st.subheader("Reconciliación")
     if v.discrepancias:

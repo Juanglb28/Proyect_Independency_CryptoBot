@@ -14,8 +14,9 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 from app.domain.enums import IntencionOrden
-from app.services import views
-from tests.integration.test_results_pipeline import _abrir, _t, seis_operaciones  # noqa: F401
+from app.services import commands, views
+from tests.integration.test_commands import _pausar_sin_posiciones, _pendiente
+from tests.integration.test_results_pipeline import FakePrices, _abrir, _t, _universo, seis_operaciones  # noqa: F401
 
 PAGINAS = ["dashboard", "analisis", "posiciones", "operaciones", "performance", "validacion", "decisiones", "sistema"]
 TIEMPO = 60
@@ -148,5 +149,110 @@ def test_sistema_muestra_base_ok_y_sin_saldo_declarado(ui):
 def test_la_aplicacion_completa_arranca_en_el_dashboard(ui):
     at = AppTest.from_file(str(_APP_UI), default_timeout=TIEMPO).run()
     assert not at.exception, [e.value for e in at.exception]
-    assert any("Solo lectura" in c.value for c in at.sidebar.caption)
+    assert any("Paper trading" in c.value for c in at.sidebar.caption)
     assert at.title[0].value == "Dashboard"
+
+
+# --- acciones con confirmación (Paso 10c) ---
+
+
+@pytest.fixture
+def con_acciones(ui, db_session, monkeypatch):
+    @contextmanager
+    def _sesion():
+        yield db_session
+
+    monkeypatch.setattr(commands, "_abrir_sesion", _sesion)
+    monkeypatch.setattr(commands, "_ahora", lambda: _t(5))
+    monkeypatch.setattr(commands, "_fuente_de_precios", lambda: FakePrices(_universo(ETHUSDT="105")))
+    return ui
+
+
+def _boton(at: AppTest, etiqueta: str):
+    return next(b for b in at.button if b.label == etiqueta)
+
+
+def test_un_boton_nunca_ejecuta_sin_confirmar(con_acciones, db_session):
+    from app.domain.enums import EstadoOrden
+    from app.repositories.orders import get_orden
+
+    oid = _pendiente(db_session)
+    at = con_acciones("posiciones")
+    _boton(at, "Aprobar entrada").click().run()
+    assert any("ABRIR una posición paper" in w.value for w in at.warning)
+    assert get_orden(db_session, oid).estado == EstadoOrden.PENDING_APPROVAL  # aún no pasó nada
+
+
+def test_cancelar_no_cambia_nada(con_acciones, db_session):
+    from app.domain.enums import EstadoOrden
+    from app.repositories.orders import get_orden
+
+    oid = _pendiente(db_session)
+    at = con_acciones("posiciones")
+    _boton(at, "Aprobar entrada").click().run()
+    _boton(at, "Cancelar").click().run()
+    assert get_orden(db_session, oid).estado == EstadoOrden.PENDING_APPROVAL
+    assert any(b.label == "Aprobar entrada" for b in at.button)
+
+
+def test_aprobar_confirmado_abre_la_posicion_y_muestra_el_resultado(con_acciones, db_session):
+    from app.domain.enums import EstadoOrden
+    from app.repositories.orders import get_orden
+    from app.repositories.positions import get_open_posicion_by_symbol
+
+    oid = _pendiente(db_session)
+    at = con_acciones("posiciones")
+    _boton(at, "Aprobar entrada").click().run()
+    _boton(at, "Confirmar").click().run()
+    assert not at.exception
+    assert get_orden(db_session, oid).estado == EstadoOrden.FILLED
+    assert get_open_posicion_by_symbol(db_session, "ETHUSDT").entry_price == 105
+    assert any("Entrada aprobada y ejecutada en paper" in s.value for s in at.success)
+    assert not any(b.label == "Aprobar entrada" for b in at.button)  # ya no está pendiente
+    at.run()  # el resultado se muestra una sola vez
+    assert not any("Entrada aprobada" in s.value for s in at.success)
+
+
+def test_rechazar_confirmado_con_motivo(con_acciones, db_session):
+    from app.domain.enums import EstadoOrden
+    from app.repositories.orders import get_orden
+
+    oid = _pendiente(db_session)
+    at = con_acciones("posiciones")
+    _boton(at, "Rechazar entrada").click().run()
+    at.text_input[0].set_value("no me convence").run()
+    _boton(at, "Confirmar").click().run()
+    orden = get_orden(db_session, oid)
+    assert orden.estado == EstadoOrden.REJECTED and orden.detail == "no me convence"
+    assert any("Entrada rechazada" in s.value for s in at.success)
+
+
+def test_en_pausa_aprobar_aparece_deshabilitado_y_rechazar_sigue_disponible(con_acciones, db_session):
+    _pendiente(db_session)
+    _pausar_sin_posiciones(db_session)
+    at = con_acciones("posiciones")
+    assert _boton(at, "Aprobar entrada").disabled is True
+    assert _boton(at, "Rechazar entrada").disabled is False
+    assert "no se pueden aprobar entradas nuevas" in _textos(at)
+
+
+def test_reanudar_solo_aparece_en_pausa_y_pide_confirmacion(con_acciones, db_session):
+    assert not any(b.label == "Reanudar el sistema" for b in con_acciones("sistema").button)
+    _pausar_sin_posiciones(db_session)
+    at = con_acciones("sistema")
+    _boton(at, "Reanudar el sistema").click().run()
+    assert any("REANUDAR el sistema" in w.value for w in at.warning)
+    _boton(at, "Confirmar").click().run()
+    assert not at.exception
+    assert any("Sistema reanudado" in s.value for s in at.success)
+    assert not any(b.label == "Reanudar el sistema" for b in at.button)
+
+
+def test_un_fallo_de_la_accion_se_muestra_como_aviso_sin_traza(con_acciones, db_session, monkeypatch):
+    oid = _pendiente(db_session)
+    at = con_acciones("posiciones")
+    monkeypatch.setattr("app.services.commands.approve_pending_entry", lambda *a, **k: 1 / 0)
+    _boton(at, "Aprobar entrada").click().run()
+    _boton(at, "Confirmar").click().run()
+    assert not at.exception
+    assert any("no se cambió nada" in w.value for w in at.warning)

@@ -60,6 +60,8 @@ class SistemaView:
     sistema_pausado: bool
     parada_emergencia: bool
     posiciones_abiertas: int
+    equity_actual: Decimal | None
+    pico_equity: Decimal
     ultima_observacion_monitor: datetime | None
     edad_monitor: timedelta | None
     discrepancias: tuple[str, ...]
@@ -103,6 +105,8 @@ def get_system_view(
         sistema_pausado=estado.pausado,
         parada_emergencia=estado.parada_emergencia,
         posiciones_abiertas=estado.posiciones_abiertas,
+        equity_actual=estado.ultimo_equity,
+        pico_equity=estado.pico_vigente,
         ultima_observacion_monitor=estado.ultima_observacion_en,
         edad_monitor=None if estado.ultima_observacion_en is None else now - estado.ultima_observacion_en,
         discrepancias=discrepancias,

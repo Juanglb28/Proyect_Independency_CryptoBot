@@ -1,16 +1,18 @@
-"""Posiciones abiertas y entradas pendientes de aprobación (solo lectura)."""
+"""Posiciones abiertas y entradas pendientes de aprobación (Paso 10c: aprobar y rechazar con confirmación)."""
 
 from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
 
-from app.services import views
+from app.services import commands, views
 from app.ui.components import format as f
+from app.ui.components.confirm_action import confirm_action, show_last_action_result
 from app.ui.components.indicator_tooltip import render_indicator_label
 
 
 def render() -> None:
+    show_last_action_result()
     v = views.posiciones()
     st.title("Posiciones")
     st.caption(f"{len(v.posiciones)} abiertas de un máximo de {v.maximo_posiciones} · "
@@ -42,13 +44,29 @@ def render() -> None:
     st.subheader("Entradas pendientes de aprobación")
     if not v.entradas_pendientes:
         st.caption("No hay entradas pendientes.")
-    else:
-        st.dataframe(
-            pd.DataFrame({"Símbolo": [e.symbol for e in v.entradas_pendientes],
-                          "Monto (USD)": [f.num(e.requested_usd) for e in v.entradas_pendientes],
-                          "Precio de referencia": [f.precio(e.reference_price) for e in v.entradas_pendientes],
-                          "Creada": [f.fecha(e.created_at) for e in v.entradas_pendientes],
-                          "Expira": [f.fecha(e.expires_at) for e in v.entradas_pendientes]}),
-            hide_index=True,
-        )
-        st.caption("Aprobar o rechazar se hace por terminal (`scripts.entries`); esta pantalla es de solo lectura.")
+    bloqueo = (
+        "Existe el archivo PARAR: no se pueden aprobar entradas nuevas." if v.parada_emergencia
+        else "El sistema está pausado por drawdown: no se pueden aprobar entradas nuevas." if v.sistema_pausado
+        else None
+    )
+    for e in v.entradas_pendientes:
+        with st.container(border=True):
+            st.markdown(f"**{e.symbol}** · {f.usd(e.requested_usd)} · vence {f.fecha(e.expires_at)}")
+            st.caption(f"Precio de referencia del análisis: {f.precio(e.reference_price)} · creada {f.fecha(e.created_at)}")
+            a, b = st.columns(2)
+            with a:
+                confirm_action(
+                    f"aprobar-{e.order_id}", "Aprobar entrada",
+                    f"Vas a ABRIR una posición paper de {f.usd(e.requested_usd)} en {e.symbol}. Se ejecuta al precio de "
+                    "Binance de este momento (no al de referencia), con stop -8 % y objetivo +12 % sobre ese precio. "
+                    "No hay dinero real.",
+                    lambda _motivo, oid=e.order_id: commands.aprobar_entrada(oid),
+                    disabled_reason=bloqueo,
+                )
+            with b:
+                confirm_action(
+                    f"rechazar-{e.order_id}", "Rechazar entrada",
+                    f"Vas a RECHAZAR la entrada en {e.symbol}. Se liberan los cupos que reservaba y no se puede deshacer.",
+                    lambda motivo, oid=e.order_id: commands.rechazar_entrada(oid, motivo),
+                    ask_reason=True,
+                )

@@ -1,9 +1,10 @@
-"""Punto de entrada de la interfaz local (Paso 10a, solo lectura).
+"""Punto de entrada de la interfaz local (Paso 10).
 
     streamlit run app/ui/app.py
 
-Solo navegación y presentación: cada página llama a `app.services.views`; no
-hay SQL, ni cálculos financieros, ni acciones que modifiquen datos.
+Solo navegación y presentación: las páginas leen con `app.services.views` y las
+únicas acciones (aprobar/rechazar una entrada, reanudar) pasan por
+`app.services.commands` con confirmación; no hay SQL ni cálculos financieros.
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ def main() -> None:
     st.set_page_config(page_title="Plataforma de Trading", layout="wide")
     paginas = [st.Page(fn, title=titulo, url_path=ruta, default=(ruta == "dashboard")) for titulo, ruta, fn in PAGINAS]
     with st.sidebar:
-        st.caption("Solo lectura · paper trading · sin dinero real")
+        st.caption("Paper trading · sin dinero real")
         st.caption(f"Definiciones de indicadores v{CATALOG_VERSION}")
     st.navigation(paginas).run()
 

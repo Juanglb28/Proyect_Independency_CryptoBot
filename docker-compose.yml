@@ -53,7 +53,8 @@ services:
     command: ["tail", "-f", "/dev/null"]
 
   ui:
-    # Interfaz Streamlit (Paso 10): solo lectura. Misma imagen que `app`.
+    # Interfaz Streamlit (Paso 10): lecturas en transacción READ ONLY; las únicas
+    # escrituras son las acciones manuales de `app/services/commands.py`. Misma imagen que `app`.
     # SEGURIDAD (secciones 10 y 21 del plan: sin conexiones entrantes desde
     # fuera): el proceso escucha en 0.0.0.0 DENTRO del contenedor, pero el
     # puerto se publica únicamente en 127.0.0.1 del anfitrión — solo se
