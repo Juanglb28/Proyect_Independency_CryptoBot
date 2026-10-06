@@ -72,12 +72,27 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    env_file:
-      - .env
+    # SEGURIDAD (P4 del master prompt, privilegios mínimos): `ui` NO usa
+    # `env_file`. Recibe solo las variables que la interfaz necesita; sin
+    # claves de Binance ni token de Telegram. Una variable sin valor
+    # (`NOMBRE:`) se toma del `.env` del anfitrión y, si ahí no existe, no
+    # se define en el contenedor (así los valores opcionales siguen siendo
+    # "no definidos", no cadenas vacías). Si la interfaz llega a necesitar
+    # otra variable, se agrega aquí A MANO y a propósito.
     environment:
       DATABASE_URL: postgresql+psycopg://crypto:crypto@postgres:5432/crypto_trading
+      PAPER_CAPITAL_USD:
+      MAX_OPEN_POSITIONS:
+      ANTHROPIC_API_KEY:             # la usa el Entrevistador (página Perfil)
+      ANTHROPIC_SALDO_DECLARADO_USD: # saldo estimado en la página Sistema
+      ANTHROPIC_SALDO_DECLARADO_EN:
     volumes:
       - .:/app
+      # El volumen de arriba también expone `.env` DENTRO del contenedor
+      # (`Settings` lo lee desde el directorio de trabajo, y cualquier
+      # código del proceso podría abrirlo). Se tapa con un archivo sin
+      # secretos; el resto del repo (p. ej. el archivo PARAR) sigue visible.
+      - ./docker/ui-sin-secretos.env:/app/.env:ro
     working_dir: /app
     ports:
       - "127.0.0.1:8501:8501"

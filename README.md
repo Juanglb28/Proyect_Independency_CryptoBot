@@ -1065,7 +1065,20 @@ test exige subir su versión.
   muestran valores guardados o llaman a las funciones puras del dominio ya
   existentes; no inventan cifras nuevas.
 - **Seguridad:** el contenedor escucha en `0.0.0.0` pero el puerto solo se
-  publica en `127.0.0.1` del PC. La UI no recibe credenciales de Binance.
+  publica en `127.0.0.1` del PC. La UI **no recibe** las claves de Binance ni el
+  token de Telegram: el servicio `ui` no usa `env_file`, solo una lista explícita
+  de variables (base de datos, clave de Anthropic para el Entrevistador, saldo
+  declarado y capital/posiciones, que no son secretos), y el archivo `.env` real,
+  que el volumen del repo dejaría visible dentro del contenedor, queda tapado por
+  `docker/ui-sin-secretos.env`. Si la interfaz necesita una variable nueva, se
+  agrega a mano en `docker-compose.yml` (un test lo vigila).
+  Tras cambiar esto: `docker compose up -d ui` recrea el contenedor. Para
+  comprobarlo:
+
+  ```bash
+  docker compose exec ui env | grep -c -E "BINANCE|TELEGRAM"   # debe imprimir 0
+  docker compose exec ui sh -c "grep -c -E 'KEY|TOKEN|SECRET' /app/.env"   # debe imprimir 0
+  ```
 
 ### Acciones manuales (Paso 10c)
 
