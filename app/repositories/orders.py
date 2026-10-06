@@ -213,3 +213,13 @@ def list_orders_for_position(session: Session, position_id: uuid.UUID) -> list[O
             select(Orden).where(Orden.position_id == position_id).order_by(Orden.created_at, Orden.id)
         ).scalars()
     )
+
+
+def list_orders_for_proposal(session: Session, proposal_id: uuid.UUID) -> list[Orden]:
+    """Órdenes ligadas a una propuesta (a lo sumo una de entrada), en orden
+    cronológico."""
+    return list(
+        session.execute(
+            select(Orden).where(Orden.proposal_id == proposal_id).order_by(Orden.created_at, Orden.id)
+        ).scalars()
+    )

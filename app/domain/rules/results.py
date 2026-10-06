@@ -53,7 +53,7 @@ from enum import Enum
 from fractions import Fraction
 from math import ceil
 
-from app.domain.enums import EstadoTesis, IntencionOrden
+from app.domain.enums import EstadoTesis, IntencionOrden, ResultadoOperacion
 
 # --- Constantes de la sección 8.7 del plan --------------------------------
 BOOTSTRAP_ITERACIONES = 1000
@@ -164,6 +164,29 @@ def calculate_benchmark(prices: Sequence[PuntoDeSerie]) -> BenchmarkPeriodo:
         return_pct=calculate_return_pct(ordenados[0].value, ordenados[-1].value),
         max_drawdown_pct=None if drawdown is None else drawdown.pct,
     )
+
+
+def classify_outcome(net_pnl: Decimal) -> ResultadoOperacion:
+    """Ganadora (P&L neto > 0), perdedora (< 0) o equilibrio (= 0): la misma
+    regla con la que `calculate_performance` cuenta cada grupo."""
+    if net_pnl > 0:
+        return ResultadoOperacion.GANADORA
+    if net_pnl < 0:
+        return ResultadoOperacion.PERDEDORA
+    return ResultadoOperacion.EQUILIBRIO
+
+
+def scale_series_to_base(serie: Sequence[PuntoDeSerie], base: Decimal) -> list[PuntoDeSerie]:
+    """Reescala una serie para que su primer punto valga `base` (p. ej. el
+    precio de BTC expresado como "qué habría hecho el capital inicial
+    comprando y manteniendo BTC"). Solo para comparar visualmente contra la
+    curva de equity; no es una métrica nueva. Serie vacía o con primer valor
+    cero: lista vacía (no se inventa)."""
+    ordenados = sorted(serie, key=lambda p: p.time)
+    if not ordenados or ordenados[0].value == 0:
+        return []
+    primero = ordenados[0].value
+    return [PuntoDeSerie(p.time, base * p.value / primero) for p in ordenados]
 
 
 def serialize_prices(precios: Mapping[str, Decimal]) -> dict[str, str]:

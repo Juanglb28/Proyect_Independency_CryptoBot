@@ -30,3 +30,6 @@ pgdata/
 # Cobertura (coverage.py)
 .coverage
 htmlcov/
+
+# Streamlit: secretos locales (la configuración .streamlit/config.toml sí se versiona)
+.streamlit/secrets.toml

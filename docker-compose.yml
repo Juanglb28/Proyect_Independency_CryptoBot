@@ -52,5 +52,31 @@ services:
     # `docker compose run --rm app <comando>`.
     command: ["tail", "-f", "/dev/null"]
 
+  ui:
+    # Interfaz Streamlit (Paso 10): solo lectura. Misma imagen que `app`.
+    # SEGURIDAD (secciones 10 y 21 del plan: sin conexiones entrantes desde
+    # fuera): el proceso escucha en 0.0.0.0 DENTRO del contenedor, pero el
+    # puerto se publica únicamente en 127.0.0.1 del anfitrión — solo se
+    # alcanza desde este mismo PC en http://localhost:8501. Nunca cambiar
+    # "127.0.0.1:" por un puerto abierto a la red.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: crypto_trading_ui
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://crypto:crypto@postgres:5432/crypto_trading
+    volumes:
+      - .:/app
+    working_dir: /app
+    ports:
+      - "127.0.0.1:8501:8501"
+    command: ["streamlit", "run", "app/ui/app.py"]
+    restart: unless-stopped
+
 volumes:
   pgdata:

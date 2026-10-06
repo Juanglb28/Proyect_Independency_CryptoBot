@@ -72,3 +72,13 @@ def get_price_extremes(
         stmt = stmt.where(TradeSnapshot.snapshot_time <= until)
     minimo, maximo = session.execute(stmt).one()
     return None if minimo is None else (minimo, maximo)
+
+
+def get_ultimo_snapshot(session: Session, position_id: uuid.UUID) -> TradeSnapshot | None:
+    """El snapshot más reciente de una posición (por hora y luego id), o `None`."""
+    return session.execute(
+        select(TradeSnapshot)
+        .where(TradeSnapshot.position_id == position_id)
+        .order_by(TradeSnapshot.snapshot_time.desc(), TradeSnapshot.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()

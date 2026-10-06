@@ -24,6 +24,19 @@ dependencies = [
     # alternativa a evaluar: es el cliente oficial del proveedor elegido, con
     # mantenimiento activo de Anthropic y sin dependencias pesadas propias.
     "anthropic>=0.40,<1.0",
+    # streamlit: interfaz local del Paso 10 (secciones 5, 8.8 y 8.9 del plan:
+    # "Interfaz: Streamlit — interfaz funcional en días, sin frontend
+    # separado"). Ya decidido en el plan. Problema que resuelve: mostrar los
+    # resultados sin construir un frontend aparte. Alternativa sin
+    # dependencia: ninguna razonable (habría que escribir HTML/JS a mano o
+    # un servidor web propio, que sí ampliaría la superficie de ataque).
+    # Mantenimiento: proyecto muy activo, versiones fijadas con tope <2.0.
+    # Seguridad: arrastra muchas dependencias (pyarrow, pydeck, altair...);
+    # por eso solo corre dentro del contenedor, publicado únicamente en
+    # 127.0.0.1 (ver docker-compose.yml) y sin ninguna credencial de
+    # exchange. Impacto arquitectónico: solo `app/ui/` lo importa (test de
+    # arquitectura); el resto del código no depende de él.
+    "streamlit>=1.50,<2.0",
 ]
 
 [project.optional-dependencies]

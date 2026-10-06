@@ -129,3 +129,13 @@ def get_closes_between(
         .order_by(Vela.open_time.asc())
     ).all()
     return [(r[0], r[1]) for r in rows]
+
+
+def get_latest_open_time(session: Session, symbol: str, timeframe: str) -> datetime | None:
+    """`open_time` de la vela más reciente guardada, o `None` si no hay."""
+    return session.execute(
+        select(Vela.open_time)
+        .where(Vela.symbol == symbol, Vela.timeframe == timeframe)
+        .order_by(Vela.open_time.desc())
+        .limit(1)
+    ).scalar_one_or_none()

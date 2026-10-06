@@ -1019,6 +1019,57 @@ docker compose run --rm app python -m scripts.results validate               # �
 tener ~30 operaciones el resultado de `validate` es solo orientativo
 (`PRELIMINAR`): el plan fija ese mínimo para dar una respuesta.
 
+## Interfaz local (Paso 10a, solo lectura)
+
+Interfaz Streamlit para mirar los resultados. **Solo lectura**: no aprueba,
+rechaza ni reanuda nada (eso queda para el Paso 10c; hoy se hace por terminal).
+
+### Cómo abrirla
+
+```
+docker compose build app          # una vez: instala Streamlit en la imagen
+docker compose up -d ui
+```
+
+Y abrir <http://localhost:8501>. Para detenerla: `docker compose stop ui`.
+
+### Qué muestra (ocho páginas)
+
+Dashboard, Análisis (último ciclo), Posiciones, Operaciones (filtros + detalle
+con la decisión congelada y la trayectoria), Performance (por periodo, símbolo y
+tercil de score), Validación de estrategia (las seis preguntas de la sección
+8.7; las que no se pueden responder hoy dicen `PENDIENTE`), Decisiones
+(historial de ciclos) y Sistema (base de datos, monitor, reconciliación,
+frescura de velas, costo y saldo estimado de IA).
+
+Un dato ausente se muestra como `n/d`, nunca como 0. Cada indicador/métrica del
+catálogo (`app/ui/definitions/catalog.py`, versionado) lleva su tooltip con
+definición, cómo leerlo, unidad y limitaciones; si una definición cambia, un
+test exige subir su versión.
+
+### Decisiones (cerradas con el usuario)
+
+- 10a es solo lectura; el Agente 1 (Entrevistador) va en 10b y las acciones de
+  la UI en 10c.
+- Las lecturas viven en un paquete nuevo, `app/services/`; la UI solo importa
+  `app.services.views` (y los enums del dominio para los filtros).
+- **La solo-lectura la garantiza la base**: `read_session()` abre la transacción
+  con `SET TRANSACTION READ ONLY` y la descarta siempre; una escritura falla en
+  PostgreSQL aunque alguien se equivoque en el código.
+- La UI no calcula P&L, score ni riesgo y no ejecuta SQL. Los servicios
+  muestran valores guardados o llaman a las funciones puras del dominio ya
+  existentes; no inventan cifras nuevas.
+- **Seguridad:** el contenedor escucha en `0.0.0.0` pero el puerto solo se
+  publica en `127.0.0.1` del PC. La UI no recibe credenciales de Binance.
+
+### Limitaciones conocidas (mostradas tal cual en pantalla)
+
+- El resultado del pre-filtro de ciclos pasados no se guarda; los "candidatos
+  evaluados" se reconstruyen de las llamadas al Analista cuantitativo.
+- El análisis por factor (`factor_analysis`, sección 8.8) está `PENDIENTE`.
+- No hay caché: cada interacción vuelve a leer la base (suficiente para uso
+  personal; se añade si se vuelve lenta).
+
 ## Orquestación del ciclo diario (Paso 7 del plan)
 
 ```bash
@@ -1426,9 +1477,16 @@ app/
 │   ├── benchmark_service.py    # benchmark del periodo (BTC, velas 1h cerradas)
 │   ├── performance_service.py  # performance_metrics (derivadas, reconstruibles)
 │   └── validation_service.py   # ¿el score discrimina? (bootstrap)
+├── services/               # lecturas para la interfaz (Paso 10a), solo lectura
+│   ├── session.py          # read_session(): transacción READ ONLY
+│   ├── views.py            # fachada que importa la UI (una función por vista)
+│   └── dashboard.py, positions.py, trades.py, performance.py,
+│       validation.py, decisions.py, system.py
 ├── ui/
-│   # paquetes reservados por la arquitectura del plan (sección 15.1),
-│   # todavía vacíos (Paso 9/10).
+│   ├── app.py              # navegación de las 8 páginas (streamlit run app/ui/app.py)
+│   ├── pages/              # una página por módulo (`render()`)
+│   ├── components/         # tarjetas, tablas, gráficos, tooltips
+│   └── definitions/        # catálogo versionado de definiciones (tooltips)
 ├── repositories/
 │   ├── health.py           # health check de base de datos
 │   ├── candles.py          # persistencia + lectura idempotente de velas
@@ -1566,6 +1624,10 @@ puede y no puede hacer cada capa.
   análisis de eventos, verificación de indicadores contra
   corrupción/borrado real en Postgres).
 
+- Interfaz Streamlit de solo lectura (Paso 10a): `app/ui/` (8 páginas,
+  componentes, catálogo de definiciones versionado) sobre `app/services/` (lecturas
+  en transacción `READ ONLY`). Ver "Interfaz local".
+
 ## Qué NO está implementado
 
 Deliberadamente fuera de alcance de este entregable (sección 29 del master
@@ -1582,7 +1644,7 @@ prompt — "no sobreimplementar"):
   sección 17 del plan: explícitamente pendiente hasta explorarla con el
   catálogo real ya cargado (Fase 2). `analisis_eventos` es el insumo, no
   esa definición.
-- Agente 1 (Entrevistador, conversacional — diferido a Paso 10/Streamlit).
+- Agente 1 (Entrevistador, conversacional — diferido al Paso 10b).
 - `initial_stop`/`initial_target` NO están en el `decision_snapshot` (que no
   se reescribe): se calculan al ABRIR sobre el precio de ejecución real y quedan
   inmutables en `posiciones.initial_stop_price` / `initial_target_price`
@@ -1602,7 +1664,9 @@ prompt — "no sobreimplementar"):
   `RISK_ALERT` (Paso 11).
 - Ajuste de pesos o umbrales con los resultados: el plan lo prohíbe sin
   registrar antes una nueva versión de estrategia (sección 8.7).
-- Interfaz Streamlit.
+- Acciones desde la interfaz (aprobar, rechazar, reanudar): Paso 10c. La interfaz de
+  hoy es de solo lectura.
+- Análisis por factor (`factor_analysis`) en la interfaz: pendiente.
 - Conexión a Telegram.
 
 ## Cómo verificar que el entorno funciona (resumen)

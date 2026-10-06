@@ -1,0 +1,15 @@
+# Configuración de Streamlit (sin secretos). La interfaz es local y de solo
+# lectura (Paso 10a). Ver docker-compose.yml: el puerto se publica solo en
+# 127.0.0.1 del anfitrión.
+[server]
+address = "0.0.0.0"   # dentro del contenedor; el anfitrión solo expone 127.0.0.1
+port = 8501
+headless = true
+fileWatcherType = "none"
+runOnSave = false
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "viewer"

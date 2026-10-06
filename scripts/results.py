@@ -28,7 +28,7 @@ from app.db.session import get_engine, get_sessionmaker, session_scope
 from app.domain.rules.results import EstadoValidacion, PerformanceMetrics, ValidationReport
 from app.logging_config import configure_logging
 from app.repositories.trade_results import list_trade_results
-from app.results.performance_service import recalculate_performance
+from app.results.performance_service import history_start, recalculate_performance
 from app.results.validation_service import validate_score
 
 
@@ -109,8 +109,7 @@ def run_command(session: Session, args: argparse.Namespace, *, now: datetime, in
         if args.days is not None:
             inicio = now - timedelta(days=args.days)
         else:
-            filas = list_trade_results(session)
-            inicio = min((r.entry_time for r in filas), default=now)
+            inicio = history_start(session, now=now)
         lineas: list[str] = []
         for m in recalculate_performance(
             session, period_start=inicio, period_end=now, initial_capital=initial_capital, now=now

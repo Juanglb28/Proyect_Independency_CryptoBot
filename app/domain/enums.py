@@ -227,3 +227,13 @@ class AlcanceMetricas(str, Enum):
     GLOBAL = "GLOBAL"
     SYMBOL = "SYMBOL"
     SCORE_TERCIL = "SCORE_TERCIL"
+
+
+class ResultadoOperacion(str, Enum):
+    """Clasificación de una operación cerrada por el signo de su P&L neto
+    (la misma que usa `calculate_performance` para ganadoras, perdedoras y
+    equilibrio). Solo para filtrar y etiquetar; no se guarda en la base."""
+
+    GANADORA = "GANADORA"
+    PERDEDORA = "PERDEDORA"
+    EQUILIBRIO = "EQUILIBRIO"

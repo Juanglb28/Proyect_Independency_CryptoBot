@@ -95,3 +95,25 @@ def get_gasto_acumulado_desde(session: Session, desde: datetime) -> Decimal:
         select(func.coalesce(func.sum(LlamadaIA.cost_usd), 0)).where(LlamadaIA.created_at >= desde)
     ).scalar_one()
     return Decimal(total)
+
+
+def list_llamadas_de_ciclo(session: Session, ciclo_id: uuid.UUID) -> list[LlamadaIA]:
+    """Llamadas a agentes de un ciclo, en el orden en que ocurrieron."""
+    return list(
+        session.execute(
+            select(LlamadaIA).where(LlamadaIA.ciclo_id == ciclo_id).order_by(LlamadaIA.created_at, LlamadaIA.id)
+        ).scalars()
+    )
+
+
+def get_resumen_llamadas_desde(session: Session, desde: datetime) -> tuple[int, int, Decimal]:
+    """`(llamadas, fallidas, costo_usd)` de las llamadas registradas desde
+    `desde` (inclusive). Agregado reconstruible, igual que el gasto acumulado."""
+    total, fallidas, costo = session.execute(
+        select(
+            func.count(),
+            func.count().filter(LlamadaIA.exitosa.is_(False)),
+            func.coalesce(func.sum(LlamadaIA.cost_usd), 0),
+        ).where(LlamadaIA.created_at >= desde)
+    ).one()
+    return int(total), int(fallidas), Decimal(costo)

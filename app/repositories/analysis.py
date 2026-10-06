@@ -77,6 +77,16 @@ def finalizar_ciclo(
     ciclo.error_message = error_message
 
 
+def list_ciclos_recientes(session: Session, *, limit: int) -> list[CicloAnalisis]:
+    """Los `limit` ciclos más recientes por inicio, del más nuevo al más viejo
+    (desempate por `id`: orden reproducible)."""
+    return list(
+        session.execute(
+            select(CicloAnalisis).order_by(CicloAnalisis.started_at.desc(), CicloAnalisis.id).limit(limit)
+        ).scalars()
+    )
+
+
 def get_ciclo(session: Session, ciclo_id: uuid.UUID) -> CicloAnalisis | None:
     return session.get(CicloAnalisis, ciclo_id)
 

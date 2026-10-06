@@ -57,18 +57,23 @@ def _exigir_utc(*momentos: datetime) -> None:
             raise ValueError("Las fechas deben tener zona horaria UTC explícita (sección 15.3 del plan).")
 
 
-def recalculate_performance(
+def history_start(session: Session, *, now: datetime) -> datetime:
+    """Inicio del historial completo: la entrada más antigua (o `now` si aún no
+    hay operaciones). Lo usan el comando `performance` y la interfaz."""
+    return min((r.entry_time for r in list_trade_results(session)), default=now)
+
+
+def compute_performance(
     session: Session,
     *,
     period_start: datetime,
     period_end: datetime,
     initial_capital: Decimal,
-    now: datetime,
 ) -> list[PerformanceMetrics]:
-    """Calcula y guarda las métricas del periodo (ver el docstring del
-    módulo). Devuelve lo que guardó, en el orden GLOBAL, SYMBOL (por
-    símbolo), SCORE_TERCIL."""
-    _exigir_utc(period_start, period_end, now)
+    """Calcula las métricas del periodo SIN guardar nada (solo lectura; es lo
+    que usa la interfaz). Devuelve GLOBAL, SYMBOL (por símbolo) y
+    SCORE_TERCIL, en ese orden. `recalculate_performance` es esto más guardar."""
+    _exigir_utc(period_start, period_end)
     trades = load_trades(session, period_start=period_start, period_end=period_end)
     curva = [
         PuntoDeSerie(o.observed_at, o.equity_usd)
@@ -97,7 +102,24 @@ def recalculate_performance(
     if terciles is not None:
         for nombre, grupo in zip(_NOMBRES_TERCIL, (terciles.superior, terciles.medio, terciles.inferior)):
             resultados.append(_calcular(AlcanceMetricas.SCORE_TERCIL, nombre, list(grupo), global_=False))
+    return resultados
 
+
+def recalculate_performance(
+    session: Session,
+    *,
+    period_start: datetime,
+    period_end: datetime,
+    initial_capital: Decimal,
+    now: datetime,
+) -> list[PerformanceMetrics]:
+    """Calcula y guarda las métricas del periodo (ver el docstring del
+    módulo). Devuelve lo que guardó, en el orden GLOBAL, SYMBOL (por
+    símbolo), SCORE_TERCIL."""
+    _exigir_utc(now)
+    resultados = compute_performance(
+        session, period_start=period_start, period_end=period_end, initial_capital=initial_capital
+    )
     for m in resultados:
         valores = dataclasses.asdict(m)
         valores["scope_type"] = AlcanceMetricas(m.scope_type)

@@ -60,3 +60,12 @@ def check_database_health(session: Session) -> HealthCheckResult:
         timescaledb_installed=True,
         detail="Conexión OK. Extensión timescaledb instalada.",
     )
+
+
+def set_transaction_read_only(session: Session) -> None:
+    """Marca la transacción ACTUAL como de solo lectura: cualquier escritura
+    (INSERT/UPDATE/DELETE/DDL) falla en la base. Es la garantía de que los
+    servicios de lectura de la interfaz (Paso 10a) no pueden modificar nada,
+    aunque alguien se equivoque en el código. Debe llamarse antes de la
+    primera consulta de la transacción."""
+    session.execute(text("SET TRANSACTION READ ONLY"))

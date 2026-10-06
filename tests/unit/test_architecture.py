@@ -28,7 +28,16 @@ _PROHIBIDO: dict[str, tuple[str, ...]] = {
     # Los repositorios solo persisten: ni IA, ni UI, ni reglas de negocio.
     "repositories": ("anthropic", "app.ai", "streamlit", "app.ui", "app.domain.rules", "app.execution"),
     # La UI no toca SQL ni la base directamente (UI -> servicios -> repositorios).
-    "ui": ("sqlalchemy", "psycopg", "app.db", "app.repositories", "anthropic"),
+    # Tampoco calcula ni ejecuta: solo muestra lo que entregan los servicios de
+    # lectura (`app.services`). Puede usar los enums del dominio para filtros.
+    "ui": (
+        "sqlalchemy", "psycopg", "app.db", "app.repositories", "anthropic", "ccxt",
+        "app.execution", "app.results", "app.orchestration", "app.data", "app.domain.rules",
+    ),
+    # Servicios de lectura para la interfaz (Paso 10a): sin IA, sin UI. Leen
+    # a través de repositorios y devuelven datos listos para mostrar; la
+    # solo-lectura se garantiza además en la base (transacción READ ONLY).
+    "services": ("anthropic", "app.ai", "streamlit", "app.ui", "app.orchestration"),
     # Medición y validación: calculan y guardan resultados, sin IA, sin UI y
     # sin depender del motor de ejecución (la dependencia va al revés: el
     # monitor registra sus resultados a través de `results`).
@@ -48,10 +57,24 @@ def _imports(path: Path) -> set[str]:
     return modulos
 
 
+# Excepciones explícitas y mínimas: módulos de `app.execution` que los
+# servicios de lectura pueden importar porque SOLO consultan (estado del
+# sistema, reconciliación interna y el archivo PARAR). Cualquier otro módulo
+# de ejecución (órdenes, posiciones, monitor) sigue prohibido.
+_EXCEPCIONES: dict[str, tuple[str, ...]] = {
+    "services": (
+        "app.execution.system_control", "app.execution.reconciliation", "app.execution.emergency_stop",
+    ),
+}
+_PROHIBIDO["services"] = _PROHIBIDO["services"] + ("app.execution",)
+
+
 def _violaciones(capa: str) -> list[str]:
     encontradas = []
     for archivo in sorted((_APP / capa).rglob("*.py")):
         for modulo in sorted(_imports(archivo)):
+            if any(modulo == e or modulo.startswith(e + ".") for e in _EXCEPCIONES.get(capa, ())):
+                continue
             for prohibido in _PROHIBIDO[capa]:
                 if modulo == prohibido or modulo.startswith(prohibido + "."):
                     encontradas.append(f"{archivo.relative_to(_APP.parent)} importa {modulo}")
@@ -70,3 +93,21 @@ def test_la_deteccion_funciona(tmp_path):
     archivo = tmp_path / "malo.py"
     archivo.write_text("from app.ai.agents.auditor import run_auditor_datos\nimport anthropic\n")
     assert _imports(archivo) == {"app.ai.agents.auditor", "anthropic"}
+
+
+def test_streamlit_solo_se_importa_dentro_de_la_interfaz():
+    """Streamlit es una dependencia de presentación: ninguna otra capa la usa."""
+    fuera = []
+    for archivo in sorted(_APP.rglob("*.py")):
+        if archivo.relative_to(_APP).parts[0] == "ui":
+            continue
+        if any(m == "streamlit" or m.startswith("streamlit.") for m in _imports(archivo)):
+            fuera.append(str(archivo.relative_to(_APP.parent)))
+    assert fuera == []
+
+
+def test_los_servicios_solo_importan_los_modulos_de_ejecucion_permitidos():
+    """Las excepciones no se amplían sin querer: solo existen las tres declaradas."""
+    assert _EXCEPCIONES["services"] == (
+        "app.execution.system_control", "app.execution.reconciliation", "app.execution.emergency_stop",
+    )
