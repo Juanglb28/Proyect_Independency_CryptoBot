@@ -1076,9 +1076,12 @@ test exige subir su versión.
   comprobarlo:
 
   ```bash
-  docker compose exec ui env | grep -c -E "BINANCE|TELEGRAM"   # debe imprimir 0
-  docker compose exec ui sh -c "grep -c -E 'KEY|TOKEN|SECRET' /app/.env"   # debe imprimir 0
+  docker compose exec ui sh -c "env | grep -c -E 'BINANCE|TELEGRAM'"       # debe imprimir 0
+  docker compose exec ui sh -c "grep -c -E 'KEY|TOKEN|SECRET' /app/.env"    # debe imprimir 0
   ```
+
+  (El `| grep` va DENTRO de `sh -c` para que funcione también en PowerShell,
+  que no tiene `grep`.)
 
 ### Acciones manuales (Paso 10c)
 
