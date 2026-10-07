@@ -577,6 +577,16 @@ def _win_rate_pct(trades: Sequence[TradeResult]) -> Decimal | None:
     return _pct(Decimal(ganadoras) / len(trades) * _CIEN)
 
 
+def expectancy_usd(trades: Sequence[TradeResult]) -> Decimal | None:
+    """P&L neto medio por operación en USD (`None` si no hay operaciones)."""
+    return _expectancy_usd(trades)
+
+
+def win_rate_pct(trades: Sequence[TradeResult]) -> Decimal | None:
+    """% de operaciones con P&L neto > 0 (`None` si no hay operaciones)."""
+    return _win_rate_pct(trades)
+
+
 # ======================================================================
 # Métricas de rendimiento (sección 8.6)
 # ======================================================================

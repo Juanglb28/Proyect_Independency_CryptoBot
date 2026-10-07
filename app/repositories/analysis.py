@@ -18,6 +18,7 @@ estado a medias que rompe la trazabilidad que este paso existe para dar.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -188,6 +189,18 @@ def get_propuestas_de_ciclo(session: Session, ciclo_id: uuid.UUID) -> list[Propu
 
 def get_factores_de_propuesta(session: Session, propuesta_id: uuid.UUID) -> list[Factor]:
     stmt = select(Factor).where(Factor.propuesta_id == propuesta_id).order_by(Factor.factor)
+    return list(session.scalars(stmt))
+
+
+def list_factores_de_propuestas(session: Session, propuesta_ids: Sequence[uuid.UUID]) -> list[Factor]:
+    """Factores de varias propuestas en una sola consulta (lectura pura)."""
+    if not propuesta_ids:
+        return []
+    stmt = (
+        select(Factor)
+        .where(Factor.propuesta_id.in_(list(propuesta_ids)))
+        .order_by(Factor.propuesta_id, Factor.factor)
+    )
     return list(session.scalars(stmt))
 
 

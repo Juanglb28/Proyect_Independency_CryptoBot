@@ -136,8 +136,24 @@ def test_decisiones_y_analisis_sin_ciclos_lo_dicen(ui):
     assert "ningún ciclo" in _textos(ui("analisis"))
 
 
-def test_analisis_declara_pendiente_el_analisis_por_factor(ui):
-    assert "PENDIENTE" in _textos(ui("analisis"))
+def test_analisis_remite_el_analisis_por_factor_a_validacion(ui):
+    assert "Validación de estrategia" in _textos(ui("analisis"))
+
+
+def test_validacion_vacia_muestra_los_4_factores_con_nd_sin_inventar(ui):
+    at = ui("validacion")
+    assert not at.exception
+    tabla = at.dataframe[-1].value
+    assert len(tabla) == 4 and set(tabla["Contribución (USD)"]) == {"n/d"} and set(tabla["Peso asignado"]) == {"n/d"}
+    assert "comparaciones múltiples" in _textos(at)
+
+
+def test_validacion_con_seis_operaciones_muestra_factores_puntuados(ui, seis_operaciones):  # noqa: F811
+    at = ui("validacion")
+    assert not at.exception
+    tabla = at.dataframe[-1].value
+    assert list(tabla["Operaciones"]) == [6, 6, 6, 6]
+    assert "Menos de 3" not in _textos(at)
 
 
 def test_sistema_muestra_base_ok_y_sin_saldo_declarado(ui):

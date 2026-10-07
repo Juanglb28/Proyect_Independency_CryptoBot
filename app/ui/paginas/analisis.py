@@ -19,4 +19,4 @@ def render() -> None:
         if detalle is not None:
             render_cycle_detail(detalle, con_llamadas=False)
     st.divider()
-    st.markdown("**Análisis por factor:** PENDIENTE (sección 8.8). Necesita un número de operaciones cerradas que hoy no existe.")
+    st.markdown("**Análisis por factor:** está en la página *Validación de estrategia* (sección 8.8).")

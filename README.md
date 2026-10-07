@@ -1073,7 +1073,7 @@ Y abrir <http://localhost:8501>.
 Dashboard, Análisis (último ciclo), Posiciones, Operaciones (filtros + detalle
 con la decisión congelada y la trayectoria), Performance (por periodo, símbolo y
 tercil de score), Validación de estrategia (las seis preguntas de la sección
-8.7; las que no se pueden responder hoy dicen `PENDIENTE`), Decisiones
+8.7 más el análisis por factor de 8.8; la pregunta 4, que necesita el backtest, dice `PENDIENTE`), Decisiones
 (historial de ciclos) y Sistema (base de datos, monitor, reconciliación,
 frescura de velas, costo y saldo estimado de IA).
 
@@ -1180,7 +1180,18 @@ Decisiones (cerradas con el usuario el 2026-10-06):
 - El pre-filtro se guarda por ciclo desde 2026-10-07 (`prefiltro_resultados`);
   en los ciclos anteriores no existe y sus "candidatos evaluados" se
   reconstruyen de las llamadas al Analista cuantitativo (la UI lo avisa).
-- El análisis por factor (`factor_analysis`, sección 8.8) está `PENDIENTE`.
+- El análisis por factor (`factor_analysis`, sección 8.8) está en la página
+  Validación (`app/domain/rules/factors.py`, `app/results/factor_analysis_service.py`).
+  Por factor muestra: peso asignado, frecuencia (operaciones y % del total en que
+  se puntuó), resultado promedio y win rate, confianza (conteo de etiquetas
+  alta/media/baja del Consolidador + estado por tamaño de muestra) y contribución
+  observada = expectancy del tercio alto menos la del bajo del puntaje del factor,
+  con IC 95% por bootstrap (mismo método y semilla que el score). Es solo lectura
+  y no interpreta: la lectura es del usuario. Con menos de 3 operaciones no hay
+  terciles; con un puntaje idéntico en todas no se calcula contribución (el
+  desempate por fecha inventaría una); son 4 comparaciones con IC 95% cada una
+  (comparaciones múltiples, no corregidas). Hasta 30 operaciones cerradas el
+  estado es `MUESTRA_INSUFICIENTE`/`PRELIMINAR`.
 - No hay caché: cada interacción vuelve a leer la base (suficiente para uso
   personal; se añade si se vuelve lenta).
 
@@ -1800,7 +1811,6 @@ prompt — "no sobreimplementar"):
   registrar antes una nueva versión de estrategia (sección 8.7).
 - Desde la interfaz no se puede abrir un ciclo, cerrar una posición a mano, crear/borrar
   el archivo `PARAR` ni cambiar ninguna regla de riesgo (fuera de alcance de 10c).
-- Análisis por factor (`factor_analysis`) en la interfaz: pendiente.
 - Conexión a Telegram.
 
 ## Cómo verificar que el entorno funciona (resumen)

@@ -236,7 +236,7 @@ def test_validacion_expone_informe_terciles_y_seis_preguntas(db_session, seis_op
     assert v.informe.n_trades == 6 and v.informe.status.value == "PRELIMINAR"
     assert len(v.terciles) == 3 and v.global_.total_trades == 6
     assert [p.numero for p in v.preguntas] == [1, 2, 3, 4, 5, 6]
-    assert {p.numero for p in v.preguntas if p.estado == EstadoPregunta.PENDIENTE} == {3, 4}
+    assert {p.numero for p in v.preguntas if p.estado == EstadoPregunta.PENDIENTE} == {4}
 
 
 def test_validacion_sin_operaciones(db_session):

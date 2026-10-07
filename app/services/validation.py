@@ -15,7 +15,9 @@ from enum import Enum
 
 from sqlalchemy.orm import Session
 
+from app.domain.rules.factors import FactorAnalysisReport
 from app.domain.rules.results import PerformanceMetrics, ValidationReport
+from app.results.factor_analysis_service import analyze_factors_for_period
 from app.results.performance_service import compute_performance
 from app.results.validation_service import validate_score
 from app.services._periodo import inicio_del_historial
@@ -44,9 +46,9 @@ _PREGUNTAS: tuple[PreguntaDeValidacion, ...] = (
         "Se muestran win rate y expectancy de cada tercio; la lectura de la tendencia es tuya, el sistema no la califica.",
     ),
     PreguntaDeValidacion(
-        3, "¿Los factores con mayor peso muestran relación observable con el resultado?", EstadoPregunta.PENDIENTE,
-        "Requiere un análisis por factor que todavía no existe (factor_analysis, sección 8.8). Con menos de 30 "
-        "operaciones tampoco habría muestra suficiente.",
+        3, "¿Los factores con mayor peso muestran relación observable con el resultado?", EstadoPregunta.DISPONIBLE,
+        "Se muestra, por factor, el peso asignado junto a su contribución observada (tercio alto menos tercio bajo "
+        "del puntaje del factor, con IC 95%). La lectura es tuya; con menos de 30 operaciones es solo orientativa.",
     ),
     PreguntaDeValidacion(
         4, "¿La relación se mantiene fuera de la muestra usada para ajustar parámetros?", EstadoPregunta.PENDIENTE,
@@ -70,6 +72,7 @@ class ValidationView:
     informe: ValidationReport
     terciles: tuple[PerformanceMetrics, ...]
     global_: PerformanceMetrics
+    factores: FactorAnalysisReport
     preguntas: tuple[PreguntaDeValidacion, ...]
 
 
@@ -82,5 +85,6 @@ def get_validation_view(session: Session, *, initial_capital: Decimal, now: date
         informe=validate_score(session),
         terciles=tuple(m for m in metricas if m.scope_type == "SCORE_TERCIL"),
         global_=metricas[0],
+        factores=analyze_factors_for_period(session),
         preguntas=_PREGUNTAS,
     )
