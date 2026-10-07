@@ -1037,7 +1037,13 @@ docker compose build              # una vez (y al cambiar dependencias): imagen 
 docker compose up -d ui
 ```
 
-Y abrir <http://localhost:8501>. Para detenerla: `docker compose stop ui`.
+Y abrir <http://localhost:8501>.
+
+> **Nota:** la carpeta de páginas se llama `app/ui/paginas/`, no `pages/`, a
+> propósito: Streamlit descubre sola cualquier carpeta `pages/` junto al archivo
+> de entrada y, al recargar una URL como `/posiciones`, ejecutaría ese archivo
+> suelto en vez de `app/ui/app.py` (pantalla en blanco). Hay un test que lo vigila.
+ Para detenerla: `docker compose stop ui`.
 
 ### Qué muestra (ocho páginas)
 
@@ -1585,7 +1591,7 @@ app/
 │       validation.py, decisions.py, system.py
 ├── ui/
 │   ├── app.py              # navegación de las 8 páginas (streamlit run app/ui/app.py)
-│   ├── pages/              # una página por módulo (`render()`)
+│   ├── paginas/            # una página por módulo (`render()`); NO se llama `pages/` (ver nota)
 │   ├── components/         # tarjetas, tablas, gráficos, tooltips
 │   └── definitions/        # catálogo versionado de definiciones (tooltips)
 ├── repositories/

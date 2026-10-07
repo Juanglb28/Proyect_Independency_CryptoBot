@@ -26,7 +26,7 @@ if _RAIZ not in sys.path:
 import streamlit as st  # noqa: E402
 
 from app.ui.definitions import CATALOG_VERSION  # noqa: E402
-from app.ui.pages import (  # noqa: E402
+from app.ui.paginas import (  # noqa: E402
     analisis, dashboard, decisiones, operaciones, performance, perfil, posiciones, sistema, validacion,
 )
 

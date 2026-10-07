@@ -26,7 +26,7 @@ _APP_UI = Path(__file__).resolve().parents[2] / "app" / "ui" / "app.py"
 def _pagina(nombre: str) -> None:
     import importlib
 
-    importlib.import_module(f"app.ui.pages.{nombre}").render()
+    importlib.import_module(f"app.ui.paginas.{nombre}").render()
 
 
 @pytest.fixture
