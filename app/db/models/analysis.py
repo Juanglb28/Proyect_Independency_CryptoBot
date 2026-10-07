@@ -15,6 +15,26 @@ resultado resumido inventado (ver el docstring de ese enum sobre cómo se
 deriva éxito/sin-candidatos/fallo a partir de `status` + `error_message` +
 la existencia de `propuestas`).
 
+## `PrefiltroResultado`
+
+Una fila por cada símbolo del universo y por cada ciclo: lo que hizo el
+pre-filtro determinista ese día (puntaje, sub-puntajes, ranking y si pasó el
+corte — `EstadoPrefiltro`), incluidos los descartados y los `SIN_DATOS` (sin
+puntaje: los campos numéricos quedan `NULL`, nunca un valor de relleno, P3).
+Existe para poder responder después "qué se evaluó y qué se dejó fuera ese
+día" (sección 8.9, Decisiones) y, más adelante, medir el propio pre-filtro.
+
+Solo-agregar (un trigger rechaza `UPDATE`/`DELETE`, como `perfil_usuario`):
+es evidencia de lo que el sistema sabía en ese instante (sección 14/15 del
+plan). Los ciclos anteriores a esta tabla (2026-10-07) NO se rellenan
+retroactivamente: no hay forma honesta de saber qué sabía el sistema
+entonces. `formula_version` guarda la versión de la fórmula
+(`app.data.prefilter.PREFILTER_FORMULA_VERSION`) para interpretar el puntaje
+aunque los límites de normalización se recalibren.
+
+Es una tabla adicional a las 13 del master prompt, aprobada por el usuario
+(2026-10-07).
+
 ## `Factor`
 
 Una fila por cada una de las 4 categorías ponderadas que juzga el
@@ -70,12 +90,25 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, Numeric, Text, func
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Identity,
+    Integer,
+    Numeric,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
-from app.domain.enums import EstadoCiclo, TierEntrada
+from app.domain.enums import EstadoCiclo, EstadoPrefiltro, TierEntrada
 
 
 class CicloAnalisis(Base):
@@ -177,6 +210,50 @@ class Factor(Base):
     peso: Mapped[Decimal] = mapped_column(Numeric(4, 2), nullable=False)
     puntaje: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
     confianza: Mapped[str | None] = mapped_column(nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class PrefiltroResultado(Base):
+    __tablename__ = "prefiltro_resultados"
+    __table_args__ = (
+        UniqueConstraint("ciclo_id", "symbol", name="uq_prefiltro_resultados_ciclo_id_symbol"),
+        CheckConstraint(
+            "(estado = 'SIN_DATOS' AND ranking IS NULL AND score_final IS NULL AND calculated_at IS NULL) "
+            "OR (estado <> 'SIN_DATOS' AND ranking IS NOT NULL AND score_final IS NOT NULL "
+            "AND calculated_at IS NOT NULL)",
+            name="sin_datos_coherente",
+        ),
+        CheckConstraint("ranking IS NULL OR ranking >= 1", name="ranking_positivo"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    ciclo_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ciclos_analisis.id"), nullable=False
+    )
+
+    symbol: Mapped[str] = mapped_column(nullable=False)
+    estado: Mapped[EstadoPrefiltro] = mapped_column(
+        Enum(EstadoPrefiltro, name="estado_prefiltro", native_enum=False, length=32, validate_strings=True),
+        nullable=False,
+    )
+    ranking: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """1 = mejor puntaje del día entre los símbolos con puntaje. NULL en `SIN_DATOS`."""
+
+    calculated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    """`open_time` de la vela diaria sobre la que se calculó. NULL en `SIN_DATOS`."""
+
+    tendencia_pct: Mapped[Decimal | None] = mapped_column(Numeric(30, 12), nullable=True)
+    volumen_relativo: Mapped[Decimal | None] = mapped_column(Numeric(30, 12), nullable=True)
+    distancia_max_90d_pct: Mapped[Decimal | None] = mapped_column(Numeric(30, 12), nullable=True)
+    score_tendencia: Mapped[Decimal | None] = mapped_column(Numeric(30, 12), nullable=True)
+    score_volumen: Mapped[Decimal | None] = mapped_column(Numeric(30, 12), nullable=True)
+    score_distancia: Mapped[Decimal | None] = mapped_column(Numeric(30, 12), nullable=True)
+    score_final: Mapped[Decimal | None] = mapped_column(Numeric(30, 12), nullable=True)
+
+    formula_version: Mapped[str] = mapped_column(nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

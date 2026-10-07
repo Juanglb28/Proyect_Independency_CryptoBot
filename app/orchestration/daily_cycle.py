@@ -67,6 +67,7 @@ from app.ai.prompts.consolidator import PROMPT_VERSION as PROMPT_VERSION_CONSOLI
 from app.ai.prompts.events import PROMPT_VERSION as PROMPT_VERSION_EVENTOS
 from app.ai.prompts.quantitative import PROMPT_VERSION as PROMPT_VERSION_CUANTITATIVO
 from app.config import Settings
+from app.data.prefilter import PREFILTER_FORMULA_VERSION, clasificar_resultados
 from app.data.prefilter_pipeline import run_prefilter
 from app.data.relative_strength import calculate_ratio_rsi
 from app.domain.enums import EstadoCiclo
@@ -89,12 +90,14 @@ from app.orchestration.candidate_pipeline import (
 )
 from app.repositories.analysis import (
     FactorRow,
+    PrefiltroRow,
     PropuestaRow,
     avanzar_ciclo,
     create_ciclo,
     finalizar_ciclo,
     get_ciclo,
     get_puntajes_de_ciclos_previos,
+    save_prefiltro_resultados,
     save_propuesta,
 )
 from app.repositories.candles import get_candles
@@ -175,6 +178,32 @@ def _marcar_fallo_y_relanzar(session: Session, ciclo_id: uuid.UUID, costo_total:
     session.commit()
 
 
+def guardar_resultado_prefiltro(session: Session, ciclo_id: uuid.UUID, resultado) -> None:
+    """Persiste el resultado del pre-filtro de este ciclo (`prefiltro_resultados`).
+    Solo traduce `ResultadoPrefiltro` a filas; no calcula nada."""
+    filas = []
+    for r in clasificar_resultados(
+        list(resultado.scores), list(resultado.candidates), list(resultado.symbols_sin_datos)
+    ):
+        sc = r.score
+        filas.append(
+            PrefiltroRow(
+                symbol=r.symbol,
+                estado=r.estado,
+                ranking=r.ranking,
+                calculated_at=None if sc is None else sc.calculated_at,
+                tendencia_pct=None if sc is None else sc.tendencia_pct,
+                volumen_relativo=None if sc is None else sc.volumen_relativo,
+                distancia_max_90d_pct=None if sc is None else sc.distancia_max_90d_pct,
+                score_tendencia=None if sc is None else sc.score_tendencia,
+                score_volumen=None if sc is None else sc.score_volumen,
+                score_distancia=None if sc is None else sc.score_distancia,
+                score_final=None if sc is None else sc.score_final,
+            )
+        )
+    save_prefiltro_resultados(session, ciclo_id, filas, formula_version=PREFILTER_FORMULA_VERSION)
+
+
 def run_daily_cycle(session: Session, settings: Settings, *, now: datetime | None = None) -> DailyCycleResult:
     """Corre un ciclo de análisis completo y devuelve un resumen.
 
@@ -193,6 +222,12 @@ def run_daily_cycle(session: Session, settings: Settings, *, now: datetime | Non
     try:
         resultado_prefiltro = run_prefilter(session)
         candidatos = [c.symbol for c in resultado_prefiltro.candidates]
+
+        # Evidencia de lo que el pre-filtro hizo este ciclo (incluidos los
+        # descartados y los sin datos), guardada ANTES de seguir: así queda
+        # aunque el ciclo termine aquí por falta de candidatos.
+        guardar_resultado_prefiltro(session, ciclo_id, resultado_prefiltro)
+        session.commit()
 
         if not candidatos:
             finalizar_ciclo(

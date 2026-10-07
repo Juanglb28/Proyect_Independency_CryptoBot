@@ -7,11 +7,10 @@ Mismo rol que `indicator_pipeline.py` cumple para los indicadores: separa
 "calcular" (puro, sin base de datos — `prefilter.py`) de "leer de la base
 de datos y calcular para todo el universo" (aquí).
 
-Esta función NO persiste nada todavía: las tablas `factores`/`propuestas`
-(sección 12 del plan) pertenecen a un paso posterior (cuando exista un
-ciclo de análisis real que registre este resultado). Por ahora solo
-devuelve los puntajes calculados, para que un script o un test puedan
-inspeccionarlos.
+`run_prefilter` NO persiste nada: solo devuelve los puntajes calculados, para
+que un script o un test puedan inspeccionarlos. Quien guarda el resultado de
+cada ciclo en `prefiltro_resultados` es el orquestador
+(`app.orchestration.daily_cycle`), con `clasificar_resultados` de `prefilter.py`.
 """
 
 from __future__ import annotations

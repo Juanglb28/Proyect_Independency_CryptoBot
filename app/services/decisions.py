@@ -4,11 +4,13 @@ Muestra, para cada ciclo, qué se evaluó, qué recomendó el Consolidador, qué
 propuestas salieron (con sus factores y el criterio de entrada) y si alguna
 llegó a ser orden y posición. Todo es lo que quedó guardado entonces.
 
-Limitación conocida, mostrada tal cual en la interfaz: el resultado del
-pre-filtro (qué activos del universo pasaron el corte) NO se guarda hoy, así
-que los "candidatos evaluados" se reconstruyen de las llamadas al Analista
-cuantitativo. Recalcular el pre-filtro con los datos de hoy sería mezclar el
-presente con una decisión pasada.
+El resultado del pre-filtro de cada ciclo (qué activos del universo pasaron
+el corte y con qué puntaje) se guarda desde 2026-10-07 en
+`prefiltro_resultados`; aquí solo se lee. Limitación conocida, mostrada tal
+cual en la interfaz: los ciclos ANTERIORES a esa fecha no lo tienen (no se
+rellena retroactivamente: recalcular con los datos de hoy sería mezclar el
+presente con una decisión pasada), así que sus "candidatos evaluados" se
+reconstruyen de las llamadas al Analista cuantitativo.
 """
 
 from __future__ import annotations
@@ -21,13 +23,14 @@ from enum import Enum
 
 from sqlalchemy.orm import Session
 
-from app.domain.enums import EstadoCiclo, EstadoOrden, EstadoPosicion
+from app.domain.enums import EstadoCiclo, EstadoOrden, EstadoPosicion, EstadoPrefiltro
 from app.repositories.ai_calls import list_llamadas_de_ciclo
 from app.repositories.analysis import (
     get_ciclo,
     get_factores_de_propuesta,
     get_propuestas_de_ciclo,
     list_ciclos_recientes,
+    list_prefiltro_de_ciclo,
 )
 from app.repositories.orders import list_orders_for_proposal
 from app.repositories.positions import get_posicion_by_proposal
@@ -37,8 +40,12 @@ AGENTE_CUANTITATIVO = "analista_cuantitativo"
 AGENTE_CONSOLIDADOR = "consolidador"
 
 NOTA_EMBUDO = (
-    "El resultado del pre-filtro (qué activos del universo pasaron el corte) no se guarda todavía; "
-    "los candidatos se reconstruyen de las llamadas al Analista cuantitativo."
+    "Este ciclo es anterior al registro del pre-filtro: no se guardó qué activos del universo pasaron el corte, "
+    "y los candidatos se reconstruyen de las llamadas al Analista cuantitativo."
+)
+NOTA_EMBUDO_REGISTRADO = (
+    "El pre-filtro de este ciclo está guardado tal como se calculó ese día (con la versión de fórmula indicada); "
+    "los candidatos evaluados por la IA salen de las llamadas al Analista cuantitativo."
 )
 
 
@@ -107,6 +114,21 @@ class LlamadaIAView:
 
 
 @dataclass(frozen=True)
+class PrefiltroSimbolo:
+    """Resultado del pre-filtro de un símbolo en un ciclo, tal como se guardó.
+    Los números son `None` si el símbolo quedó `SIN_DATOS` (nunca 0)."""
+
+    symbol: str
+    estado: EstadoPrefiltro
+    ranking: int | None
+    tendencia_pct: Decimal | None
+    volumen_relativo: Decimal | None
+    distancia_max_90d_pct: Decimal | None
+    score_final: Decimal | None
+    formula_version: str
+
+
+@dataclass(frozen=True)
 class CicloDetalle:
     resumen: CicloResumen
     candidatos_evaluados: tuple[str, ...]
@@ -115,6 +137,8 @@ class CicloDetalle:
     confianza_global: str | None
     propuestas: tuple[PropuestaDelCiclo, ...]
     llamadas: tuple[LlamadaIAView, ...]
+    prefiltro: tuple[PrefiltroSimbolo, ...] = ()
+    """Vacío en los ciclos anteriores al registro del pre-filtro."""
     nota_embudo: str = NOTA_EMBUDO
 
 
@@ -199,6 +223,19 @@ def get_ciclo_detalle(session: Session, ciclo_id: uuid.UUID) -> CicloDetalle | N
         (ll for ll in reversed(llamadas) if ll.agente == AGENTE_CONSOLIDADOR and ll.exitosa and ll.respuesta), None
     )
     respuesta = consolidador.respuesta if consolidador is not None else {}
+    prefiltro = tuple(
+        PrefiltroSimbolo(
+            symbol=r.symbol,
+            estado=r.estado,
+            ranking=r.ranking,
+            tendencia_pct=r.tendencia_pct,
+            volumen_relativo=r.volumen_relativo,
+            distancia_max_90d_pct=r.distancia_max_90d_pct,
+            score_final=r.score_final,
+            formula_version=r.formula_version,
+        )
+        for r in list_prefiltro_de_ciclo(session, ciclo_id)
+    )
     return CicloDetalle(
         resumen=_resumen(session, ciclo),
         candidatos_evaluados=tuple(candidatos),
@@ -206,6 +243,8 @@ def get_ciclo_detalle(session: Session, ciclo_id: uuid.UUID) -> CicloDetalle | N
         razon_no_invertir=respuesta.get("razon_no_invertir"),
         confianza_global=respuesta.get("confianza_global"),
         propuestas=tuple(_propuesta(session, p) for p in get_propuestas_de_ciclo(session, ciclo_id)),
+        prefiltro=prefiltro,
+        nota_embudo=NOTA_EMBUDO_REGISTRADO if prefiltro else NOTA_EMBUDO,
         llamadas=tuple(
             LlamadaIAView(
                 agente=ll.agente,

@@ -68,7 +68,16 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
+from app.domain.enums import EstadoPrefiltro
 from app.domain.rules.scoring import MAX_CANDIDATOS_PREFILTRO, SCORE_MINIMO_PREFILTRO
+
+# Versión de la fórmula del pre-filtro (límites de normalización, pesos iguales,
+# solo velas diarias, umbral y tope). Se guarda con cada resultado en
+# `prefiltro_resultados` para poder interpretar un puntaje histórico aunque los
+# límites se recalibren después (reproducibilidad, sección 15 del plan). Si
+# cambia cualquier constante de este módulo o de `scoring`, sube la versión;
+# `tests/unit/test_prefilter.py` lo vigila con una huella.
+PREFILTER_FORMULA_VERSION = "1"
 
 # Límites de normalización absoluta (ver docstring del módulo).
 TENDENCIA_PCT_BOUNDS: tuple[Decimal, Decimal] = (Decimal("-25"), Decimal("25"))
@@ -183,3 +192,45 @@ def select_candidates(scores: list[PrefilterScore]) -> list[PrefilterScore]:
     candidates = [s for s in scores if s.score_final >= SCORE_MINIMO_PREFILTRO]
     candidates.sort(key=lambda s: (-s.score_final, s.symbol))
     return candidates[:MAX_CANDIDATOS_PREFILTRO]
+
+
+@dataclass(frozen=True)
+class ResultadoPrefiltro:
+    """Lo que se guarda de UN símbolo en un ciclo: su estado, su posición en el
+    ranking y, si tuvo puntaje, los valores crudos y los sub-puntajes (los
+    mismos de `PrefilterScore`). Sin puntaje (`SIN_DATOS`) esos campos son
+    `None`, nunca un valor de relleno."""
+
+    symbol: str
+    estado: EstadoPrefiltro
+    ranking: int | None
+    """1 = mejor puntaje del día entre los símbolos con puntaje (empates por
+    símbolo ascendente, igual que `select_candidates`). `None` si no hubo puntaje."""
+    score: PrefilterScore | None
+
+
+def clasificar_resultados(
+    scores: list[PrefilterScore], candidates: list[PrefilterScore], symbols_sin_datos: list[str]
+) -> list[ResultadoPrefiltro]:
+    """Une el resultado del pre-filtro en una lista por símbolo, lista para
+    persistir. Función pura: no decide nada nuevo; solo etiqueta lo que
+    `calculate_prefilter_score` y `select_candidates` ya decidieron.
+
+    Orden de salida: primero los símbolos con puntaje (por ranking) y luego los
+    `SIN_DATOS` (por símbolo), para que el resultado sea reproducible.
+    """
+    elegidos = {c.symbol for c in candidates}
+    ordenados = sorted(scores, key=lambda s: (-s.score_final, s.symbol))
+
+    resultados: list[ResultadoPrefiltro] = []
+    for posicion, score in enumerate(ordenados, start=1):
+        if score.symbol in elegidos:
+            estado = EstadoPrefiltro.CANDIDATO
+        elif score.score_final < SCORE_MINIMO_PREFILTRO:
+            estado = EstadoPrefiltro.DESCARTADO_POR_PUNTAJE
+        else:
+            estado = EstadoPrefiltro.DESCARTADO_POR_TOPE
+        resultados.append(ResultadoPrefiltro(score.symbol, estado, posicion, score))
+    for symbol in sorted(symbols_sin_datos):
+        resultados.append(ResultadoPrefiltro(symbol, EstadoPrefiltro.SIN_DATOS, None, None))
+    return resultados

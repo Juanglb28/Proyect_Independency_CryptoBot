@@ -25,8 +25,8 @@ from decimal import Decimal
 from sqlalchemy import Date, and_, cast, func, select
 from sqlalchemy.orm import Session
 
-from app.db.models.analysis import CicloAnalisis, Factor, Propuesta
-from app.domain.enums import EstadoCiclo, TierEntrada
+from app.db.models.analysis import CicloAnalisis, Factor, PrefiltroResultado, Propuesta
+from app.domain.enums import EstadoCiclo, EstadoPrefiltro, TierEntrada
 
 
 # --- ciclos_analisis --------------------------------------------------------
@@ -225,3 +225,66 @@ def get_puntajes_de_ciclos_previos(session: Session, symbol: str, ciclo_id: uuid
         .order_by(dia.desc())
     )
     return [None if valor is None else Decimal(valor) for valor in session.execute(stmt).scalars()]
+
+
+# --- prefiltro_resultados ---------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PrefiltroRow:
+    """Resultado del pre-filtro de un símbolo, listo para persistir. Los
+    campos numéricos son `None` si el símbolo quedó `SIN_DATOS`."""
+
+    symbol: str
+    estado: EstadoPrefiltro
+    ranking: int | None
+    calculated_at: datetime | None
+    tendencia_pct: Decimal | None
+    volumen_relativo: Decimal | None
+    distancia_max_90d_pct: Decimal | None
+    score_tendencia: Decimal | None
+    score_volumen: Decimal | None
+    score_distancia: Decimal | None
+    score_final: Decimal | None
+
+
+def save_prefiltro_resultados(
+    session: Session, ciclo_id: uuid.UUID, rows: list[PrefiltroRow], *, formula_version: str
+) -> None:
+    """Agrega una fila por símbolo para este ciclo. No hace `commit`.
+
+    La restricción única `(ciclo_id, symbol)` impide guardar dos veces el
+    mismo símbolo del mismo ciclo (un reintento falla en vez de duplicar), y
+    la tabla es solo-agregar: no existe una función para modificarla."""
+    for r in rows:
+        session.add(
+            PrefiltroResultado(
+                ciclo_id=ciclo_id,
+                symbol=r.symbol,
+                estado=r.estado,
+                ranking=r.ranking,
+                calculated_at=r.calculated_at,
+                tendencia_pct=r.tendencia_pct,
+                volumen_relativo=r.volumen_relativo,
+                distancia_max_90d_pct=r.distancia_max_90d_pct,
+                score_tendencia=r.score_tendencia,
+                score_volumen=r.score_volumen,
+                score_distancia=r.score_distancia,
+                score_final=r.score_final,
+                formula_version=formula_version,
+            )
+        )
+    session.flush()
+
+
+def list_prefiltro_de_ciclo(session: Session, ciclo_id: uuid.UUID) -> list[PrefiltroResultado]:
+    """Resultados del pre-filtro de un ciclo: primero los que tuvieron puntaje
+    (por ranking) y al final los `SIN_DATOS` (por símbolo). Vacío si el ciclo
+    es anterior a esta tabla."""
+    return list(
+        session.execute(
+            select(PrefiltroResultado)
+            .where(PrefiltroResultado.ciclo_id == ciclo_id)
+            .order_by(PrefiltroResultado.ranking.asc().nulls_last(), PrefiltroResultado.symbol.asc())
+        ).scalars()
+    )

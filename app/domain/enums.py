@@ -79,6 +79,23 @@ class TierEntrada(str, Enum):
     NINGUNO = "NINGUNO"
 
 
+class EstadoPrefiltro(str, Enum):
+    """Resultado del pre-filtro de UN símbolo en UN ciclo (tabla
+    `prefiltro_resultados`). Se deriva de las reglas ya fijadas
+    (`SCORE_MINIMO_PREFILTRO` y `MAX_CANDIDATOS_PREFILTRO`); no es una regla
+    nueva."""
+
+    CANDIDATO = "CANDIDATO"
+    """Superó el puntaje mínimo y quedó entre los mejores del tope."""
+    DESCARTADO_POR_PUNTAJE = "DESCARTADO_POR_PUNTAJE"
+    """Tuvo puntaje, pero por debajo del mínimo del pre-filtro."""
+    DESCARTADO_POR_TOPE = "DESCARTADO_POR_TOPE"
+    """Superó el mínimo, pero había más símbolos mejores que el tope de candidatos."""
+    SIN_DATOS = "SIN_DATOS"
+    """Faltaba algún dato (velas, SMA, volumen relativo o distancia a 90d): no
+    recibió puntaje (P3: nada de valores de relleno)."""
+
+
 class LadoOrden(str, Enum):
     """Lado de una orden. En v1 (spot, sin apalancamiento ni cortos — sección
     3 del plan) `BUY` solo abre/aumenta una posición LONG y `SELL` solo la

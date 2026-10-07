@@ -8,12 +8,46 @@ import streamlit as st
 from app.ui.components import format as f
 
 
+_ETIQUETA_ESTADO = {
+    "CANDIDATO": "Candidato",
+    "DESCARTADO_POR_PUNTAJE": "Descartado: puntaje bajo el mínimo",
+    "DESCARTADO_POR_TOPE": "Descartado: fuera del tope de candidatos",
+    "SIN_DATOS": "Sin datos suficientes",
+}
+
+
+def _render_prefiltro(filas) -> None:
+    """Embudo del pre-filtro: universo -> con puntaje -> candidatos, y el detalle por símbolo."""
+    con_puntaje = [x for x in filas if x.score_final is not None]
+    candidatos = [x for x in filas if x.estado.value == "CANDIDATO"]
+    st.markdown(
+        f"**Pre-filtro:** {len(filas)} activos del universo → {len(con_puntaje)} con puntaje → "
+        f"{len(candidatos)} candidatos"
+    )
+    with st.expander("Detalle del pre-filtro por activo"):
+        st.dataframe(
+            pd.DataFrame({
+                "Ranking": [x.ranking if x.ranking is not None else f.ND for x in filas],
+                "Activo": [x.symbol for x in filas],
+                "Resultado": [_ETIQUETA_ESTADO[x.estado.value] for x in filas],
+                "Puntaje": [f.num(x.score_final) for x in filas],
+                "Tendencia %": [f.num(x.tendencia_pct) for x in filas],
+                "Volumen relativo": [f.num(x.volumen_relativo) for x in filas],
+                "Dist. máx. 90d %": [f.num(x.distancia_max_90d_pct) for x in filas],
+            }),
+            hide_index=True,
+        )
+        st.caption(f"Fórmula del pre-filtro versión {filas[0].formula_version}. Los valores son los guardados ese día.")
+
+
 def render_cycle_detail(d, *, con_llamadas: bool = True) -> None:
     r = d.resumen
     st.markdown(f"**Ciclo del {f.fecha(r.started_at)}** · resultado **{r.resultado.value}** · "
                 f"última etapa `{r.ultima_etapa.value}` · costo IA {f.usd(r.cost_usd, 4)}")
     if r.error_message:
         st.error(f"El ciclo falló: {r.error_message}")
+    if d.prefiltro:
+        _render_prefiltro(d.prefiltro)
     st.markdown("**Candidatos evaluados por la IA:** " + (", ".join(d.candidatos_evaluados) or "ninguno registrado"))
     st.caption(d.nota_embudo)
     if d.recomendacion is not None:

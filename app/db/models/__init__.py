@@ -6,7 +6,7 @@ importe aquí es invisible para el autogenerate de Alembic.
 """
 
 from app.db.models.ai_calls import LlamadaIA
-from app.db.models.analysis import CicloAnalisis
+from app.db.models.analysis import CicloAnalisis, PrefiltroResultado
 from app.db.models.candles import Vela
 from app.db.models.event_analysis import AnalisisEvento
 from app.db.models.equity import EquityObservacion
@@ -20,4 +20,4 @@ from app.db.models.snapshots import TradeSnapshot
 from app.db.models.system_events import EventoSistema
 from app.db.models.trade_results import TradeResultModel
 
-__all__ = ["Vela", "Indicador", "Evento", "CicloAnalisis", "AnalisisEvento", "LlamadaIA", "Orden", "Posicion", "EventoSistema", "EquityObservacion", "TradeSnapshot", "TradeResultModel", "PerformanceMetric", "PerfilUsuario"]
+__all__ = ["Vela", "Indicador", "Evento", "CicloAnalisis", "AnalisisEvento", "LlamadaIA", "Orden", "Posicion", "EventoSistema", "EquityObservacion", "TradeSnapshot", "TradeResultModel", "PerformanceMetric", "PerfilUsuario", "PrefiltroResultado"]

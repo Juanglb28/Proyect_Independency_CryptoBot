@@ -307,7 +307,30 @@ usuario tras ver la distribución real de datos — sección 6.1/17 del plan).
 `app/domain/rules/scoring.py` fija los umbrales `SCORE_MINIMO_PREFILTRO=45`
 y `MAX_CANDIDATOS_PREFILTRO=5` (sección 19). Un símbolo con cualquier dato
 faltante no recibe un puntaje inventado (sección P3): se reporta aparte.
-Todavía no persiste nada (`factores`/`propuestas` son del Paso 7).
+`scripts.run_prefilter` solo muestra el resultado y no guarda nada. El ciclo
+diario (`app/orchestration/daily_cycle.py`) sí guarda, por cada ciclo, una fila
+por símbolo del universo en `prefiltro_resultados` (ver abajo).
+
+### Resultado del pre-filtro por ciclo (`prefiltro_resultados`)
+
+Tabla nueva (aprobada por el usuario, 2026-10-07; migración `a3c2e5195411`),
+**solo-agregar** (un trigger rechaza UPDATE y DELETE) y única por
+`(ciclo, símbolo)`. Una fila por cada símbolo del universo y por cada ciclo, con
+su estado (`CANDIDATO`, `DESCARTADO_POR_PUNTAJE`, `DESCARTADO_POR_TOPE` o
+`SIN_DATOS`), su ranking, la vela diaria usada, los valores crudos
+(tendencia, volumen relativo, distancia a 90 días), los sub-puntajes, el puntaje
+final y la **versión de la fórmula** (`PREFILTER_FORMULA_VERSION`; un test con
+una huella obliga a subirla si cambian los límites, el umbral o el tope). Un
+símbolo sin datos se guarda con los números vacíos, nunca con un valor de
+relleno. Se guarda aunque el ciclo termine sin candidatos.
+
+Los ciclos anteriores a esta tabla **no se rellenan**: no hay forma honesta de
+saber qué sabía el sistema ese día, y recalcular con los datos de hoy mezclaría
+el presente con una decisión pasada. La interfaz (Análisis y Decisiones) muestra
+el embudo "universo → con puntaje → candidatos" y el detalle por activo en los
+ciclos nuevos, y conserva el aviso de limitación en los viejos.
+
+> Tras actualizar: `docker compose run --rm app python -m scripts.migrate_all`.
 
 ## Agentes de IA (Paso 6 del plan)
 
@@ -1154,8 +1177,9 @@ Decisiones (cerradas con el usuario el 2026-10-06):
 
 ### Limitaciones conocidas (mostradas tal cual en pantalla)
 
-- El resultado del pre-filtro de ciclos pasados no se guarda; los "candidatos
-  evaluados" se reconstruyen de las llamadas al Analista cuantitativo.
+- El pre-filtro se guarda por ciclo desde 2026-10-07 (`prefiltro_resultados`);
+  en los ciclos anteriores no existe y sus "candidatos evaluados" se
+  reconstruyen de las llamadas al Analista cuantitativo (la UI lo avisa).
 - El análisis por factor (`factor_analysis`, sección 8.8) está `PENDIENTE`.
 - No hay caché: cada interacción vuelve a leer la base (suficiente para uso
   personal; se añade si se vuelve lenta).
@@ -1602,7 +1626,7 @@ app/
 │   ├── event_analysis.py   # persistencia idempotente de analisis_eventos
 │   ├── ai_calls.py         # persistencia de llamadas_ia
 │   ├── perfil_usuario.py   # perfil del Entrevistador (solo-agregar; informativo)
-│   └── analysis.py         # persistencia de ciclos_analisis/propuestas/factores
+│   └── analysis.py         # persistencia de ciclos_analisis/propuestas/factores/prefiltro_resultados
 migrations/                # Alembic
 scripts/
 ├── results.py                    # CLI: trades / performance / validate (Paso 9)
