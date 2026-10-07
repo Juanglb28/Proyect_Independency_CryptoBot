@@ -99,5 +99,30 @@ services:
     command: ["streamlit", "run", "app/ui/app.py"]
     restart: unless-stopped
 
+  ui-railway:
+    # Misma interfaz, pero conectada a la base de RAILWAY con el rol de SOLO
+    # LECTURA `crypto_ui` (Paso 11-0). No arranca con `docker compose up`: solo con
+    #   docker compose --profile railway up ui-railway   (http://localhost:8502)
+    # Requiere la variable de entorno UI_DATABASE_URL con la URL de `crypto_ui`
+    # (ver README; se define en la sesión de PowerShell, nunca en el repositorio).
+    # SEGURIDAD (P4): sin claves de Binance, Telegram ni Anthropic (la entrevista
+    # del Perfil está deshabilitada en solo lectura), sin `env_file`, `.env`
+    # tapado, y puerto publicado solo en 127.0.0.1.
+    profiles: ["railway"]
+    image: crypto-trading-platform:dev
+    container_name: crypto_trading_ui_railway
+    environment:
+      DATABASE_URL: "${UI_DATABASE_URL:-}"
+      PAPER_CAPITAL_USD:
+      MAX_OPEN_POSITIONS:
+    volumes:
+      - .:/app
+      - ./docker/ui-sin-secretos.env:/app/.env:ro
+    working_dir: /app
+    ports:
+      - "127.0.0.1:8502:8501"
+    command: ["streamlit", "run", "app/ui/app.py"]
+    restart: "no"
+
 volumes:
   pgdata:

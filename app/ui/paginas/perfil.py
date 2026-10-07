@@ -14,6 +14,7 @@ from app.services.interview import Mensaje
 from app.ui.components import format as f
 from app.ui.components.confirm_action import confirm_action, show_last_action_result
 from app.ui.components.profile_card import render_profile
+from app.ui.components.read_only import motivo_solo_lectura
 
 _ACTIVA, _HISTORIAL, _PERFIL, _ERROR = "entrevista_activa", "entrevista_historial", "entrevista_perfil", "entrevista_error"
 
@@ -57,10 +58,13 @@ def render() -> None:
             f"Hasta {interview.MAX_PREGUNTAS} preguntas, una a la vez. Usa el modelo de IA (cuesta centavos): tus "
             "respuestas se envían a Anthropic. No se guardan como texto; solo el perfil final y solo si lo confirmas."
         )
-        if st.button("Rehacer la entrevista" if v.vigente else "Iniciar entrevista"):
+        sin_escritura = motivo_solo_lectura()
+        if st.button("Rehacer la entrevista" if v.vigente else "Iniciar entrevista", disabled=sin_escritura is not None):
             _reiniciar(True)
             _turno()
             st.rerun()
+        if sin_escritura:
+            st.caption(sin_escritura)
         return
 
     historial: list[Mensaje] = st.session_state[_HISTORIAL]
@@ -94,6 +98,7 @@ def render() -> None:
             "Vas a GUARDAR este perfil como el vigente. El anterior se conserva como historia. Es solo informativo: "
             "no cambia ninguna decisión del sistema.",
             _guardar,
+            disabled_reason=motivo_solo_lectura(),
         )
     else:
         respuesta = st.chat_input("Tu respuesta", max_chars=interview.MAX_CARACTERES_RESPUESTA_USUARIO)

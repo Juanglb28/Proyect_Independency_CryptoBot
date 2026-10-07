@@ -64,3 +64,19 @@ def test_ui_tapa_el_env_real_con_un_archivo_sin_secretos():
 def test_app_conserva_su_env_file():
     """`app` (scripts, monitor, ciclo diario) sí necesita todas las claves."""
     assert "env_file" in _servicio("app")
+
+
+def test_ui_railway_es_de_solo_lectura_sin_secretos_y_solo_en_localhost():
+    """Paso 11-0: la interfaz que apunta a Railway no recibe ningún secreto de
+    escritura ni de terceros, solo la URL del rol de solo lectura."""
+    s = _sin_comentarios(_servicio("ui-railway"))
+    assert "profiles" in s and "railway" in s  # no arranca con un `up` normal
+    assert "env_file" not in s
+    for prohibida in ("BINANCE", "TELEGRAM", "ANTHROPIC"):
+        assert prohibida not in s.upper()
+    bloque = re.search(r"environment:\n((?:      .*\n)+)", s)
+    variables = {l.strip().split(":")[0] for l in bloque.group(1).splitlines() if l.strip()}
+    assert variables == {"DATABASE_URL", "PAPER_CAPITAL_USD", "MAX_OPEN_POSITIONS"}
+    assert "UI_DATABASE_URL" in s
+    assert "./docker/ui-sin-secretos.env:/app/.env:ro" in s
+    assert '"127.0.0.1:8502:8501"' in s

@@ -366,3 +366,75 @@ def test_cancelar_la_entrevista_vuelve_al_inicio(entrevista):
     _boton(at, "Iniciar entrevista").click().run()
     _boton(at, "Cancelar la entrevista").click().run()
     assert any(b.label == "Iniciar entrevista" for b in at.button) and not at.chat_message
+
+
+# --- modo solo lectura (Paso 11-0): conexión con el rol que no puede escribir ---
+
+
+@pytest.fixture
+def como_solo_lectura(con_acciones, db_session):
+    """Prepara la sesión de prueba para actuar con el rol de solo lectura REAL
+    (privilegios de PostgreSQL, no un simulacro). Llamar DESPUÉS de crear los datos."""
+    from sqlalchemy import text
+
+    from app.repositories.db_roles import ensure_readonly_role
+
+    def activar():
+        ensure_readonly_role(db_session, role="crypto_ui_prueba", password="clave-de-prueba-larga-123")
+        db_session.execute(text("SET LOCAL ROLE crypto_ui_prueba"))
+
+    return con_acciones, activar
+
+
+@pytest.fixture
+def _puede_crear_roles(db_session):
+    from sqlalchemy import text
+
+    if not db_session.execute(text("SELECT rolcreaterole OR rolsuper FROM pg_roles WHERE rolname = current_user")).scalar_one():
+        pytest.skip("el usuario de pruebas no puede crear roles (en Docker es superusuario)")
+
+
+@pytest.mark.usefixtures("_puede_crear_roles")
+def test_en_solo_lectura_aprobar_y_rechazar_aparecen_deshabilitados_con_motivo(como_solo_lectura, db_session):
+    from app.domain.enums import EstadoOrden
+    from app.repositories.orders import get_orden
+
+    ui_, activar = como_solo_lectura
+    oid = _pendiente(db_session)
+    activar()
+    at = ui_("posiciones")
+    assert not at.exception
+    assert _boton(at, "Aprobar entrada").disabled is True
+    assert _boton(at, "Rechazar entrada").disabled is True
+    assert "usuario de solo lectura" in _textos(at)
+    assert get_orden(db_session, oid).estado == EstadoOrden.PENDING_APPROVAL
+
+
+@pytest.mark.usefixtures("_puede_crear_roles")
+def test_en_solo_lectura_reanudar_aparece_deshabilitado(como_solo_lectura, db_session):
+    ui_, activar = como_solo_lectura
+    _pausar_sin_posiciones(db_session)
+    activar()
+    at = ui_("sistema")
+    assert not at.exception
+    assert _boton(at, "Reanudar el sistema").disabled is True
+    assert "usuario de solo lectura" in _textos(at)
+
+
+@pytest.mark.usefixtures("_puede_crear_roles")
+def test_en_solo_lectura_la_entrevista_no_se_puede_iniciar(como_solo_lectura):
+    ui_, activar = como_solo_lectura
+    activar()
+    at = ui_("perfil")
+    assert not at.exception
+    assert _boton(at, "Iniciar entrevista").disabled is True
+    assert "usuario de solo lectura" in _textos(at)
+
+
+def test_con_escritura_las_acciones_siguen_habilitadas(con_acciones, db_session):
+    _pendiente(db_session)
+    at = con_acciones("posiciones")
+    assert _boton(at, "Aprobar entrada").disabled is False
+    assert _boton(at, "Rechazar entrada").disabled is False
+    assert "usuario de solo lectura" not in _textos(at)
+    assert con_acciones("perfil").button[0].disabled is False

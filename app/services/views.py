@@ -11,6 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
+from app.services.access import es_solo_lectura
 from app.services.dashboard import DashboardView, get_dashboard
 from app.services.decisions import CicloDetalle, CicloResumen, get_ciclo_detalle, list_ciclos
 from app.services.performance import PerformanceView, get_performance_view
@@ -87,3 +88,9 @@ def sistema() -> SistemaView:
 def perfil() -> PerfilView:
     with read_session() as s:
         return get_perfil_view(s)
+
+
+def solo_lectura() -> bool:
+    """¿Esta conexión a la base NO puede escribir? (rol de solo lectura)"""
+    with read_session() as s:
+        return es_solo_lectura(s)

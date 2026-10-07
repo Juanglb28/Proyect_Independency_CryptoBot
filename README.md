@@ -1349,6 +1349,85 @@ pruebas `crypto_trading_test`. `scripts.db_summary` es de solo lectura: muestra 
 si hay TLS, la extensión TimescaleDB, la migración y el número exacto de filas por tabla
 (sirve para comparar antes y después de restaurar tus datos).
 
+### Rol de solo lectura para la interfaz (`crypto_ui`)
+
+La interfaz que se conecte a Railway no necesita escribir nunca. En vez de confiar
+solo en el código, usa un rol de PostgreSQL **sin privilegios de escritura**
+(`app/repositories/db_roles.py`): `LOGIN`, sin superusuario, `SELECT` sobre las
+tablas de `public` (y sobre las futuras), `default_transaction_read_only = on`.
+Aunque alguien cambiara el código o inyectara SQL, la base lo rechazaría.
+`tests/integration/test_db_roles.py` lo comprueba (INSERT, UPDATE, DELETE, TRUNCATE y
+CREATE TABLE fallan con "permission denied", incluso desactivando el modo solo lectura).
+
+Con ese rol la interfaz **detecta** que no puede escribir (mira el privilegio real,
+`has_table_privilege`) y muestra **deshabilitados**, con la explicación, los botones
+Aprobar entrada, Rechazar entrada, Reanudar el sistema, Iniciar/Rehacer la entrevista
+y Guardar perfil. Las lecturas funcionan igual. La entrevista del Perfil queda
+deshabilitada en este modo (decisión por defecto: escribe en `perfil_usuario`); las
+acciones se hacen desde la interfaz local, conectada con el usuario de escritura.
+
+Crear el rol (idempotente; repetirlo actualiza contraseña y permisos). La contraseña
+del rol se genera en tu PC, vive solo en esa ventana y **debes guardarla en tu
+gestor de contraseñas** antes de cerrarla (`Set-Clipboard` la copia al portapapeles):
+
+```powershell
+$pw = Read-Host "Contraseña de la BD en Railway (usuario crypto)" -AsSecureString
+$admin = [System.Net.NetworkCredential]::new("", $pw).Password
+$env:DATABASE_URL = "postgresql+psycopg://crypto:$admin@iriguchi.proxy.rlwy.net:11001/crypto_trading?sslmode=verify-ca&sslrootcert=/app/docker/railway-db-server.crt"
+$bytes = New-Object byte[] 24; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+$env:UI_DB_PASSWORD = -join ($bytes | ForEach-Object { $_.ToString('x2') })
+Set-Clipboard $env:UI_DB_PASSWORD     # pégala YA en tu gestor de contraseñas
+docker compose run --rm -e DATABASE_URL -e UI_DB_PASSWORD app python -m scripts.create_ui_role
+```
+
+Verificar que el rol funciona (lee todas las tablas, incluida la hipertabla `velas`) y
+abrir la interfaz contra Railway en http://localhost:8502 (el servicio `ui-railway` no
+arranca con un `up` normal, no recibe claves de Binance/Telegram/Anthropic y solo escucha
+en `127.0.0.1`):
+
+```powershell
+$env:UI_DATABASE_URL = "postgresql+psycopg://crypto_ui:$env:UI_DB_PASSWORD@iriguchi.proxy.rlwy.net:11001/crypto_trading?sslmode=verify-ca&sslrootcert=/app/docker/railway-db-server.crt"
+$env:DATABASE_URL = $env:UI_DATABASE_URL
+docker compose run --rm -e DATABASE_URL app python -m scripts.db_summary
+docker compose --profile railway up -d ui-railway
+Remove-Item Env:DATABASE_URL, Env:UI_DB_PASSWORD, Env:UI_DATABASE_URL
+```
+
+(Si cierras la ventana sin guardar la contraseña, basta repetir `create_ui_role`: genera una nueva.)
+
+### Copiar tus datos locales a Railway (`scripts.copy_database`)
+
+Copia **todas** las tablas de la base local a la de Railway, una sola vez. No usa
+`pg_dump`/`pg_restore` porque `velas` es una hipertabla de TimescaleDB (restaurarla así
+exige la misma versión de la extensión). Garantías (si algo falla, no se copia nada):
+
+- Las dos bases deben estar en la **misma migración** y tener las mismas tablas.
+- El destino debe estar **vacío**: nunca sobrescribe ni mezcla.
+- Todo el destino se escribe en **una transacción** y solo se confirma si el conteo de
+  filas de cada tabla coincide con el origen.
+- El origen se lee con una foto consistente; las secuencias de identidad se reajustan.
+- Sin `--ejecutar` solo informa (simulación, no escribe nada). Nunca imprime las URLs.
+
+**Cuándo copiar:** la copia es de un solo uso (el destino debe estar vacío). Haz la
+simulación cuando quieras; la copia real conviene hacerla en el momento de pasar el
+monitor y el ciclo diario a Railway (Paso 11b), con el monitor y la tarea programada
+locales detenidos, para que no queden datos nuevos sin copiar en tu PC.
+
+```powershell
+docker compose run --rm app alembic upgrade head          # la base local, en la última migración
+$pw = Read-Host "Contraseña de la BD en Railway (usuario crypto)" -AsSecureString
+$env:DEST_DATABASE_URL = "postgresql+psycopg://crypto:" + [System.Net.NetworkCredential]::new("", $pw).Password + "@iriguchi.proxy.rlwy.net:11001/crypto_trading?sslmode=verify-ca&sslrootcert=/app/docker/railway-db-server.crt"
+$env:SOURCE_DATABASE_URL = "postgresql+psycopg://crypto:crypto@postgres:5432/crypto_trading"
+docker compose run --rm -e SOURCE_DATABASE_URL -e DEST_DATABASE_URL app python -m scripts.copy_database             # simulación
+docker compose run --rm -e SOURCE_DATABASE_URL -e DEST_DATABASE_URL app python -m scripts.copy_database --ejecutar # copia real
+$env:DATABASE_URL = $env:DEST_DATABASE_URL
+docker compose run --rm -e DATABASE_URL app python -m scripts.db_summary                                          # comparar conteos
+Remove-Item Env:SOURCE_DATABASE_URL, Env:DEST_DATABASE_URL, Env:DATABASE_URL
+```
+
+Tests: `tests/integration/test_copy_database.py` (copia completa con identidades,
+simulación, destino no vacío, migraciones distintas, fallo a mitad = nada copiado).
+
 ## Tarea diaria programada (Windows)
 
 El ciclo diario no necesita que ninguna IA lo arranque ni lo supervise —

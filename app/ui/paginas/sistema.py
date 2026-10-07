@@ -8,6 +8,7 @@ import streamlit as st
 from app.services import commands, views
 from app.ui.components import format as f
 from app.ui.components.confirm_action import confirm_action, show_last_action_result
+from app.ui.components.read_only import motivo_solo_lectura
 
 
 def render() -> None:
@@ -31,6 +32,7 @@ def render() -> None:
             f"queda registrado; hoy es {f.usd(v.pico_equity)}). Hace falta el precio de todas las posiciones abiertas; "
             "si falta alguno no se reanuda. Si el archivo PARAR existe, las entradas nuevas siguen bloqueadas.",
             lambda _motivo: commands.reanudar_sistema(),
+            disabled_reason=motivo_solo_lectura(),
         )
 
     st.subheader("Reconciliación")

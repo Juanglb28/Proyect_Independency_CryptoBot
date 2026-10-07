@@ -9,6 +9,7 @@ from app.services import commands, views
 from app.ui.components import format as f
 from app.ui.components.confirm_action import confirm_action, show_last_action_result
 from app.ui.components.indicator_tooltip import render_indicator_label
+from app.ui.components.read_only import motivo_solo_lectura
 
 
 def render() -> None:
@@ -44,8 +45,10 @@ def render() -> None:
     st.subheader("Entradas pendientes de aprobación")
     if not v.entradas_pendientes:
         st.caption("No hay entradas pendientes.")
+    solo_lectura = motivo_solo_lectura() if v.entradas_pendientes else None
     bloqueo = (
-        "Existe el archivo PARAR: no se pueden aprobar entradas nuevas." if v.parada_emergencia
+        solo_lectura if solo_lectura
+        else "Existe el archivo PARAR: no se pueden aprobar entradas nuevas." if v.parada_emergencia
         else "El sistema está pausado por drawdown: no se pueden aprobar entradas nuevas." if v.sistema_pausado
         else None
     )
@@ -69,4 +72,5 @@ def render() -> None:
                     f"Vas a RECHAZAR la entrada en {e.symbol}. Se liberan los cupos que reservaba y no se puede deshacer.",
                     lambda motivo, oid=e.order_id: commands.rechazar_entrada(oid, motivo),
                     ask_reason=True,
+                    disabled_reason=solo_lectura,
                 )
