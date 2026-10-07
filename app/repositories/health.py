@@ -69,3 +69,57 @@ def set_transaction_read_only(session: Session) -> None:
     aunque alguien se equivoque en el código. Debe llamarse antes de la
     primera consulta de la transacción."""
     session.execute(text("SET TRANSACTION READ ONLY"))
+
+
+@dataclass(frozen=True)
+class DatabaseSummary:
+    """Foto de solo lectura de una base: sirve para comprobar un despliegue
+    (¿TLS activo? ¿extensión? ¿última migración?) y para comparar conteos por
+    tabla antes y después de una restauración (Paso 11-0)."""
+
+    server_version: str
+    ssl_in_use: bool
+    ssl_version: str | None
+    timescaledb_version: str | None
+    alembic_revision: str | None
+    row_counts: dict[str, int]
+
+
+def summarize_database(session: Session) -> DatabaseSummary:
+    """Solo lectura (SELECT). Los conteos son exactos (`count(*)`), no
+    estimaciones, porque se usan para verificar una restauración.
+
+    Los nombres de tabla salen del catálogo (`pg_tables`) y se entregan a
+    SQLAlchemy como identificadores (`quoted_name`): nunca se concatenan en el
+    SQL. `alembic_version` se excluye de los conteos (se informa aparte)."""
+    from sqlalchemy import func, select
+    from sqlalchemy.sql import column, table
+
+    version = session.execute(text("SHOW server_version")).scalar_one()
+    ssl_row = session.execute(
+        text("SELECT ssl, version FROM pg_stat_ssl WHERE pid = pg_backend_pid()")
+    ).first()
+    timescale = session.execute(
+        text("SELECT extversion FROM pg_extension WHERE extname = 'timescaledb'")
+    ).scalar_one_or_none()
+    try:
+        with session.begin_nested():
+            revision = session.execute(text("SELECT version_num FROM alembic_version")).scalar_one_or_none()
+    except Exception:  # noqa: BLE001 - base sin migrar: no hay tabla
+        revision = None
+
+    nombres = session.execute(
+        text("SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'alembic_version' ORDER BY tablename")
+    ).scalars().all()
+    counts = {
+        nombre: session.execute(select(func.count()).select_from(table(nombre, column("x")))).scalar_one()
+        for nombre in nombres
+    }
+    return DatabaseSummary(
+        server_version=str(version),
+        ssl_in_use=bool(ssl_row[0]) if ssl_row else False,
+        ssl_version=ssl_row[1] if ssl_row and ssl_row[0] else None,
+        timescaledb_version=timescale,
+        alembic_revision=revision,
+        row_counts=counts,
+    )

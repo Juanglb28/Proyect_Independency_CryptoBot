@@ -1312,6 +1312,43 @@ datos; es solo salida. Tests: `tests/unit/test_run_daily_cycle_script.py`
 (los cuatro textos) y `tests/integration/test_daily_cycle.py` (el resultado
 lleva la razón del Consolidador).
 
+## Despliegue en Railway — base de datos (Paso 11-0, 2026-10-07)
+
+Decisiones en el documento del proyecto `claude/decisiones-paso-11.md`. La base
+vive en el proyecto `trading-paper` de Railway (región `europe-west4`, la que
+Binance acepta; las de EE. UU. están bloqueadas), con volumen persistente, TLS
+activado y **sin dominio público**. Solo se expone el puerto de Postgres por un
+proxy TCP; la contraseña la generó Railway y no está en el repositorio.
+
+- Servidor: `iriguchi.proxy.rlwy.net:11001`, base `crypto_trading`, usuario `crypto`.
+- TLS: certificado autofirmado generado una vez y guardado en el volumen. Su parte
+  pública está en `docker/railway-db-server.crt` (no es secreto) y se usa con
+  `sslmode=verify-ca`, así el cliente comprueba que habla con ESE servidor.
+  (Huella SHA-256: `AE:A3:8F:AD:FC:39:7B:24:BC:E1:6D:AB:24:83:04:65:E9:EB:F7:BB:2C:40:D7:62:57:69:C1:4B:57:70:D0:D0`.)
+- La URL tiene esta forma (la contraseña se copia del panel de Railway, variable
+  `POSTGRES_PASSWORD` del servicio `timescaledb`; nunca se escribe en un archivo del repo):
+
+```
+postgresql+psycopg://crypto:<contraseña>@iriguchi.proxy.rlwy.net:11001/crypto_trading?sslmode=verify-ca&sslrootcert=/app/docker/railway-db-server.crt
+```
+
+Para apuntar UN comando a Railway sin guardar la contraseña (PowerShell; la variable
+vive solo en esa ventana):
+
+```powershell
+$pw = Read-Host "Contraseña de la BD en Railway" -AsSecureString
+$env:DATABASE_URL = "postgresql+psycopg://crypto:" + [System.Net.NetworkCredential]::new("", $pw).Password + "@iriguchi.proxy.rlwy.net:11001/crypto_trading?sslmode=verify-ca&sslrootcert=/app/docker/railway-db-server.crt"
+docker compose run --rm -e DATABASE_URL app python -m scripts.db_summary
+docker compose run --rm -e DATABASE_URL app alembic upgrade head
+docker compose run --rm -e DATABASE_URL app python -m scripts.db_summary
+Remove-Item Env:DATABASE_URL
+```
+
+Use `alembic upgrade head` (no `scripts.migrate_all`): en Railway no existe la base de
+pruebas `crypto_trading_test`. `scripts.db_summary` es de solo lectura: muestra versión,
+si hay TLS, la extensión TimescaleDB, la migración y el número exacto de filas por tabla
+(sirve para comparar antes y después de restaurar tus datos).
+
 ## Tarea diaria programada (Windows)
 
 El ciclo diario no necesita que ninguna IA lo arranque ni lo supervise —
