@@ -21,31 +21,42 @@ _PROHIBIDO: dict[str, tuple[str, ...]] = {
     "domain": (
         "sqlalchemy", "streamlit", "ccxt", "anthropic", "psycopg", "alembic",
         "app.db", "app.repositories", "app.data", "app.ai", "app.execution",
-        "app.results", "app.orchestration", "app.ui",
+        "app.results", "app.orchestration", "app.ui", "app.notifications",
     ),
     # Los agentes de IA nunca están en el camino de una orden (P2/P4).
-    "execution": ("anthropic", "app.ai", "streamlit", "app.ui"),
+    # Tampoco el envío de avisos (Paso 11a): el monitor solo deja el aviso en
+    # la tabla `alertas`; el envío ocurre después, fuera de la ejecución.
+    "execution": ("anthropic", "app.ai", "streamlit", "app.ui", "app.notifications"),
     # Los repositorios solo persisten: ni IA, ni UI, ni reglas de negocio.
-    "repositories": ("anthropic", "app.ai", "streamlit", "app.ui", "app.domain.rules", "app.execution"),
+    "repositories": (
+        "anthropic", "app.ai", "streamlit", "app.ui", "app.domain.rules", "app.execution", "app.notifications",
+    ),
+    # Los avisos (Paso 11a): E/S externa (Telegram). Sin IA, sin UI, sin
+    # ejecución y sin reglas de negocio: solo leen y anotan en `alertas`.
+    "notifications": (
+        "anthropic", "app.ai", "streamlit", "app.ui", "app.execution", "app.orchestration",
+        "app.domain.rules", "app.results", "app.data", "ccxt",
+    ),
     # La UI no toca SQL ni la base directamente (UI -> servicios -> repositorios).
     # Tampoco calcula ni ejecuta: solo muestra lo que entregan los servicios de
     # lectura (`app.services`). Puede usar los enums del dominio para filtros.
     "ui": (
         "sqlalchemy", "psycopg", "app.db", "app.repositories", "anthropic", "ccxt",
         "app.execution", "app.results", "app.orchestration", "app.data", "app.domain.rules",
+        "app.notifications",
     ),
     # Servicios de lectura para la interfaz (Paso 10a): sin IA, sin UI. Leen
     # a través de repositorios y devuelven datos listos para mostrar; la
     # solo-lectura se garantiza además en la base (transacción READ ONLY).
-    "services": ("anthropic", "app.ai", "streamlit", "app.ui", "app.orchestration"),
+    "services": ("anthropic", "app.ai", "streamlit", "app.ui", "app.orchestration", "app.notifications"),
     # Medición y validación: calculan y guardan resultados, sin IA, sin UI y
     # sin depender del motor de ejecución (la dependencia va al revés: el
     # monitor registra sus resultados a través de `results`).
-    "results": ("anthropic", "app.ai", "streamlit", "app.ui", "app.execution"),
+    "results": ("anthropic", "app.ai", "streamlit", "app.ui", "app.execution", "app.notifications"),
     # La capa de datos no ejecuta órdenes ni depende de la ejecución.
-    "data": ("app.execution", "streamlit", "app.ui"),
+    "data": ("app.execution", "streamlit", "app.ui", "app.notifications"),
     # Los agentes de IA no tienen acceso a la ejecución ni al exchange (P2/P4).
-    "ai": ("app.execution", "ccxt", "app.data.exchange_client", "streamlit", "app.ui"),
+    "ai": ("app.execution", "ccxt", "app.data.exchange_client", "streamlit", "app.ui", "app.notifications"),
 }
 
 
@@ -193,3 +204,14 @@ def test_la_interfaz_y_los_servicios_no_usan_credenciales_del_exchange():
         for archivo in sorted((_APP / capa).rglob("*.py")):
             texto = archivo.read_text(encoding="utf-8").lower()
             assert "binance_api" not in texto, archivo
+
+
+def test_el_token_de_telegram_solo_lo_usan_las_notificaciones_y_los_scripts():
+    """P4: ni la interfaz, ni los servicios, ni la ejecución, ni la IA leen el
+    token del bot de Telegram."""
+    for capa in ("ui", "services", "execution", "ai", "domain", "results", "data", "repositories"):
+        carpeta = _APP / capa
+        if not carpeta.is_dir():
+            continue
+        for archivo in sorted(carpeta.rglob("*.py")):
+            assert "telegram_bot_token" not in archivo.read_text(encoding="utf-8").lower(), archivo

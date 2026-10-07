@@ -92,7 +92,8 @@ class Settings(BaseSettings):
         "cerca de la realidad.",
     )
 
-    # --- Telegram: no se usa todavía (Fase 4 en adelante) ---
+    # --- Telegram: avisos salientes (Paso 11a). Opcionales: sin ellos los avisos
+    # se guardan en la tabla `alertas` y se envían cuando se configuren. ---
     telegram_bot_token: str | None = Field(default=None)
     telegram_chat_id: str | None = Field(default=None)
 

@@ -176,6 +176,38 @@ class TipoEventoSistema(str, Enum):
     REANUDACION = "REANUDACION"
 
 
+class TipoAlerta(str, Enum):
+    """Tipos de `alertas.tipo` (Paso 11a): avisos que el sistema le manda al
+    usuario por Telegram. Son SOLO avisos: ninguno cambia una orden, una
+    posición ni una regla de riesgo.
+
+    Los cinco escalamientos de la sección 9 del plan y del master prompt:
+    - `CAIDA_1H`: una posición abierta cayó más de 5 % en la última hora.
+    - `VOLUMEN_ATIPICO`: el volumen de la última vela 1h cerrada de una
+      posición abierta superó 3 desviaciones estándar (decisión D3).
+    - `ORDEN_PENDIENTE_APROBACION`: hay una entrada de más de 200 USD
+      esperando la aprobación manual del usuario.
+    - `BINANCE_CAIDO` / `BINANCE_RESTABLECIDO`: Binance no respondió durante
+      más de 5 minutos / volvió a responder (decisión D5; el estado es el tipo
+      de la última alerta de este par).
+    - `DISCREPANCIA_RECONCILIACION`: el estado de órdenes y posiciones no
+      cuadra y el monitor se detuvo.
+
+    Más uno elegido por el usuario o el asistente por defecto:
+    - `PAUSA_DRAWDOWN`: el sistema se pausó por llegar al drawdown máximo.
+
+    Se guarda como VARCHAR validado (`native_enum=False`), igual que el resto
+    de enums."""
+
+    CAIDA_1H = "CAIDA_1H"
+    VOLUMEN_ATIPICO = "VOLUMEN_ATIPICO"
+    ORDEN_PENDIENTE_APROBACION = "ORDEN_PENDIENTE_APROBACION"
+    BINANCE_CAIDO = "BINANCE_CAIDO"
+    BINANCE_RESTABLECIDO = "BINANCE_RESTABLECIDO"
+    DISCREPANCIA_RECONCILIACION = "DISCREPANCIA_RECONCILIACION"
+    PAUSA_DRAWDOWN = "PAUSA_DRAWDOWN"
+
+
 class OrigenObservacionEquity(str, Enum):
     """Quién escribió una fila de `equity_observaciones`.
 

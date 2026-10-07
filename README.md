@@ -1428,6 +1428,54 @@ Remove-Item Env:SOURCE_DATABASE_URL, Env:DEST_DATABASE_URL, Env:DATABASE_URL
 Tests: `tests/integration/test_copy_database.py` (copia completa con identidades,
 simulación, destino no vacío, migraciones distintas, fallo a mitad = nada copiado).
 
+## Avisos por Telegram (Paso 11a-1, 2026-10-07)
+
+Decisiones en `claude/decisiones-paso-11.md` (D4, D5, D6, D8 y D9). Los avisos son
+**solo avisos**: ninguno cambia una orden, una posición ni una regla de riesgo, y
+Telegram es **solo saliente** (no hay comandos entrantes; aprobar y rechazar
+siguen siendo manuales en la interfaz).
+
+**Qué existe en este bloque (la infraestructura; los 5 escalamientos llegan en 11a-2):**
+
+- Tabla `alertas` (migración `b7d41c9e2a60`): un aviso por fila, con el mensaje ya
+  armado por código determinista, el valor observado frente al umbral y una clave
+  de deduplicación `UNIQUE` por episodio (un reintento o un reinicio no duplica
+  avisos). Un trigger impide borrar filas y cambiar el contenido de un aviso; solo
+  se actualiza su **recibo de entrega** (`delivered_at`, `delivery_attempts`,
+  `last_delivery_error`) y solo hacia adelante.
+- `app/notifications/telegram.py`: cliente con `urllib` (cero dependencias nuevas).
+  Texto plano, sin formato; el token nunca aparece en errores, logs ni `repr`.
+- `app/notifications/dispatcher.py`: envía los avisos pendientes **después** de
+  confirmar la transacción del chequeo, uno por transacción, con reintentos (máximo 5
+  por aviso) y sin bloquear a los demás. Garantía "al menos una vez": si el proceso
+  muere entre el envío y la anotación del recibo, ese aviso puede repetirse; no se
+  pierde ninguno. Sin token configurado, los avisos esperan en la tabla.
+- Capa nueva `app/notifications`, vigilada por `tests/unit/test_architecture.py`: la
+  ejecución, el dominio, la IA, los servicios y la interfaz **no** la importan (P2), y
+  nadie fuera de ella y los scripts lee el token (P4).
+
+**Supuestos tomados por defecto (puedes cambiarlos antes de aplicar la migración):**
+el recibo de entrega actualizable en la misma tabla, y el aviso de pausa por
+drawdown además de los 5 escalamientos. Los cierres automáticos y las entradas
+ejecutadas no avisan por ahora.
+
+**Configurar Telegram (una sola vez):**
+
+1. En Telegram abre a **@BotFather**, envía `/newbot`, elige nombre y usuario, y copia
+   el token que te da.
+2. Abre tu bot nuevo y envíale cualquier mensaje (por ejemplo "hola").
+3. Obtén tu `chat_id` abriendo en el navegador
+   `https://api.telegram.org/bot<TOKEN>/getUpdates` (con tu token en lugar de
+   `<TOKEN>`); busca `"chat":{"id":NÚMERO`. No pegues el token ni esa URL en ningún chat.
+4. Escribe los dos valores en tu `.env` local (no se sube a git): `TELEGRAM_BOT_TOKEN=...`
+   y `TELEGRAM_CHAT_ID=...`.
+5. Prueba el envío: `docker compose run --rm app python -m scripts.telegram_test`.
+
+Después de aplicar el parche hay que migrar las dos bases (real y de pruebas):
+`docker compose run --rm app python -m scripts.migrate_all`. En Railway se aplica
+con `alembic upgrade head` como en el despliegue de la base. Tests:
+`tests/unit/test_telegram_client.py`, `tests/integration/test_alertas.py`.
+
 ## Tarea diaria programada (Windows)
 
 El ciclo diario no necesita que ninguna IA lo arranque ni lo supervise —
