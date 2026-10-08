@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 import ccxt
 
@@ -75,6 +75,12 @@ class Candle(TypedDict):
     low: Decimal
     close: Decimal
     volume: Decimal
+    # `True` = vela ya cerrada (valores definitivos), `False` = en curso (sus
+    # valores todavía cambian). Lo anota la ingesta (`candle_ingestion`) con
+    # `app.domain.rules.candles.esta_cerrada`; `fetch_candles` no lo sabe y no
+    # lo pone. Si falta, el repositorio la trata como cerrada (datos históricos
+    # de pruebas); la ingesta real siempre la anota.
+    cerrada: NotRequired[bool]
 
 
 def _validate_symbol(symbol: str) -> None:

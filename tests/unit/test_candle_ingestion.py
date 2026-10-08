@@ -14,6 +14,7 @@ import pytest
 
 from app.data.candle_ingestion import backfill_symbol_timeframe
 from app.data.exchange_client import Candle
+from app.repositories.candles import ResultadoUpsert
 
 
 def _make_candle(symbol: str, timeframe: str, open_time: datetime) -> Candle:
@@ -55,15 +56,15 @@ class _FakePaginatedSource:
 
 
 def _no_op_save(monkeypatch):
-    """save_candles necesita una sesión real de DB; para probar solo la
+    """upsert_candles necesita una sesión real de DB; para probar solo la
     paginación se reemplaza por un contador que no toca la base de datos."""
     inserted_counts: list[int] = []
 
-    def fake_save_candles(session, candles):
+    def fake_upsert_candles(session, candles):
         inserted_counts.append(len(candles))
-        return len(candles)
+        return ResultadoUpsert(len(candles), (), 0)
 
-    monkeypatch.setattr("app.data.candle_ingestion.save_candles", fake_save_candles)
+    monkeypatch.setattr("app.data.candle_ingestion.upsert_candles", fake_upsert_candles)
     return inserted_counts
 
 
@@ -137,10 +138,10 @@ def test_backfill_is_idempotent_on_rerun(monkeypatch):
             if key not in already_saved:
                 already_saved.add(key)
                 inserted += 1
-        return inserted
+        return ResultadoUpsert(inserted, (), 0)
 
     monkeypatch.setattr(
-        "app.data.candle_ingestion.save_candles", fake_save_candles_with_conflict
+        "app.data.candle_ingestion.upsert_candles", fake_save_candles_with_conflict
     )
     source = _FakePaginatedSource(start=start, step=step, total_candles=15, page_size=10)
 

@@ -43,6 +43,7 @@ from app.data.indicator_calculator import (
     sma_indicator_name,
 )
 from app.data.prefilter_pipeline import run_prefilter
+from app.domain.rules.candles import hora_de_cierre
 from app.domain.symbols import ALLOWED_SYMBOLS
 from app.repositories.candles import get_candles
 from app.repositories.event_analysis import get_event_analysis_for_symbol
@@ -94,9 +95,11 @@ def _build_temporalidad_block(session: Session, symbol: str, timeframe: str, fal
         faltantes.append(f"velas_{timeframe}")
         return {"disponible": False}
 
-    indicators = get_indicators(session, symbol, timeframe)
     last_close = candles[-1]["close"]
     last_open_time = candles[-1]["open_time"]
+    # Solo indicadores calculados sobre velas YA CERRADAS: nada posterior a la
+    # última vela cerrada puede entrar al análisis (sin look-ahead, sección 15).
+    indicators = [r for r in get_indicators(session, symbol, timeframe) if r.calculated_at <= last_open_time]
 
     def _valor_o_faltante(indicator_name: str, etiqueta: str):
         row = _latest(indicators, indicator_name)
@@ -208,8 +211,9 @@ def build_datos_auditor(
     velas_diarias_disponibles = len(daily_candles)
 
     if daily_candles:
+        # Antigüedad de la última vela CERRADA, medida desde su cierre.
         ultima_vela_hace_horas = (
-            datetime.now(timezone.utc) - daily_candles[-1]["open_time"]
+            datetime.now(timezone.utc) - hora_de_cierre(daily_candles[-1]["open_time"], _DAILY_TIMEFRAME)
         ).total_seconds() / 3600
     else:
         ultima_vela_hace_horas = None

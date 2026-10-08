@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Numeric, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, DateTime, Numeric, UniqueConstraint, func, true
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -49,6 +49,12 @@ class Vela(Base):
     low: Mapped[float] = mapped_column(Numeric(30, 12), nullable=False)
     close: Mapped[float] = mapped_column(Numeric(30, 12), nullable=False)
     volume: Mapped[float] = mapped_column(Numeric(30, 12), nullable=False)
+
+    # Vela cerrada = valores definitivos e INMUTABLES (un trigger lo impone,
+    # migración e6a1c4b7d902). Una vela en curso (False) se guarda para no
+    # perderla pero se refresca en cada ingesta hasta que cierra, y NUNCA se
+    # usa para indicadores ni para el análisis.
+    cerrada: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=true())
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

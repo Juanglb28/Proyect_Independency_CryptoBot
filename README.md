@@ -156,10 +156,47 @@ python -m scripts.backfill_candles --days 30 --symbols BTCUSDT,ETHUSDT --timefra
 
 Descarga velas reales y las guarda en la tabla `velas`, paginando hacia
 atrás en el tiempo hasta cubrir la ventana pedida. Es idempotente: correr
-el mismo comando dos veces no duplica ninguna vela (usa `INSERT ... ON
-CONFLICT DO NOTHING` sobre la restricción única `symbol+timeframe+open_time`,
-sección 15.7 del plan), así que un corte a mitad de camino se resuelve
-simplemente volviendo a correrlo.
+el mismo comando dos veces no duplica ninguna vela (restricción única
+`symbol+timeframe+open_time`, sección 15.7 del plan), así que un corte a mitad
+de camino se resuelve simplemente volviendo a correrlo.
+
+### Velas cerradas vs. en curso (decisión del usuario, 2026-10-08)
+
+Binance devuelve también la vela del período que **todavía se está formando**
+(una por temporalidad). Antes se guardaba con `DO NOTHING` y quedaba congelada
+para siempre con los valores parciales del momento de la descarga (y los
+indicadores recursivos —RSI/ATR de Wilder, medias— heredaban el error). Ahora:
+
+- La tabla `velas` tiene la columna `cerrada`. La vela en formación se guarda
+  con `cerrada = false` y **se refresca en cada ingesta** hasta que cierra.
+- Una vela es definitiva si Binance ya entregó una posterior de la misma serie
+  o si pasaron 10 s de su hora de cierre (`app/domain/rules/candles.py`; el
+  margen cubre un reloj local ligeramente adelantado).
+- Una vela cerrada es **inmutable**: lo impone el upsert (`ON CONFLICT DO UPDATE
+  ... WHERE cerrada = false`) y un trigger de la base (migración `e6a1c4b7d902`).
+- Indicadores, análisis, benchmark y volumen atípico leen **solo velas cerradas**.
+  El análisis diario ve, por tanto, “el último cierre” de cada temporalidad
+  (el campo `ultima_vela_hace_horas` del Auditor se mide desde ese cierre).
+- Si una vela guardada cambia, se descartan los indicadores derivados de ella y
+  de las posteriores para recalcularlos desde velas cerradas.
+- `scripts.backfill_candles` termina con código 3 si quedan velas **vencidas sin
+  cerrar** (datos parciales antiguos); `run_daily_pipeline` se detiene ahí.
+
+### Reparar el historial congelado (una sola vez)
+
+La migración marca como `cerrada = false` las velas que se guardaron antes de
+cerrar (criterio exacto: `created_at` anterior a su hora de cierre). Para
+corregirlas:
+
+```bash
+python -m scripts.repair_partial_candles              # SIMULACIÓN: no guarda nada
+python -m scripts.repair_partial_candles --ejecutar   # aplica
+```
+
+La simulación ejecuta el mismo camino de código y al final deshace todo; muestra
+por serie cuántas velas cambian, el mayor cambio de cierre y el RSI-14 de antes
+y después. Las propuestas y decisiones ya tomadas **no se tocan**: cada una guarda
+su copia congelada de los datos con que se decidió (decision snapshot).
 
 Sin argumentos, `python -m scripts.backfill_candles` descarga ~2 años
 (sección 3 del plan) para los 20 símbolos de la whitelist en las 4
@@ -1854,7 +1891,8 @@ app/
 migrations/                # Alembic
 scripts/
 ├── results.py                    # CLI: trades / performance / validate (Paso 9)
-├── backfill_candles.py          # CLI: backfill histórico completo
+├── backfill_candles.py          # CLI: backfill histórico completo (velas en curso vs. cerradas)
+├── repair_partial_candles.py    # CLI: repara velas congeladas a medias (simulación por defecto)
 ├── calculate_indicators.py      # CLI: cálculo masivo de indicadores
 ├── verify_indicators.py         # CLI: verificación de integridad de indicadores
 ├── seed_events.py                # CLI: carga/actualiza el catálogo de eventos

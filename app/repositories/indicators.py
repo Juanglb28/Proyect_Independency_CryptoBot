@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -135,3 +135,20 @@ def get_latest_indicator_value(
         .order_by(Indicador.calculated_at.desc())
         .limit(1)
     ).scalar_one_or_none()
+
+
+def delete_indicators_from(session: Session, *, symbol: str, timeframe: str, calculated_at_from: datetime) -> int:
+    """Borra los indicadores de `symbol`/`timeframe` con `calculated_at >=` el
+    límite. Los indicadores con recursión (RSI/ATR de Wilder, medias) heredan el
+    error de una vela corregida, así que al corregir una vela se descartan los
+    suyos y los posteriores y se recalculan desde las velas cerradas. Son datos
+    DERIVADOS y reconstruibles; las decisiones ya tomadas guardan su propia copia
+    congelada (decision snapshot) y no se tocan."""
+    resultado = session.execute(
+        delete(Indicador).where(
+            Indicador.symbol == symbol,
+            Indicador.timeframe == timeframe,
+            Indicador.calculated_at >= calculated_at_from,
+        )
+    )
+    return resultado.rowcount or 0

@@ -4,6 +4,10 @@ Descarga velas reales desde Binance mainnet para los símbolos y
 temporalidades pedidos, y las guarda en la tabla `velas` de forma
 idempotente (correr esto dos veces no duplica nada).
 
+La vela del período en curso se guarda como NO cerrada y se refresca en cada
+corrida hasta que cierra; después es inmutable. Si quedan velas vencidas sin
+cerrar (datos parciales antiguos) el script termina con código 3.
+
 Uso:
     python -m scripts.backfill_candles
     python -m scripts.backfill_candles --days 30
@@ -21,10 +25,11 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
 from datetime import datetime, timedelta, timezone
 
 from app.config import get_settings
-from app.data.candle_ingestion import backfill_all
+from app.data.candle_ingestion import backfill_all, velas_vencidas_sin_cerrar
 from app.data.exchange_client import SUPPORTED_TIMEFRAMES
 from app.db.session import get_engine, get_sessionmaker, session_scope
 from app.domain.symbols import ALLOWED_SYMBOLS
@@ -74,8 +79,10 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Backfill desde {since.isoformat()} para {len(symbols)} símbolos x {len(timeframes)} temporalidades...")
 
+    ahora = datetime.now(timezone.utc)
     with session_scope(session_factory) as session:
-        results = backfill_all(session, symbols, timeframes, since)
+        results = backfill_all(session, symbols, timeframes, since, now=ahora)
+        vencidas = velas_vencidas_sin_cerrar(session, ahora=ahora, symbols=symbols)
 
     total_inserted = 0
     for result in results:
@@ -83,6 +90,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"{result.symbol:10s} {result.timeframe:4s}  "
             f"fetched={result.fetched:6d}  inserted={result.inserted:6d}  "
+            f"updated={result.updated:4d}  en_curso={result.open_candles:2d}  "
             f"pages={result.pages:3d}{flag}"
         )
         total_inserted += result.inserted
@@ -98,6 +106,19 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     print(f"\nOK: {total_inserted} velas nuevas insertadas en total.")
+    if vencidas:
+        print(
+            f"\nERROR: {len(vencidas)} vela(s) quedaron guardadas como NO cerradas aunque su hora de cierre ya pasó "
+            "(valores parciales de antes de la corrección del 2026-10-08, o fuera de la ventana descargada). "
+            "No se debe analizar sobre ellas: corre `python -m scripts.repair_partial_candles` (simulación) y luego "
+            "con `--ejecutar`.",
+            file=sys.stderr,
+        )
+        for symbol, timeframe, open_time in vencidas[:10]:
+            print(f"  {symbol} {timeframe} {open_time.isoformat()}", file=sys.stderr)
+        if len(vencidas) > 10:
+            print(f"  ... y {len(vencidas) - 10} más", file=sys.stderr)
+        return 3
     return 0
 
 

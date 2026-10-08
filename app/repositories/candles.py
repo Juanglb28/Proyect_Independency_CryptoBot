@@ -8,10 +8,11 @@ eso vive en `app/data/candle_ingestion.py`.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import literal_column, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -19,52 +20,72 @@ from app.data.exchange_client import Candle
 from app.db.models.candles import Vela
 
 
-def save_candles(session: Session, candles: list[Candle]) -> int:
-    """Inserta `candles`, ignorando las que ya existan.
+@dataclass(frozen=True)
+class ResultadoUpsert:
+    """Qué hizo `upsert_candles`: velas nuevas, velas en curso refrescadas
+    (con su `open_time`, para invalidar lo derivado) y velas cerradas
+    ignoradas (inmutables)."""
 
-    Usa `INSERT ... ON CONFLICT (symbol, timeframe, open_time) DO NOTHING`
-    en vez de "buscar primero, insertar si no existe": esto último tiene
-    una condición de carrera entre el SELECT y el INSERT, y además exige
-    dos viajes a la base de datos por vela. El `ON CONFLICT` deja que sea
-    la restricción única de la base de datos —no el código de la
-    aplicación— la que decide qué es un duplicado, que es exactamente lo
-    que permite que un reintento tras un corte a mitad de una ingesta
-    (sección 15.7 y P5 del plan) nunca cree una vela repetida.
+    insertadas: int
+    actualizadas: tuple[datetime, ...]
+    ignoradas: int
 
-    Devuelve cuántas filas se insertaron realmente (las que ya existían no
-    se cuentan), para que quien orquesta el backfill pueda distinguir
-    "no había nada nuevo" de "se guardó algo".
+
+def upsert_candles(session: Session, candles: list[Candle]) -> ResultadoUpsert:
+    """Guarda `candles`; una vela EN CURSO se refresca, una CERRADA no se toca.
+
+    `INSERT ... ON CONFLICT (symbol, timeframe, open_time) DO UPDATE ... WHERE
+    velas.cerrada = false`: la restricción única de la base decide qué es un
+    duplicado (sección 15.7 y P5: un reintento tras un corte nunca crea una vela
+    repetida) y la cláusula `WHERE` hace que SOLO una vela guardada como "en
+    curso" pueda cambiar de valores; una vela ya cerrada no se modifica ni
+    siquiera por código (además lo impide un trigger).
+
+    Antes de este cambio era `DO NOTHING`, y la vela en curso quedaba congelada
+    para siempre con los valores parciales del momento de la descarga.
+
+    `Candle["cerrada"]` ausente = cerrada (datos históricos de pruebas); la
+    ingesta real siempre la anota.
+
+    No se puede confiar en `result.rowcount` (psycopg3 con RETURNING deja -1),
+    así que se pide un RETURNING explícito: `xmax = 0` distingue una fila
+    insertada de una actualizada.
     """
     if not candles:
-        return 0
+        return ResultadoUpsert(0, (), 0)
 
-    # No se puede confiar en `result.rowcount` aquí: SQLAlchemy agrega un
-    # RETURNING implícito para leer el `id` autogenerado de cada fila
-    # insertada, y con RETURNING presente psycopg3 deja de reportar
-    # `rowcount` de forma confiable (queda fijo en -1). Esto se detectó con
-    # los tests de integración de este módulo, que fallaban con conteos
-    # negativos.
-    #
-    # La solución es pedir un RETURNING explícito (basta una columna) y
-    # contar las filas devueltas: con `ON CONFLICT DO NOTHING`, Postgres
-    # solo emite una fila de RETURNING por cada inserción que sí ocurrió —
-    # las que chocaron con el conflicto no aparecen. Contar `len(...)` es
-    # entonces exactamente "cuántas velas eran nuevas".
-    statement = (
-        pg_insert(Vela.__table__)
-        .values([dict(candle) for candle in candles])
-        .on_conflict_do_nothing(constraint="uq_velas_symbol_timeframe_open_time")
-        .returning(Vela.__table__.c.id)
-    )
-    result = session.execute(statement)
-    inserted_count = len(result.fetchall())
+    valores = [{**dict(candle), "cerrada": candle.get("cerrada", True)} for candle in candles]
+    tabla = Vela.__table__
+    insert = pg_insert(tabla).values(valores)
+    statement = insert.on_conflict_do_update(
+        constraint="uq_velas_symbol_timeframe_open_time",
+        set_={
+            "open": insert.excluded.open,
+            "high": insert.excluded.high,
+            "low": insert.excluded.low,
+            "close": insert.excluded.close,
+            "volume": insert.excluded.volume,
+            "cerrada": insert.excluded.cerrada,
+        },
+        where=tabla.c.cerrada.is_(False),
+    ).returning(tabla.c.open_time, literal_column("(xmax = 0)").label("insertada"))
+    filas = session.execute(statement).all()
     session.flush()
-    return inserted_count
+    insertadas = sum(1 for _, nueva in filas if nueva)
+    actualizadas = tuple(sorted(t for t, nueva in filas if not nueva))
+    return ResultadoUpsert(insertadas, actualizadas, len(valores) - len(filas))
 
 
-def get_candles(session: Session, symbol: str, timeframe: str) -> list[Candle]:
-    """Lee todas las velas guardadas de `symbol`/`timeframe`, ordenadas
-    ascendentemente por `open_time`.
+def save_candles(session: Session, candles: list[Candle]) -> int:
+    """Como `upsert_candles`, devolviendo solo cuántas velas eran NUEVAS."""
+    return upsert_candles(session, candles).insertadas
+
+
+def get_candles(session: Session, symbol: str, timeframe: str, *, solo_cerradas: bool = True) -> list[Candle]:
+    """Lee las velas guardadas de `symbol`/`timeframe`, ordenadas
+    ascendentemente por `open_time`. Por defecto SOLO las cerradas: una vela
+    en curso tiene valores provisionales y jamás entra a un indicador ni al
+    análisis.
 
     El cálculo de indicadores (`app/data/indicator_calculator.py`) exige
     ese orden: es el mismo orden en que ocurrió el mercado, y ningún
@@ -77,11 +98,10 @@ def get_candles(session: Session, symbol: str, timeframe: str) -> list[Candle]:
     `candle_ingestion.py` ya mantiene la capa `data` sin depender de la
     capa de persistencia.
     """
-    statement = (
-        select(Vela)
-        .where(Vela.symbol == symbol, Vela.timeframe == timeframe)
-        .order_by(Vela.open_time.asc())
-    )
+    statement = select(Vela).where(Vela.symbol == symbol, Vela.timeframe == timeframe)
+    if solo_cerradas:
+        statement = statement.where(Vela.cerrada.is_(True))
+    statement = statement.order_by(Vela.open_time.asc())
     rows = session.execute(statement).scalars().all()
     return [
         Candle(
@@ -93,6 +113,7 @@ def get_candles(session: Session, symbol: str, timeframe: str) -> list[Candle]:
             low=row.low,
             close=row.close,
             volume=row.volume,
+            cerrada=row.cerrada,
         )
         for row in rows
     ]
@@ -106,7 +127,12 @@ def get_close_at_or_before(
     el instante que le interesa (`instante - duración de la vela`)."""
     row = session.execute(
         select(Vela.open_time, Vela.close)
-        .where(Vela.symbol == symbol, Vela.timeframe == timeframe, Vela.open_time <= open_time_at_or_before)
+        .where(
+            Vela.symbol == symbol,
+            Vela.timeframe == timeframe,
+            Vela.cerrada.is_(True),
+            Vela.open_time <= open_time_at_or_before,
+        )
         .order_by(Vela.open_time.desc())
         .limit(1)
     ).one_or_none()
@@ -123,6 +149,7 @@ def get_closes_between(
         .where(
             Vela.symbol == symbol,
             Vela.timeframe == timeframe,
+            Vela.cerrada.is_(True),
             Vela.open_time >= open_time_from,
             Vela.open_time <= open_time_to,
         )
@@ -132,10 +159,10 @@ def get_closes_between(
 
 
 def get_latest_open_time(session: Session, symbol: str, timeframe: str) -> datetime | None:
-    """`open_time` de la vela más reciente guardada, o `None` si no hay."""
+    """`open_time` de la vela CERRADA más reciente, o `None` si no hay."""
     return session.execute(
         select(Vela.open_time)
-        .where(Vela.symbol == symbol, Vela.timeframe == timeframe)
+        .where(Vela.symbol == symbol, Vela.timeframe == timeframe, Vela.cerrada.is_(True))
         .order_by(Vela.open_time.desc())
         .limit(1)
     ).scalar_one_or_none()
@@ -151,8 +178,20 @@ def get_volumes_between(
         select(Vela.open_time, Vela.volume).where(
             Vela.symbol == symbol,
             Vela.timeframe == timeframe,
+            Vela.cerrada.is_(True),
             Vela.open_time >= open_time_from,
             Vela.open_time <= open_time_to,
         )
     ).all()
     return {r[0]: Decimal(r[1]) for r in rows}
+
+
+def list_velas_sin_cerrar(session: Session, *, symbol: str | None = None) -> list[tuple[str, str, datetime]]:
+    """`(symbol, timeframe, open_time)` de las velas guardadas como NO cerradas,
+    de la más antigua a la más reciente. Lo usa la reparación del historial y
+    el control de la corrida diaria (una vela en curso cuya hora de cierre ya
+    pasó es un dato pendiente de corregir)."""
+    consulta = select(Vela.symbol, Vela.timeframe, Vela.open_time).where(Vela.cerrada.is_(False))
+    if symbol is not None:
+        consulta = consulta.where(Vela.symbol == symbol)
+    return [(r[0], r[1], r[2]) for r in session.execute(consulta.order_by(Vela.open_time.asc(), Vela.symbol))]
