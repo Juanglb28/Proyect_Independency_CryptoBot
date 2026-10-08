@@ -1562,6 +1562,19 @@ Tests: `tests/unit/test_escalation_rules.py`, `tests/integration/test_escalation
 `tests/integration/test_monitor_avisos.py`. No hay migración nueva: usa la tabla
 `alertas` de 11a-1.
 
+## Estudio offline de la hipótesis H1: soporte + RSI bajo (2026-10-08)
+
+Pregunta del usuario: ¿"precio cerca de un soporte + RSI de 4h en sobreventa" anticipa una recuperación? **No toca el score vivo, ningún prompt ni ninguna regla**: es un estudio de solo lectura con protocolo pre-registrado (`claude/protocolo-h1-soporte.md` en el proyecto), fijado antes de ver resultados.
+
+Compara dos definiciones de soporte: **S1** mínimo de oscilación (fractal diario de N=5, ventana de 180 velas) y **S2** mínimo de 90 días; condición = cierre diario entre el soporte y soporte × 1,02 **y** RSI-14 de la última vela de 4h cerrada < 35. Mide, con las barreras vigentes (stop −8 % / objetivo +12 %), cuántas veces se toca el objetivo primero frente a entrar sin condición en las mismas monedas y días, con partición temporal 70/30, bootstrap por fecha (IC de 97,5 %) y una regla de decisión fija (incluye el veredicto "no concluyente" si la muestra es insuficiente).
+
+```bash
+python -m scripts.repair_partial_candles --ejecutar   # requisito: historial sin velas vencidas sin cerrar
+python -m scripts.study_support_h1
+```
+
+Código: `app/domain/rules/support.py` (definiciones), `app/data/support_study.py` (estudio puro), `scripts/study_support_h1.py`. Pruebas: `tests/unit/test_support_rules.py` (incluye la prueba de ausencia de look-ahead) y `tests/unit/test_support_study.py`. Los parámetros no tienen opciones de línea de comandos a propósito: cambiarlos tras ver resultados invalida el estudio.
+
 ## Tarea diaria programada (Windows)
 
 El ciclo diario no necesita que ninguna IA lo arranque ni lo supervise —
@@ -1893,6 +1906,7 @@ scripts/
 ├── results.py                    # CLI: trades / performance / validate (Paso 9)
 ├── backfill_candles.py          # CLI: backfill histórico completo (velas en curso vs. cerradas)
 ├── repair_partial_candles.py    # CLI: repara velas congeladas a medias (simulación por defecto)
+├── study_support_h1.py          # CLI: estudio offline H1 (soporte + RSI 4h), protocolo pre-registrado
 ├── calculate_indicators.py      # CLI: cálculo masivo de indicadores
 ├── verify_indicators.py         # CLI: verificación de integridad de indicadores
 ├── seed_events.py                # CLI: carga/actualiza el catálogo de eventos
