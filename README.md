@@ -1562,18 +1562,25 @@ Tests: `tests/unit/test_escalation_rules.py`, `tests/integration/test_escalation
 `tests/integration/test_monitor_avisos.py`. No hay migración nueva: usa la tabla
 `alertas` de 11a-1.
 
-## Estudio offline de la hipótesis H1: soporte + RSI bajo (2026-10-08)
+## Estudio offline de la hipótesis H1: soporte + RSI bajo (2026-10-08, protocolo v2)
 
-Pregunta del usuario: ¿"precio cerca de un soporte + RSI de 4h en sobreventa" anticipa una recuperación? **No toca el score vivo, ningún prompt ni ninguna regla**: es un estudio de solo lectura con protocolo pre-registrado (`claude/protocolo-h1-soporte.md` en el proyecto), fijado antes de ver resultados.
+Pregunta del usuario: ¿"precio cerca de un soporte + RSI de 4h en sobreventa" anticipa una recuperación? **No toca el score vivo, ningún prompt ni ninguna regla**: es un estudio **exploratorio** de solo lectura con protocolo pre-registrado en el repositorio (`docs/protocolo-h1-soporte.md`, v2), fijado antes de ver resultados. El script imprime la huella SHA-256 del protocolo para poder verificar que no cambió entre el commit y la corrida.
 
-Compara dos definiciones de soporte: **S1** mínimo de oscilación (fractal diario de N=5, ventana de 180 velas) y **S2** mínimo de 90 días; condición = cierre diario entre el soporte y soporte × 1,02 **y** RSI-14 de la última vela de 4h cerrada < 35. Mide, con las barreras vigentes (stop −8 % / objetivo +12 %), cuántas veces se toca el objetivo primero frente a entrar sin condición en las mismas monedas y días, con partición temporal 70/30, bootstrap por fecha (IC de 97,5 %) y una regla de decisión fija (incluye el veredicto "no concluyente" si la muestra es insuficiente).
+Compara dos definiciones de soporte: **S1** mínimo de oscilación (fractal diario de N=5, ventana de 180 velas) y **S2** mínimo de 90 días; condición = cierre diario entre el soporte y soporte × 1,02 **y** RSI-14 de la última vela de 4h cerrada < 35. Mide, con las barreras vigentes (stop −8 % / objetivo +12 %), cuántas veces se toca el objetivo primero frente a entrar sin condición.
+
+Correcciones de la v2 (tras la revisión del usuario, antes de ver resultados):
+
+1. **Línea base doble:** bruta (todos los días) y ajustada por moneda y mes calendario (estratos moneda-mes, ponderada por los episodios de la condicional; solo estratos con datos de ambos lados). Una definición debe tener el límite inferior del IC de 97,5 % > 0 frente a **ambas**.
+2. **Purga en el corte 70/30:** en exploración se excluyen las observaciones cuyo desenlace cae en o después del corte (o no se resolvió); se imprime cuántas.
+3. **Métrica secundaria (no decide):** retorno neto de la salida real simulada (50 % en +12 %, trailing 6 % al resto, comisión 0,1 % por lado), en `app/data/exit_simulation.py`.
+4. **Veredicto por definición:** `PASA` / `NO_PASA` / `SIN_EVALUAR_MUESTRA_INSUFICIENTE` (< 30 episodios resueltos). Una definición sin muestra no se declara refutada: veredictos `H1_RESPALDADA`, `H1_NO_RESPALDADA`, `H1_NO_RESPALDADA_EN_LAS_EVALUADAS_OTRAS_SIN_EVALUAR` y `NO_CONCLUYENTE_MUESTRA_INSUFICIENTE`. Aun un `H1_RESPALDADA` solo justifica continuar la prueba en paper con datos nuevos; **no** añade la señal al score.
 
 ```bash
 python -m scripts.repair_partial_candles --ejecutar   # requisito: historial sin velas vencidas sin cerrar
-python -m scripts.study_support_h1
+python -m scripts.study_support_h1                     # ~1-2 min con los 20 símbolos
 ```
 
-Código: `app/domain/rules/support.py` (definiciones), `app/data/support_study.py` (estudio puro), `scripts/study_support_h1.py`. Pruebas: `tests/unit/test_support_rules.py` (incluye la prueba de ausencia de look-ahead) y `tests/unit/test_support_study.py`. Los parámetros no tienen opciones de línea de comandos a propósito: cambiarlos tras ver resultados invalida el estudio.
+Código: `app/domain/rules/support.py` (definiciones), `app/data/support_study.py` (estudio puro), `app/data/exit_simulation.py`, `scripts/study_support_h1.py`. Pruebas: `tests/unit/test_support_rules.py` (incluye la prueba de ausencia de look-ahead), `tests/unit/test_support_study.py` (incluye una prueba que ata los parámetros del código al texto del protocolo) y `tests/unit/test_exit_simulation.py`. Los parámetros no tienen opciones de línea de comandos a propósito: cambiarlos tras ver resultados invalida el estudio.
 
 ## Tarea diaria programada (Windows)
 
@@ -1906,7 +1913,7 @@ scripts/
 ├── results.py                    # CLI: trades / performance / validate (Paso 9)
 ├── backfill_candles.py          # CLI: backfill histórico completo (velas en curso vs. cerradas)
 ├── repair_partial_candles.py    # CLI: repara velas congeladas a medias (simulación por defecto)
-├── study_support_h1.py          # CLI: estudio offline H1 (soporte + RSI 4h), protocolo pre-registrado
+├── study_support_h1.py          # CLI: estudio offline H1 (soporte + RSI 4h), protocolo v2 en docs/
 ├── calculate_indicators.py      # CLI: cálculo masivo de indicadores
 ├── verify_indicators.py         # CLI: verificación de integridad de indicadores
 ├── seed_events.py                # CLI: carga/actualiza el catálogo de eventos

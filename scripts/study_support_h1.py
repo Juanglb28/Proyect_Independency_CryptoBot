@@ -1,7 +1,7 @@
 """Estudio offline de la hipótesis H1: soporte + RSI 4h bajo -> recuperación.
 
 Protocolo pre-registrado (parámetros, definiciones S1/S2, partición 70/30,
-bootstrap y regla de decisión): `claude/protocolo-h1-soporte.md`. Este script
+bootstrap y regla de decisión): `docs/protocolo-h1-soporte.md`. Este script
 NO tiene opciones para cambiar esos parámetros a propósito: cambiarlos tras ver
 resultados invalida el estudio. Solo lectura: no escribe en la base de datos,
 no toca el score, ningún prompt ni ninguna regla viva.
@@ -20,8 +20,10 @@ Código de salida: 0 = estudio completo; 1 = no se pudo correr (datos).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 from app.config import get_settings
 from app.data.candle_ingestion import velas_vencidas_sin_cerrar
@@ -46,15 +48,34 @@ def _pct(valor) -> str:
     return "  n/d" if valor is None else f"{valor * 100:5.1f}%"
 
 
-def _linea(c: Comparacion) -> str:
-    i = c.intervalo
-    ic = "n/d" if i.bajo is None else f"[{_pct(i.bajo)}, {_pct(i.alto)}]"
-    dif = "n/d" if i.diferencia is None else f"{i.diferencia * 100:+5.1f} pp"
-    return (
-        f"  {c.grupo:22s} episodios: obj={c.episodios.objetivo:4d} stop={c.episodios.stop:4d} "
-        f"tasa={_pct(c.episodios.tasa)} | base tasa={_pct(c.base.tasa)} | dif={dif} IC97,5%={ic} | "
-        f"señales={c.senales.total:5d} amb={c.episodios.ambiguas:3d} sinres={c.episodios.sin_resolver:3d}"
-    )
+def _pp(valor) -> str:
+    return "   n/d" if valor is None else f"{valor * 100:+6.1f}"
+
+
+def _ic(e) -> str:
+    return "n/d" if e.bajo is None else f"[{_pp(e.bajo).strip()}, {_pp(e.alto).strip()}]"
+
+
+def _linea(c: Comparacion) -> list[str]:
+    ep = c.episodios
+    tb, ta = c.tasa_bruta, c.tasa_ajustada
+    rb, ra = c.retorno_bruto, c.retorno_ajustado
+    return [
+        f"  {c.grupo:22s} episodios: obj={ep.objetivo:4d} stop={ep.stop:4d} amb={ep.ambiguas:3d} "
+        f"sinres={ep.sin_resolver:3d} | tasa={_pct(ep.tasa)} | señales={c.senales.total:5d} | purgados={c.purgadas_episodios}",
+        f"  {'':22s} vs base BRUTA    ({_pct(tb.base)}): dif={_pp(tb.diferencia)} pp  IC97,5%=[pp] {_ic(tb)}",
+        f"  {'':22s} vs base AJUSTADA ({_pct(ta.base)}, {ta.estratos or 0} estratos): "
+        f"dif={_pp(ta.diferencia)} pp  IC97,5%=[pp] {_ic(ta)}",
+        f"  {'':22s} secundario (salida real simulada, neto): retorno medio={_pct(rb.cond)} vs base {_pct(rb.base)}"
+        f" | dif bruta={_pp(rb.diferencia)} pp {_ic(rb)} | dif ajustada={_pp(ra.diferencia)} pp {_ic(ra)}",
+    ]
+
+
+def _sha256_protocolo() -> str | None:
+    ruta = Path(__file__).resolve().parent.parent / "docs" / "protocolo-h1-soporte.md"
+    if not ruta.exists():
+        return None
+    return hashlib.sha256(ruta.read_bytes()).hexdigest()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -94,7 +115,9 @@ def main(argv: list[str] | None = None) -> int:
         print("ERROR: no hay días elegibles (¿falta el backfill de ~2 años en 1h, 4h y 1d?).", file=sys.stderr)
         return 1
 
-    print("ESTUDIO H1 — protocolo pre-registrado en claude/protocolo-h1-soporte.md")
+    print("ESTUDIO H1 — protocolo pre-registrado en docs/protocolo-h1-soporte.md (v2)")
+    huella = _sha256_protocolo()
+    print(f"SHA-256 del protocolo: {huella or 'NO ENCONTRADO (el estudio no es verificable sin el protocolo)'}")
     print(
         f"Barreras: stop -{PAR_BARRERAS.stop_pct * 100:g}% / objetivo +{PAR_BARRERAS.target_pct * 100:g}%. "
         f"Observaciones elegibles: {len(observaciones)} ({len({o.symbol for o in observaciones})} monedas). "
@@ -103,28 +126,36 @@ def main(argv: list[str] | None = None) -> int:
     if sin_datos:
         print(f"Sin días elegibles: {', '.join(sin_datos)}")
     equilibrio = next(iter(informe.comparaciones.values())).equilibrio
-    print(f"Punto de equilibrio con comisiones: tasa de objetivo > {_pct(equilibrio).strip()}\n")
+    print(f"Punto de equilibrio con comisiones: tasa de objetivo > {_pct(equilibrio).strip()}")
+    print("Diferencias e intervalos en puntos porcentuales (pp). 'purgados' = episodios de exploración cuyo desenlace")
+    print("cae en/después del corte o no se resolvió (excluidos para no filtrar información de la confirmación).\n")
     for particion in Particion:
         print(f"=== {particion.value.upper()} ===")
-        base = next(c.base for (g, p), c in informe.comparaciones.items() if p == particion)
-        print(f"  {BASE:22s} (línea base, todos los días) obj={base.objetivo} stop={base.stop} tasa={_pct(base.tasa)}")
+        c0 = next(c for (g, p), c in informe.comparaciones.items() if p == particion)
+        base = c0.base
+        print(
+            f"  {BASE:22s} (línea base, todos los días) obj={base.objetivo} stop={base.stop} "
+            f"tasa={_pct(base.tasa)} | purgados={c0.purgadas_base}"
+        )
         for grupo in GRUPOS:
             if grupo != BASE:
-                print(_linea(informe.comparaciones[(grupo, particion)]))
+                for linea in _linea(informe.comparaciones[(grupo, particion)]):
+                    print(linea)
         print()
 
-    print("=== VEREDICTO (regla fija del protocolo, evaluada en CONFIRMACIÓN) ===")
+    print("=== VEREDICTO (regla fija del protocolo, evaluada por definición en CONFIRMACIÓN) ===")
     for d in DEFINICIONES:
         c = informe.comparaciones[(d, Particion.CONFIRMACION)]
         print(
-            f"  {d}: muestra≥30 episodios resueltos={'sí' if c.muestra_suficiente else 'NO'} "
-            f"({c.episodios.resueltas}), IC inferior>0={'sí' if c.cumple_intervalo else 'no'}, "
-            f"supera equilibrio={'sí' if c.supera_equilibrio else 'no'} -> {'PASA' if c.pasa else 'no pasa'}"
+            f"  {d}: {informe.estados[d].value} | episodios resueltos={c.episodios.resueltas} (mín. 30) | "
+            f"IC inferior>0 vs bruta={'sí' if c.tasa_bruta.lim_inferior_positivo else 'no'}, "
+            f"vs ajustada={'sí' if c.tasa_ajustada.lim_inferior_positivo else 'no'} | "
+            f"supera equilibrio={'sí' if c.supera_equilibrio else 'no'}"
         )
     print(f"\n  {informe.veredicto.value}" + (f"  (definición ganadora: {informe.ganadora})" if informe.ganadora else ""))
     print(
-        "\nRecordatorio: aunque se respalde, esto NO cambia el score. El siguiente paso sería proponer un factor "
-        "nuevo (versión nueva) y validarlo en paper con muestra nueva."
+        "\nRecordatorio: el estudio es EXPLORATORIO. Aunque se respalde, esto NO cambia el score: solo justifica "
+        "continuar la prueba en paper con datos nuevos (un factor nuevo, versión nueva, validado hacia delante)."
     )
     return 0
 
