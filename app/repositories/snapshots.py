@@ -18,7 +18,7 @@ La transacción la maneja quien llama.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -81,4 +81,35 @@ def get_ultimo_snapshot(session: Session, position_id: uuid.UUID) -> TradeSnapsh
         .where(TradeSnapshot.position_id == position_id)
         .order_by(TradeSnapshot.snapshot_time.desc(), TradeSnapshot.id.desc())
         .limit(1)
+    ).scalar_one_or_none()
+
+
+def get_snapshot_de_referencia(
+    session: Session, position_id: uuid.UUID, *, desde: datetime, hasta: datetime
+) -> tuple[datetime, Decimal] | None:
+    """`(hora, market_price)` del snapshot MÁS RECIENTE de la posición con
+    hora en `[desde, hasta]`, o `None`. Lo usa la regla de caída en 1 hora para
+    leer "el precio de hace una hora" (decisión D2): quien llama fija los
+    límites; aquí no se interpreta nada."""
+    fila = session.execute(
+        select(TradeSnapshot.snapshot_time, TradeSnapshot.market_price)
+        .where(
+            TradeSnapshot.position_id == position_id,
+            TradeSnapshot.snapshot_time >= desde,
+            TradeSnapshot.snapshot_time <= hasta,
+        )
+        .order_by(TradeSnapshot.snapshot_time.desc(), TradeSnapshot.id.desc())
+        .limit(1)
+    ).one_or_none()
+    return None if fila is None else (fila[0], fila[1])
+
+
+def get_hora_ultimo_snapshot(session: Session, position_ids: Collection[uuid.UUID]) -> datetime | None:
+    """La hora del snapshot más reciente entre las posiciones dadas, o `None`.
+    Cada snapshot nace de un precio recibido, así que es "la última vez que
+    llegó un precio" (decisión D5)."""
+    if not position_ids:
+        return None
+    return session.execute(
+        select(func.max(TradeSnapshot.snapshot_time)).where(TradeSnapshot.position_id.in_(list(position_ids)))
     ).scalar_one_or_none()

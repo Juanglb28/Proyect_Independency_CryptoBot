@@ -59,12 +59,13 @@ from enum import Enum
 
 from sqlalchemy.orm import Session
 
-from app.domain.enums import EstadoOrden, IntencionOrden, LadoOrden, TierEntrada
+from app.domain.enums import EstadoOrden, IntencionOrden, LadoOrden, TierEntrada, TipoAlerta
 from app.domain.rules.execution import (
     CandidatoEntrada,
     EntradaDescartada,
     select_entries,
 )
+from app.domain.rules.escalation import binance_figura_caido
 from app.domain.rules.results import serialize_prices
 from app.domain.rules.risk import (
     SituacionDeCupos,
@@ -77,6 +78,7 @@ from app.execution.emergency_stop import EmergencyStop, FileEmergencyStop
 from app.execution.price_source import PriceSource, PriceUnavailable
 from app.execution.reference_prices import fetch_reference_prices
 from app.execution.results_recorder import record_entry
+from app.repositories.alertas import get_ultima_alerta_de_tipos
 from app.repositories.analysis import get_propuesta, get_propuestas_de_ciclo
 from app.repositories.orders import (
     OrdenRow,
@@ -159,7 +161,9 @@ def build_cupos(
     - mayor riesgo = abiertas + pendientes cuya propuesta es `MAYOR_RIESGO`;
     - símbolos = los de las posiciones abiertas y los de las pendientes;
     - parada de emergencia = existe el archivo `PARAR` (ver
-      `app.execution.emergency_stop`).
+      `app.execution.emergency_stop`);
+    - Binance caído = el último aviso del par BINANCE_CAIDO/RESTABLECIDO es
+      BINANCE_CAIDO (Paso 11a-2, decisión D5): bloquea entradas nuevas.
     """
     _exigir_utc(now)
     abiertas = list_open_posiciones(session)
@@ -181,6 +185,9 @@ def build_cupos(
         created_before=hasta,
     )
     ultimo_evento = get_ultimo_evento_sistema(session)
+    ultimo_aviso_binance = get_ultima_alerta_de_tipos(
+        session, [TipoAlerta.BINANCE_CAIDO, TipoAlerta.BINANCE_RESTABLECIDO]
+    )
 
     return SituacionDeCupos(
         posiciones_abiertas=len(abiertas) + len(pendientes),
@@ -189,6 +196,7 @@ def build_cupos(
         simbolos_abiertos=frozenset([p.symbol for p in abiertas] + [o.symbol for o in pendientes]),
         sistema_pausado=sistema_pausado(ultimo_evento.event_type if ultimo_evento else None),
         parada_emergencia=(emergency_stop or FileEmergencyStop()).is_active(),
+        binance_caido=binance_figura_caido(ultimo_aviso_binance.tipo if ultimo_aviso_binance else None),
     )
 
 

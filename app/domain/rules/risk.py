@@ -369,6 +369,7 @@ def sistema_pausado(ultimo_evento: TipoEventoSistema | None) -> bool:
 class MotivoRechazoEntrada(str, Enum):
     SISTEMA_PAUSADO = "SISTEMA_PAUSADO"
     PARADA_DE_EMERGENCIA = "PARADA_DE_EMERGENCIA"
+    BINANCE_CAIDO = "BINANCE_CAIDO"
     SIMBOLO_NO_PERMITIDO = "SIMBOLO_NO_PERMITIDO"
     TIER_NO_CALIFICA = "TIER_NO_CALIFICA"
     SIMBOLO_YA_ABIERTO = "SIMBOLO_YA_ABIERTO"
@@ -406,6 +407,11 @@ class SituacionDeCupos:
     """El archivo `PARAR` existe (sección 9 del plan: detiene toda operación
     nueva sin matar el proceso). Como la pausa, solo bloquea entradas
     nuevas: las posiciones abiertas siguen vigiladas y sus stops activos."""
+    binance_caido: bool = False
+    """Binance figura caído (más de 5 minutos sin precios; decisión D5 del
+    Paso 11, ver `app.domain.rules.escalation.binance_figura_caido`). Como la
+    pausa, solo bloquea entradas nuevas: el monitor sigue vigilando y aplicará
+    los stops en cuanto vuelva a haber precio."""
 
 
 @dataclass(frozen=True)
@@ -434,6 +440,8 @@ def validate_entry(
         motivos.append(MotivoRechazoEntrada.SISTEMA_PAUSADO)
     if cupos.parada_emergencia:
         motivos.append(MotivoRechazoEntrada.PARADA_DE_EMERGENCIA)
+    if cupos.binance_caido:
+        motivos.append(MotivoRechazoEntrada.BINANCE_CAIDO)
     if symbol not in ALLOWED_SYMBOLS:
         motivos.append(MotivoRechazoEntrada.SIMBOLO_NO_PERMITIDO)
     if tier == TierEntrada.NINGUNO:

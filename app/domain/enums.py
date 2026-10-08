@@ -185,8 +185,8 @@ class TipoAlerta(str, Enum):
     - `CAIDA_1H`: una posición abierta cayó más de 5 % en la última hora.
     - `VOLUMEN_ATIPICO`: el volumen de la última vela 1h cerrada de una
       posición abierta superó 3 desviaciones estándar (decisión D3).
-    - `ORDEN_PENDIENTE_APROBACION`: hay una entrada de más de 200 USD
-      esperando la aprobación manual del usuario.
+    - `ORDEN_PENDIENTE_APROBACION`: hay una entrada esperando la aprobación
+      manual del usuario (las de más de 200 USD y las de mayor riesgo).
     - `BINANCE_CAIDO` / `BINANCE_RESTABLECIDO`: Binance no respondió durante
       más de 5 minutos / volvió a responder (decisión D5; el estado es el tipo
       de la última alerta de este par).
@@ -228,13 +228,13 @@ class EstadoSnapshot(str, Enum):
 
     Los que el sistema escribe HOY: `SCHEDULED`, `ENTRY`,
     `PARTIAL_TAKE_PROFIT`, `TRAILING_ACTIVATED`, `TRAILING_UPDATED`,
-    `SYSTEM_PAUSED` y `EXIT`. `TARGET_REACHED` coincide siempre con
+    `SYSTEM_PAUSED`, `RISK_ALERT` (Paso 11a-2: un aviso de caída o de volumen
+    sobre la posición) y `EXIT`. `TARGET_REACHED` coincide siempre con
     `PARTIAL_TAKE_PROFIT` (en v1 el objetivo ES el TP parcial) y no se
     escribe aparte. `STOP_UPDATED` (el stop no se mueve en v1; el trailing
-    se refleja en `TRAILING_UPDATED`), `RISK_ALERT` (escalamientos, Paso 11)
-    y `RECONCILIATION` (el monitor se detiene sin precios ante una
-    discrepancia) existen como valor válido pero ningún código los emite
-    todavía.
+    se refleja en `TRAILING_UPDATED`) y `RECONCILIATION` (el monitor se
+    detiene sin precios ante una discrepancia) existen como valor válido pero
+    ningún código los emite todavía.
 
     Se guarda como VARCHAR validado (`native_enum=False`)."""
 

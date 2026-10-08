@@ -35,8 +35,14 @@ las reglas de salida de inmediato; nunca se cierra nada "por reinicio".
 Pausa por drawdown: solo bloquea entradas nuevas. El monitor sigue vigilando
 y ejecutando stops mientras el sistema está pausado o con `PARAR`.
 
-Fuera de este bloque (Paso 11): las notificaciones de escalamiento (caída
->5%/h, volumen >3σ, Binance caído >5 min) necesitan Telegram.
+Paso 11a-2 (escalamientos): al final de cada chequeo se escriben en `alertas`
+los avisos que correspondan (caída >5 %/h, volumen >3σ, orden >200 USD
+pendiente, Binance caído / restablecido, pausa por drawdown) con
+`app.execution.escalations`. Solo se ESCRIBEN filas: el envío a Telegram lo
+hace el despachador DESPUÉS de confirmar la transacción (P2). Avisar nunca
+bloquea operar: cada comprobación va en su savepoint y un fallo solo se
+registra en el log. La discrepancia de reconciliación se avisa fuera de este
+módulo (la transacción se revierte al lanzar `ReconciliationBlocked`).
 """
 
 from __future__ import annotations
@@ -49,7 +55,7 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from app.domain.enums import EstadoOrden, OrigenObservacionEquity, TipoEventoSistema
+from app.domain.enums import EstadoOrden, OrigenObservacionEquity, TipoAlerta, TipoEventoSistema
 from app.domain.rules.risk import (
     OrdenEjecutada,
     PosicionMarcada,
@@ -59,6 +65,7 @@ from app.domain.rules.risk import (
     sistema_pausado,
     update_peak_equity,
 )
+from app.execution.escalations import avisar_pausa_drawdown, evaluar_escalaciones
 from app.execution.order_manager import expire_pending_entries
 from app.execution.position_manager import ResultadoChequeo, check_position
 from app.execution.price_source import PriceSource, PriceUnavailable
@@ -111,6 +118,8 @@ class ResultadoTick:
     pausa_registrada: bool = False
     posiciones_abiertas: int = 0
     notas: tuple[str, ...] = field(default=())
+    alertas_creadas: tuple[TipoAlerta, ...] = ()
+    """Avisos NUEVOS escritos en `alertas` en este chequeo (aún sin enviar)."""
 
     @property
     def equity_calculada(self) -> bool:
@@ -169,7 +178,8 @@ def run_monitor_tick(
     errores: list[ErrorDePosicion] = []
     precios: dict[str, Decimal] = {}
 
-    for posicion in list_open_posiciones(session):
+    abiertas_al_inicio = list_open_posiciones(session)
+    for posicion in abiertas_al_inicio:
         try:
             precio = price_source.get_price(posicion.symbol)
         except PriceUnavailable:
@@ -208,11 +218,15 @@ def run_monitor_tick(
         resultados_reparados=reparados,
     )
 
+    escalaciones = evaluar_escalaciones(session, now=now, posiciones=abiertas_al_inicio, precios=precios)
+    avisos = list(escalaciones.creadas)
+
     if sin_precio or errores:
         return ResultadoTick(
             **base,
             posiciones_abiertas=len(list_open_posiciones(session)),
             notas=("Equity no calculada en este chequeo: falta un precio o hubo un error.",),
+            alertas_creadas=tuple(avisos),
         )
 
     valoracion = current_equity(session, initial_capital=initial_capital, precios=precios)
@@ -251,6 +265,8 @@ def run_monitor_tick(
         )
         if pausa_registrada:
             record_pause(session, list_open_posiciones(session), precios, now=now)
+            if avisar_pausa_drawdown(session, now=now, equity=equity, peak=peak, drawdown_pct=drawdown):
+                avisos.append(TipoAlerta.PAUSA_DRAWDOWN)
             _log(
                 "PAUSA por drawdown",
                 level=logging.WARNING,
@@ -266,6 +282,7 @@ def run_monitor_tick(
         drawdown_pct=calculate_drawdown_pct(equity, peak),
         pausa_registrada=pausa_registrada,
         posiciones_abiertas=n_abiertas,
+        alertas_creadas=tuple(avisos),
     )
 
 

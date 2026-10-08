@@ -926,9 +926,9 @@ una fecha de prueba distinta de la real, el tope de 3 entradas por día fallaba
 `created_at = now` (el reloj lógico), que además es lo reproducible para el
 backtest.
 
-Pendiente para el Paso 11 (necesita Telegram): los avisos de escalamiento (caída
->5% en una hora, volumen >3σ, Binance caído >5 min) y empaquetar el monitor
-como proceso programado (APScheduler). Tests:
+Los avisos de escalamiento (caída >5% en una hora, volumen >3σ, Binance caído
+>5 min) existen desde el Paso 11a-2 (ver "Avisos por Telegram"); queda pendiente
+empaquetar el monitor como proceso programado (APScheduler, Paso 11b). Tests:
 `tests/unit/test_equity_rules.py`, `tests/unit/test_reconciliation.py`,
 `tests/unit/test_emergency_stop.py`, `tests/integration/test_position_manager.py`,
 `tests/integration/test_monitor.py`, `tests/integration/test_monitor_scripts.py`,
@@ -1435,7 +1435,7 @@ Decisiones en `claude/decisiones-paso-11.md` (D4, D5, D6, D8 y D9). Los avisos s
 Telegram es **solo saliente** (no hay comandos entrantes; aprobar y rechazar
 siguen siendo manuales en la interfaz).
 
-**Qué existe en este bloque (la infraestructura; los 5 escalamientos llegan en 11a-2):**
+**Qué existe en 11a-1 (la infraestructura; los escalamientos están en la subsección de 11a-2):**
 
 - Tabla `alertas` (migración `b7d41c9e2a60`): un aviso por fila, con el mensaje ya
   armado por código determinista, el valor observado frente al umbral y una clave
@@ -1475,6 +1475,55 @@ Después de aplicar el parche hay que migrar las dos bases (real y de pruebas):
 `docker compose run --rm app python -m scripts.migrate_all`. En Railway se aplica
 con `alembic upgrade head` como en el despliegue de la base. Tests:
 `tests/unit/test_telegram_client.py`, `tests/integration/test_alertas.py`.
+
+### Escalamientos del monitor (Paso 11a-2, 2026-10-08)
+
+Cada chequeo del monitor **escribe** en `alertas` los avisos que correspondan y,
+una vez confirmada la transacción, `scripts/monitor.py` envía los pendientes por
+Telegram. El monitor solo inserta filas (P2): enviar o no enviar nunca cambia una
+orden, un stop ni una posición, y un fallo al avisar (o de Telegram) solo se
+registra en el log. Las reglas son funciones puras en
+`app/domain/rules/escalation.py`; el cableado con la base está en
+`app/execution/escalations.py`.
+
+| Aviso | Cuándo | Un aviso por |
+|---|---|---|
+| `CAIDA_1H` | una posición **abierta** cayó **más de** 5 % respecto del precio de hace 1 h (snapshot guardado) | posición y hora UTC |
+| `VOLUMEN_ATIPICO` | volumen de la última vela 1 h cerrada a más de 3 desviaciones estándar de las 30 velas 1 h previas | posición y vela |
+| `ORDEN_PENDIENTE_APROBACION` | hay una entrada esperando tu aprobación manual | orden |
+| `BINANCE_CAIDO` / `BINANCE_RESTABLECIDO` | ningún precio durante más de 5 min / vuelve a llegar | episodio |
+| `PAUSA_DRAWDOWN` | el equity llegó a -15 % del pico | pausa |
+| `DISCREPANCIA_RECONCILIACION` | la reconciliación no cuadra y el monitor se detiene | hallazgos y hora UTC |
+
+**Único efecto operativo:** mientras el último aviso del par Binance sea
+`BINANCE_CAIDO`, `validate_entry` rechaza entradas nuevas con el motivo
+`BINANCE_CAIDO` (como la pausa y `PARAR`). El monitor sigue vigilando y aplica los
+stops en cuanto llega un precio.
+
+**Derivados por el asistente (puedes corregirlos; están en `claude/decisiones-paso-11.md`):**
+
+- Caída: estricta (exactamente 5 % no avisa). La referencia es el snapshot más
+  reciente con hora ≤ ahora − 1 h y no más viejo que 5 min más; sin referencia (posición
+  abierta hace menos de 1 h, o monitor apagado un rato) **no se avisa ni se estima**.
+  Tras un reinicio, el aviso de caída vuelve a estar disponible 1 h después; los
+  stops no dependen de esto.
+- Volumen: desviación estándar muestral (n−1), z > 3 estricto. Faltan velas, no hay
+  la última vela cerrada o la desviación es 0: no hay z-score y no se avisa. **Necesita
+  velas de 1 h al día**: hoy se ingieren con el backfill; la ingesta horaria
+  automática llega en 11b.
+- Orden pendiente: se avisa de **toda** entrada que espera aprobación (el plan dice
+  ">200 USD", pero en v1 todas miden 100 USD y la aprobación se exige también a las de
+  mayor riesgo; con ">200" literal nunca avisaría).
+- Binance caído: se detecta con los precios que el monitor pide para las posiciones
+  abiertas y "último precio recibido" = último snapshot de esas posiciones. **Sin
+  posiciones abiertas el monitor no llama a Binance y no puede saber si cayó**; la
+  ingesta horaria (11b) cubrirá ese caso.
+- Cada aviso de caída o de volumen deja además un snapshot `RISK_ALERT` en la
+  trayectoria de la posición.
+
+Tests: `tests/unit/test_escalation_rules.py`, `tests/integration/test_escalations.py`,
+`tests/integration/test_monitor_avisos.py`. No hay migración nueva: usa la tabla
+`alertas` de 11a-1.
 
 ## Tarea diaria programada (Windows)
 
@@ -1962,10 +2011,9 @@ prompt — "no sobreimplementar"):
   propuestas (sus reglas ya están decididas: ver "Decisiones del Paso 8") — `propuestas` queda como el registro de TODO lo que el
   Consolidador propuso, sin decidir todavía cuál se convierte en una
   posición real (Paso 8: `RISK_VALIDATION` en adelante de la sección 15.6).
-- Monitor como proceso permanente y programado (APScheduler, Paso 11) y los
-  avisos de escalamiento por Telegram (caída >5% en una hora, volumen >3σ,
-  Binance caído >5 min): hoy el monitor se lanza a mano con
-  `scripts.monitor --loop` y solo vigila mientras corre. Ninguna credencial de
+- Monitor como proceso permanente y programado (APScheduler, Paso 11b): hoy
+  el monitor se lanza a mano con `scripts.monitor --loop` y solo vigila
+  mientras corre (los avisos de escalamiento por Telegram ya existen: Paso 11a-2). Ninguna credencial de
   Binance se usa todavía; ni el cliente de velas, ni el backfill, ni el monitor
   la necesitan.
 - Corrección auditable de un `trade_result` y alcance "estrategia" de las

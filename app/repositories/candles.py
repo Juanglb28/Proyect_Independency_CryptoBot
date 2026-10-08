@@ -139,3 +139,20 @@ def get_latest_open_time(session: Session, symbol: str, timeframe: str) -> datet
         .order_by(Vela.open_time.desc())
         .limit(1)
     ).scalar_one_or_none()
+
+
+def get_volumes_between(
+    session: Session, symbol: str, timeframe: str, *, open_time_from: datetime, open_time_to: datetime
+) -> dict[datetime, Decimal]:
+    """`{open_time: volumen}` de las velas con `open_time` en `[desde, hasta]`.
+    Lo usa la regla de volumen atípico; quien llama decide si las velas que
+    faltan invalidan el cálculo."""
+    rows = session.execute(
+        select(Vela.open_time, Vela.volume).where(
+            Vela.symbol == symbol,
+            Vela.timeframe == timeframe,
+            Vela.open_time >= open_time_from,
+            Vela.open_time <= open_time_to,
+        )
+    ).all()
+    return {r[0]: Decimal(r[1]) for r in rows}

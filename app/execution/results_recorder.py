@@ -188,6 +188,20 @@ def record_pause(session: Session, posiciones, precios: dict[str, Decimal], *, n
             _log_error("no se pudo registrar el snapshot de pausa", posicion.id)
 
 
+def record_risk_alert(session: Session, posicion, *, price: Decimal, now: datetime) -> None:
+    """Snapshot `RISK_ALERT` de una posición abierta cuando se le envió un
+    aviso de escalamiento (caída o volumen). Nunca bloquea al monitor."""
+    try:
+        with session.begin_nested():
+            _snapshot(
+                session, posicion, estado=EstadoSnapshot.RISK_ALERT, now=now, price=price,
+                quantity=posicion.remaining_quantity, trailing_active=posicion.trailing_active,
+                peak=posicion.trailing_peak_price,
+            )
+    except Exception:  # noqa: BLE001
+        _log_error("no se pudo registrar el snapshot de alerta de riesgo", posicion.id)
+
+
 def _log_error(message: str, position_id: uuid.UUID) -> None:
     logger.error(
         f"results-recorder: {message}",

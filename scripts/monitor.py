@@ -15,6 +15,14 @@ Con Docker (el PC debe estar encendido: el monitor solo vigila mientras corre):
 Si el monitor estuvo apagado, el primer chequeo al volver revisa las
 posiciones con el precio ACTUAL y aplica las reglas de salida de inmediato.
 
+Avisos (Paso 11a-2): el chequeo ESCRIBE los avisos en la tabla `alertas`
+(caída >5 %/h, volumen >3σ, orden >200 USD pendiente, Binance caído o
+restablecido, pausa por drawdown, discrepancia de reconciliación) y, después
+de confirmar la transacción, este script envía por Telegram los que estén
+pendientes. Si `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` no están configurados
+los avisos quedan guardados y se envían cuando se configuren. Un fallo de
+Telegram nunca detiene el monitor.
+
 Códigos de salida (modo de un chequeo): 0 = bien; 1 = faltó un precio o una
 posición dio error; 2 = la reconciliación encontró discrepancias y el monitor
 se detuvo sin actuar (hay que revisarlas a mano). En `--loop` el monitor sigue
@@ -35,9 +43,12 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import get_settings
 from app.db.session import get_engine, get_sessionmaker, session_scope
+from app.execution.escalations import avisar_discrepancia
 from app.execution.monitor import ReconciliationBlocked, ResultadoTick, run_monitor_tick
 from app.execution.price_source import BinanceTickerPriceSource, PriceSource
 from app.logging_config import configure_logging
+from app.notifications.dispatcher import dispatch_pending_alerts
+from app.notifications.telegram import Sender, build_sender
 
 # Plan, sección 9: "cada 60 segundos".
 INTERVALO_SEGUNDOS = 60
@@ -65,6 +76,8 @@ def format_tick(result: ResultadoTick, now: datetime) -> list[str]:
         lineas.append(f"  Entradas pendientes expiradas: {result.expiradas}")
     if result.resultados_reparados:
         lineas.append(f"  Resultados de operaciones cerradas generados por reparación: {result.resultados_reparados}")
+    for tipo in result.alertas_creadas:
+        lineas.append(f"  AVISO registrado: {tipo.value}")
     if result.pausa_registrada:
         lineas.append(
             "  *** PAUSA POR DRAWDOWN: el sistema no abrirá entradas nuevas hasta que lo reanudes "
@@ -88,20 +101,49 @@ def format_blocked(error: ReconciliationBlocked) -> list[str]:
     return lineas
 
 
+def _registrar_discrepancia(session_factory: sessionmaker[Session], error: ReconciliationBlocked, now: datetime) -> None:
+    """Guarda el aviso de discrepancia en una transacción PROPIA (la del
+    chequeo se revirtió). Nunca propaga un fallo: el monitor ya se detiene."""
+    try:
+        with session_scope(session_factory) as session:
+            avisar_discrepancia(session, now=now, discrepancias=error.discrepancias)
+    except Exception:  # noqa: BLE001
+        logger.error("monitor: no se pudo guardar el aviso de discrepancia", exc_info=True)
+
+
+def _enviar_avisos(session_factory: sessionmaker[Session], sender: Sender | None, now: datetime) -> list[str]:
+    """Envía los avisos pendientes DESPUÉS del commit. Nunca propaga un fallo."""
+    try:
+        despacho = dispatch_pending_alerts(session_factory, sender, now=now)
+    except Exception:  # noqa: BLE001 - Telegram no puede detener al monitor
+        logger.error("monitor: el envío de avisos falló", exc_info=True)
+        return ["  AVISOS: el envío falló (ver el log); se reintenta en el siguiente chequeo."]
+    lineas = []
+    if despacho.enviadas:
+        lineas.append(f"  Avisos enviados por Telegram: {despacho.enviadas}")
+    if despacho.fallidas:
+        lineas.append(f"  Avisos que no se pudieron enviar (se reintentan): {despacho.fallidas}")
+    return lineas
+
+
 def run_once(
     session_factory: sessionmaker[Session],
     *,
     price_source: PriceSource,
     initial_capital: Decimal,
     now: datetime,
+    sender: Sender | None = None,
 ) -> tuple[list[str], int]:
-    """Un chequeo en su propia transacción. Devuelve `(líneas, código)`."""
+    """Un chequeo en su propia transacción y, ya confirmada, el envío de los
+    avisos pendientes. Devuelve `(líneas, código)`."""
     try:
         with session_scope(session_factory) as session:
             result = run_monitor_tick(session, now=now, price_source=price_source, initial_capital=initial_capital)
     except ReconciliationBlocked as exc:
-        return format_blocked(exc), 2
-    return format_tick(result, now), (1 if result.hubo_problemas else 0)
+        _registrar_discrepancia(session_factory, exc, now)
+        return format_blocked(exc) + _enviar_avisos(session_factory, sender, now), 2
+    lineas = format_tick(result, now) + _enviar_avisos(session_factory, sender, now)
+    return lineas, (1 if result.hubo_problemas else 0)
 
 
 def run_loop(
@@ -114,6 +156,7 @@ def run_loop(
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     max_ticks: int | None = None,
     emit: Callable[[str], None] = print,
+    sender: Sender | None = None,
 ) -> int:
     """Repite el chequeo cada `interval` segundos. Se detiene (código 2) solo
     ante una discrepancia de reconciliación; cualquier otro fallo del
@@ -125,7 +168,7 @@ def run_loop(
         now = clock()
         try:
             lineas, codigo = run_once(
-                session_factory, price_source=price_source, initial_capital=initial_capital, now=now
+                session_factory, price_source=price_source, initial_capital=initial_capital, now=now, sender=sender
             )
         except Exception:  # noqa: BLE001 - un fallo (p. ej. la base caída) no mata el monitor
             logger.error("monitor: el chequeo falló; se reintenta en el siguiente", exc_info=True)
@@ -153,6 +196,9 @@ def main(argv: list[str] | None = None) -> int:
     settings = get_settings()
     session_factory = get_sessionmaker(get_engine(settings))
     price_source = BinanceTickerPriceSource()
+    sender = build_sender(settings.telegram_bot_token, settings.telegram_chat_id)
+    if sender is None:
+        print("Telegram sin configurar: los avisos se guardan en la base y se enviarán cuando lo configures.")
 
     if not args.loop:
         lineas, codigo = run_once(
@@ -160,6 +206,7 @@ def main(argv: list[str] | None = None) -> int:
             price_source=price_source,
             initial_capital=settings.paper_capital_usd,
             now=datetime.now(timezone.utc),
+            sender=sender,
         )
         for linea in lineas:
             print(linea)
@@ -167,7 +214,9 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Monitor activo: un chequeo cada {INTERVALO_SEGUNDOS} s. Ctrl+C para detenerlo.")
     try:
-        return run_loop(session_factory, price_source=price_source, initial_capital=settings.paper_capital_usd)
+        return run_loop(
+            session_factory, price_source=price_source, initial_capital=settings.paper_capital_usd, sender=sender
+        )
     except KeyboardInterrupt:
         print("Monitor detenido.")
         return 0
