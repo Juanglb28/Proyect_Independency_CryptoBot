@@ -1,0 +1,228 @@
+{
+  "descartes": {
+    "primario": {
+      "censurada": 89
+    },
+    "pre_corte": {
+      "sin_observacion_del_arnes": 9
+    }
+  },
+  "informes": {
+    "PRIMARIO — protocolo K1 v1 (fechas >= 2024-07-01)": {
+      "n_observaciones": 5491,
+      "n_fechas": 278,
+      "fechas_excluidas": 1,
+      "ic": {
+        "kronos": {
+          "n": 278,
+          "media": "-0.02399976258992805755395683453",
+          "ci_inferior": "-0.05976830215827338129496402878",
+          "ci_superior": "0.01212766187050359712230215827"
+        },
+        "score_v1": {
+          "n": 278,
+          "media": "0.003348456834532374100719424460",
+          "ci_inferior": "-0.03634132014388489208633093525",
+          "ci_superior": "0.04618259712230215827338129496"
+        },
+        "mom_24h": {
+          "n": 278,
+          "media": "0.02104070143884892086330935252",
+          "ci_inferior": "-0.01109078776978417266187050360",
+          "ci_superior": "0.05076797122302158273381294964"
+        },
+        "mom_7d": {
+          "n": 278,
+          "media": "0.01792452158273381294964028777",
+          "ci_inferior": "-0.02340846402877697841726618705",
+          "ci_superior": "0.05682831654676258992805755396"
+        }
+      },
+      "dif_vs_mom_24h": {
+        "n": 278,
+        "media": "-0.04504046402877697841726618705",
+        "ci_inferior": "-0.09702497841726618705035971223",
+        "ci_superior": "0.01380419784172661870503597122"
+      },
+      "dif_vs_mom_7d": {
+        "n": 278,
+        "media": "-0.04192428417266187050359712230",
+        "ci_inferior": "-0.1109720143884892086330935252",
+        "ci_superior": "0.03179047122302158273381294964"
+      },
+      "p_permutacion": "0.952000",
+      "terciles": {
+        "n": 5491,
+        "k": 1830,
+        "alta": "0.002538501650631594278757396558",
+        "baja": "-0.001723193292878609438612741027",
+        "diferencia": "0.004261694943510203717370137585",
+        "ci_inferior": "-0.002492354705915576700050157981",
+        "ci_superior": "0.01091088540554538201020151513",
+        "estratos_excluidos": 0,
+        "observaciones_excluidas": 0
+      },
+      "terciles_e4": {
+        "n": 5491,
+        "k": 1830,
+        "alta": "0.01062821011889659521457497328",
+        "baja": "-0.01340438822173392274069350586",
+        "diferencia": "0.02403259834063051795526847914",
+        "ci_inferior": "0.01794313493354392949564188882",
+        "ci_superior": "0.03047670531022403220959931934",
+        "estratos_excluidos": 0,
+        "observaciones_excluidas": 0
+      },
+      "corr_kronos_score": "-0.510353",
+      "veredicto": "NO_DISCRIMINA",
+      "notas": [
+        "IC por bloques de 5 fechas; con ~20 monedas muy correlacionadas la muestra efectiva es menor que n y el IC puede ser optimista. Los contrastes secundarios son exploratorios."
+      ]
+    },
+    "SENSIBILIDAD (fechas >= 2025-03-19)": {
+      "n_observaciones": 3751,
+      "n_fechas": 191,
+      "fechas_excluidas": 1,
+      "ic": {
+        "kronos": {
+          "n": 191,
+          "media": "-0.05256828795811518324607329843",
+          "ci_inferior": "-0.09858435078534031413612565445",
+          "ci_superior": "-0.01122966492146596858638743455"
+        },
+        "score_v1": {
+          "n": 191,
+          "media": "0.02516412041884816753926701571",
+          "ci_inferior": "-0.02414184293193717277486910995",
+          "ci_superior": "0.07643745026178010471204188482"
+        },
+        "mom_24h": {
+          "n": 191,
+          "media": "0.03737462303664921465968586387",
+          "ci_inferior": "0.0006459057591623036649214659686",
+          "ci_superior": "0.07258320942408376963350785340"
+        },
+        "mom_7d": {
+          "n": 191,
+          "media": "0.03151643979057591623036649215",
+          "ci_inferior": "-0.01901603664921465968586387435",
+          "ci_superior": "0.08006969633507853403141361257"
+        }
+      },
+      "dif_vs_mom_24h": {
+        "n": 191,
+        "media": "-0.08994291099476439790575916230",
+        "ci_inferior": "-0.1605297591623036649214659686",
+        "ci_superior": "-0.02454083769633507853403141361"
+      },
+      "dif_vs_mom_7d": {
+        "n": 191,
+        "media": "-0.08408472774869109947643979058",
+        "ci_inferior": "-0.1742479842931937172774869110",
+        "ci_superior": "0.005874623036649214659685863874"
+      },
+      "p_permutacion": "0.998000",
+      "terciles": {
+        "n": 3751,
+        "k": 1250,
+        "alta": "0.002659547541556419727726109213",
+        "baja": "-0.0002100961464816031740875346564",
+        "diferencia": "0.002869643688038022901813643869",
+        "ci_inferior": "-0.004400061164799834816695109825",
+        "ci_superior": "0.01110919977280225118547853752",
+        "estratos_excluidos": 0,
+        "observaciones_excluidas": 0
+      },
+      "terciles_e4": {
+        "n": 3751,
+        "k": 1250,
+        "alta": "0.008043959567447361044508366704",
+        "baja": "-0.01258020461742568571966249803",
+        "diferencia": "0.02062416418487304676417086473",
+        "ci_inferior": "0.01358423875139520910537545191",
+        "ci_superior": "0.02844200057373449896799688632",
+        "estratos_excluidos": 0,
+        "observaciones_excluidas": 0
+      },
+      "corr_kronos_score": "-0.497009",
+      "veredicto": "NO_DISCRIMINA",
+      "notas": [
+        "IC por bloques de 5 fechas; con ~20 monedas muy correlacionadas la muestra efectiva es menor que n y el IC puede ser optimista. Los contrastes secundarios son exploratorios."
+      ]
+    },
+    "DIAGNÓSTICO PRE-CORTE (fechas < 2024-07-01; posible memoria del preentrenamiento)": {
+      "n_observaciones": 491,
+      "n_fechas": 25,
+      "fechas_excluidas": 0,
+      "ic": {
+        "kronos": {
+          "n": 25,
+          "media": "-0.03604744",
+          "ci_inferior": "-0.1138698",
+          "ci_superior": "0.05419888"
+        },
+        "score_v1": {
+          "n": 25,
+          "media": "0.13724664",
+          "ci_inferior": "0.0689946",
+          "ci_superior": "0.2098714"
+        },
+        "mom_24h": {
+          "n": 25,
+          "media": "-0.05970912",
+          "ci_inferior": "-0.13248196",
+          "ci_superior": "-0.01113124"
+        },
+        "mom_7d": {
+          "n": 25,
+          "media": "0.0441748",
+          "ci_inferior": "-0.08850928",
+          "ci_superior": "0.10518936"
+        }
+      },
+      "dif_vs_mom_24h": {
+        "n": 25,
+        "media": "0.02366168",
+        "ci_inferior": "-0.08488988",
+        "ci_superior": "0.16570952"
+      },
+      "dif_vs_mom_7d": {
+        "n": 25,
+        "media": "-0.08022224",
+        "ci_inferior": "-0.20368276",
+        "ci_superior": "0.13849856"
+      },
+      "p_permutacion": "0.804000",
+      "terciles": {
+        "n": 491,
+        "k": 163,
+        "alta": "-0.005595989153577815883349516687",
+        "baja": "0.004090132246963887366717028147",
+        "diferencia": "-0.009686121400541703250066544834",
+        "ci_inferior": "-0.03323185955288170101832914092",
+        "ci_superior": "0.01240339105148028377006829796",
+        "estratos_excluidos": 0,
+        "observaciones_excluidas": 0
+      },
+      "terciles_e4": {
+        "n": 491,
+        "k": 163,
+        "alta": "0.005539240466370136794970068261",
+        "baja": "-0.005796670652125544063932054177",
+        "diferencia": "0.01133591111849568085890212244",
+        "ci_inferior": "-0.007922919555431554547309516243",
+        "ci_superior": "0.03081128786044412566028100835",
+        "estratos_excluidos": 0,
+        "observaciones_excluidas": 0
+      },
+      "corr_kronos_score": "-0.567198",
+      "veredicto": "NO_CONCLUYENTE_MUESTRA_INSUFICIENTE",
+      "notas": [
+        "Solo 25 fecha(s) con >= 10 monedas resueltas; el protocolo pide al menos 30: NO_CONCLUYENTE.",
+        "IC por bloques de 5 fechas; con ~20 monedas muy correlacionadas la muestra efectiva es menor que n y el IC puede ser optimista. Los contrastes secundarios son exploratorios."
+      ]
+    }
+  },
+  "fechas_primarias_sin_pronostico": 0,
+  "generado_el": "2026-10-16T23:13:58.326883+00:00"
+}
