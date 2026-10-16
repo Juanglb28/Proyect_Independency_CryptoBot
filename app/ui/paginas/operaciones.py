@@ -6,7 +6,7 @@ from decimal import Decimal
 
 import streamlit as st
 
-from app.domain.enums import EstadoTesis, IntencionOrden, ResultadoOperacion
+from app.domain.enums import EstadoTesis, IntencionOrden, ResultadoOperacion, SerieOperacion
 from app.services import views
 from app.services.trades import FiltroOperaciones
 from app.ui.components.trade_detail import render_trade_detail
@@ -22,7 +22,8 @@ def _elegir(etiqueta: str, enum_cls):
 
 def render() -> None:
     st.title("Operaciones")
-    st.caption("Operaciones cerradas (fuente: resultados definitivos). Más reciente primero.")
+    st.caption("Operaciones cerradas (fuente: resultados definitivos). Más reciente primero. "
+               "Las de OBSERVACIÓN (candidatos del pre-filtro abiertos sin IA) se distinguen de las de la ESTRATEGIA y se miden aparte.")
     todas = views.operaciones()
     simbolos = sorted({x.symbol for x in todas})
 
@@ -30,6 +31,7 @@ def render() -> None:
     with c1:
         simbolo = st.selectbox("Símbolo", [_TODOS, *simbolos])
         resultado = _elegir("Resultado", ResultadoOperacion)
+        serie = _elegir("Serie", SerieOperacion)
     with c2:
         motivo = _elegir("Motivo de salida", IntencionOrden)
         tesis = _elegir("Estado de la tesis", EstadoTesis)
@@ -39,7 +41,7 @@ def render() -> None:
 
     filtro = FiltroOperaciones(
         symbol=None if simbolo == _TODOS else simbolo,
-        resultado=resultado, exit_reason=motivo, thesis_status=tesis,
+        resultado=resultado, exit_reason=motivo, thesis_status=tesis, serie=serie,
         score_min=Decimal(score_min) if score_min > 0 else None,
         score_max=Decimal(score_max) if score_max < 100 else None,
     )

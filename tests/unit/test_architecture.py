@@ -57,6 +57,15 @@ _PROHIBIDO: dict[str, tuple[str, ...]] = {
     "data": ("app.execution", "streamlit", "app.ui", "app.notifications"),
     # Los agentes de IA no tienen acceso a la ejecución ni al exchange (P2/P4).
     "ai": ("app.execution", "ccxt", "app.data.exchange_client", "streamlit", "app.ui", "app.notifications"),
+    # Experimentos (enmienda E6, Kronos): código de terceros que solo MIRA velas
+    # y produce pronósticos para contrastar. Sin ejecución, sin exchange, sin
+    # avisos, sin IA de agentes, sin UI, sin base: lo que necesita le llega por
+    # argumento (el script `kronos_k0` abre la sesión de solo-lectura y se la da).
+    "experiments": (
+        "app.execution", "app.orchestration", "app.notifications", "app.ai", "app.ui", "app.services",
+        "app.results", "app.db", "app.repositories", "app.config", "anthropic", "ccxt", "streamlit",
+        "sqlalchemy", "psycopg",
+    ),
 }
 
 
@@ -215,3 +224,32 @@ def test_el_token_de_telegram_solo_lo_usan_las_notificaciones_y_los_scripts():
             continue
         for archivo in sorted(carpeta.rglob("*.py")):
             assert "telegram_bot_token" not in archivo.read_text(encoding="utf-8").lower(), archivo
+
+
+def test_nadie_en_la_aplicacion_importa_los_experimentos():
+    """Enmienda E6: Kronos es un componente aislado y NO entra a compras, score ni
+    ejecución. Si alguna capa de `app/` lo importara, dejaría de ser opcional."""
+    importadores = [x for x in _importadores("app.experiments") if not x.startswith("experiments/")]
+    assert importadores == [], importadores
+
+
+def test_el_dominio_y_los_experimentos_no_importan_librerias_de_aprendizaje_automatico_en_el_dominio():
+    """El dominio (reglas del experimento incluidas) es Python puro: torch, pandas y
+    numpy solo viven en el adaptador de `app/experiments/kronos/predictor.py`."""
+    pesadas = ("torch", "numpy", "pandas", "transformers", "huggingface_hub", "safetensors")
+    for archivo in sorted((_APP / "domain").rglob("*.py")):
+        malos = [m for m in _imports(archivo) if m.split(".")[0] in pesadas]
+        assert malos == [], (archivo, malos)
+    for archivo in sorted((_APP / "experiments").rglob("*.py")):
+        if archivo.name == "predictor.py" or archivo.name == "pesos.py":
+            continue
+        malos = [m for m in _imports(archivo) if m.split(".")[0] in pesadas]
+        assert malos == [], (archivo, malos)
+
+
+def test_los_experimentos_no_tocan_credenciales():
+    """P4: el código de terceros corre sin llaves del exchange, de Anthropic ni de Telegram."""
+    for archivo in sorted((_APP / "experiments").rglob("*.py")):
+        texto = archivo.read_text(encoding="utf-8").lower()
+        for secreto in ("binance_api", "anthropic_api", "telegram_bot_token", "database_url"):
+            assert secreto not in texto, (archivo, secreto)

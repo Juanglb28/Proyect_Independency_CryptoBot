@@ -32,11 +32,14 @@ def _candles(symbol: str, timeframe: str, n: int) -> list[Candle]:
     ]
 
 
-def _patch_repositories(monkeypatch, candles_by_key: dict[tuple[str, str], list[Candle]]):
+def _patch_repositories(monkeypatch, candles_by_key: dict[tuple[str, str], list[Candle]], *, tails=None):
     saved: list[int] = []
 
-    def fake_get_candles(session, symbol, timeframe):
-        return candles_by_key.get((symbol, timeframe), [])
+    def fake_get_candles(session, symbol, timeframe, *, tail=None):
+        if tails is not None:
+            tails.append(tail)
+        velas = candles_by_key.get((symbol, timeframe), [])
+        return velas if tail is None else velas[-tail:] if tail > 0 else []
 
     def fake_save_indicators(session, rows):
         saved.append(len(rows))
@@ -66,6 +69,29 @@ def test_calculate_for_symbol_timeframe_computes_and_saves(monkeypatch):
     assert result.candles_used == 200
     assert result.calculated > 0
     assert result.inserted == result.calculated
+
+
+def test_tail_se_propaga_a_get_candles_y_limita_las_velas(monkeypatch):
+    tails: list = []
+    candles = _candles("BTCUSDT", "1h", n=300)
+    _patch_repositories(monkeypatch, {("BTCUSDT", "1h"): candles}, tails=tails)
+
+    result = calculate_indicators_for_symbol_timeframe(
+        session=object(), symbol="BTCUSDT", timeframe="1h", tail=120
+    )
+
+    assert tails == [120]  # se pasó tal cual al repositorio
+    assert result.candles_used == 120  # y limitó la lectura a la cola
+
+
+def test_sin_tail_lee_toda_la_historia(monkeypatch):
+    tails: list = []
+    candles = _candles("BTCUSDT", "1h", n=300)
+    _patch_repositories(monkeypatch, {("BTCUSDT", "1h"): candles}, tails=tails)
+
+    result = calculate_indicators_for_symbol_timeframe(session=object(), symbol="BTCUSDT", timeframe="1h")
+
+    assert tails == [None] and result.candles_used == 300
 
 
 class _FakeSession:
@@ -104,3 +130,18 @@ def test_calculate_for_all_commits_once_per_combination(monkeypatch):
     # ETHUSDT/1h no estaba en candles_by_key en absoluto: debe tratarse igual
     # que una lista vacía (dato faltante), no lanzar KeyError.
     assert by_key[("ETHUSDT", "1h")].candles_used == 0
+
+
+def test_calculate_for_all_propaga_tail_a_cada_combinacion(monkeypatch):
+    tails: list = []
+    candles_by_key = {
+        ("BTCUSDT", "1d"): _candles("BTCUSDT", "1d", n=300),
+        ("BTCUSDT", "1h"): _candles("BTCUSDT", "1h", n=300),
+    }
+    _patch_repositories(monkeypatch, candles_by_key, tails=tails)
+
+    calculate_indicators_for_all(
+        _FakeSession(), symbols=["BTCUSDT"], timeframes=["1d", "1h"], tail=150
+    )
+
+    assert tails == [150, 150]  # una vez por combinación, con la cola pedida

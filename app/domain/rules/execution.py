@@ -41,7 +41,12 @@ from app.domain.rules.risk import (
     validate_entry,
 )
 
-_PRIORIDAD_TIER = {TierEntrada.NORMAL: 0, TierEntrada.MAYOR_RIESGO: 1, TierEntrada.NINGUNO: 2}
+_PRIORIDAD_TIER = {
+    TierEntrada.NORMAL: 0,
+    TierEntrada.MAYOR_RIESGO: 1,
+    TierEntrada.NINGUNO: 2,
+    TierEntrada.OBSERVACION: 3,  # siempre después de la estrategia (cupos aparte, pero mismo símbolo)
+}
 
 
 @dataclass(frozen=True)
@@ -107,13 +112,22 @@ def select_entries(
                 monto_usd=validacion.monto_usd,
             )
         )
-        cupos_actuales = replace(
-            cupos_actuales,
-            posiciones_abiertas=cupos_actuales.posiciones_abiertas + 1,
-            entradas_hoy=cupos_actuales.entradas_hoy + 1,
-            mayor_riesgo_abiertas=cupos_actuales.mayor_riesgo_abiertas
-            + (1 if candidato.tier == TierEntrada.MAYOR_RIESGO else 0),
-            simbolos_abiertos=cupos_actuales.simbolos_abiertos | {candidato.symbol},
-        )
+        if candidato.tier == TierEntrada.OBSERVACION:
+            # Cupos propios (decisión del 2026-10-12): no toca los de la estrategia.
+            cupos_actuales = replace(
+                cupos_actuales,
+                observacion_abiertas=cupos_actuales.observacion_abiertas + 1,
+                observacion_entradas_hoy=cupos_actuales.observacion_entradas_hoy + 1,
+                simbolos_abiertos=cupos_actuales.simbolos_abiertos | {candidato.symbol},
+            )
+        else:
+            cupos_actuales = replace(
+                cupos_actuales,
+                posiciones_abiertas=cupos_actuales.posiciones_abiertas + 1,
+                entradas_hoy=cupos_actuales.entradas_hoy + 1,
+                mayor_riesgo_abiertas=cupos_actuales.mayor_riesgo_abiertas
+                + (1 if candidato.tier == TierEntrada.MAYOR_RIESGO else 0),
+                simbolos_abiertos=cupos_actuales.simbolos_abiertos | {candidato.symbol},
+            )
 
     return ResultadoSeleccion(seleccionadas=tuple(seleccionadas), descartadas=tuple(descartadas))

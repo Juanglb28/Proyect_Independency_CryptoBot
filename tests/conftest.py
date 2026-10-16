@@ -7,7 +7,7 @@ from collections.abc import Iterator
 import pytest
 from sqlalchemy import event
 from sqlalchemy.engine import make_url
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings, get_settings
 from app.db.session import get_engine
@@ -117,3 +117,23 @@ def _sin_archivo_parar(tmp_path, monkeypatch):
     from app.execution import emergency_stop
 
     monkeypatch.setattr(emergency_stop, "PARAR_PATH", tmp_path / "PARAR")
+
+
+@pytest.fixture()
+def reinicios(db_engine):
+    """Fábrica de sesiones que se comporta como procesos sucesivos: cada
+    `commit()` queda visible para la siguiente sesión, cada sesión no
+    confirmada desaparece, y al final todo se revierte."""
+    connection = db_engine.connect()
+    exterior = connection.begin()
+    fabrica = sessionmaker(
+        bind=connection,
+        autoflush=False,
+        expire_on_commit=False,
+        join_transaction_mode="create_savepoint",
+    )
+    try:
+        yield fabrica
+    finally:
+        exterior.rollback()
+        connection.close()

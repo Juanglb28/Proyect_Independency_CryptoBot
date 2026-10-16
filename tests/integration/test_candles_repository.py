@@ -6,11 +6,11 @@ camino real de `save_candles`: inserción masiva con
 `ON CONFLICT DO NOTHING`.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from app.data.exchange_client import Candle
-from app.repositories.candles import save_candles
+from app.repositories.candles import get_candles, save_candles
 
 
 def _candle(open_time: datetime, **overrides) -> Candle:
@@ -72,3 +72,38 @@ def test_save_candles_inserts_only_the_new_ones_in_a_mixed_batch(db_session):
 
 def test_save_candles_with_empty_list_is_a_no_op(db_session):
     assert save_candles(db_session, []) == 0
+
+
+def test_get_candles_tail_devuelve_solo_las_ultimas_en_orden_ascendente(db_session):
+    base = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    save_candles(db_session, [_candle(base + timedelta(days=i)) for i in range(10)])
+    db_session.flush()
+
+    cola = get_candles(db_session, "BTCUSDT", "1d", tail=3)
+    assert [c["open_time"] for c in cola] == [
+        base + timedelta(days=7),
+        base + timedelta(days=8),
+        base + timedelta(days=9),
+    ]
+
+
+def test_get_candles_tail_none_trae_todas(db_session):
+    base = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    save_candles(db_session, [_candle(base + timedelta(days=i)) for i in range(5)])
+    db_session.flush()
+    assert len(get_candles(db_session, "BTCUSDT", "1d")) == 5
+
+
+def test_get_candles_tail_mayor_que_lo_disponible_trae_todas(db_session):
+    base = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    save_candles(db_session, [_candle(base + timedelta(days=i)) for i in range(4)])
+    db_session.flush()
+    assert len(get_candles(db_session, "BTCUSDT", "1d", tail=100)) == 4
+
+
+def test_get_candles_tail_cero_o_negativo_trae_vacio(db_session):
+    base = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    save_candles(db_session, [_candle(base + timedelta(days=i)) for i in range(4)])
+    db_session.flush()
+    assert get_candles(db_session, "BTCUSDT", "1d", tail=0) == []
+    assert get_candles(db_session, "BTCUSDT", "1d", tail=-5) == []

@@ -47,7 +47,7 @@ import statistics
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import ROUND_HALF_EVEN, Decimal
 from enum import Enum
 from fractions import Fraction
@@ -66,6 +66,9 @@ MUESTRA_MINIMA_DEL_PLAN = 30
 """Operaciones simuladas que pide el plan (sección 12, Fase 5) para dar una
 respuesta de validación."""
 MUESTRA_MINIMA_PARA_TERCILES = 3
+MUESTRA_MINIMA_POR_ESTRATO = 2
+"""Enmienda E4: un mes con una sola operación con score no aporta comparación
+dentro de su periodo."""
 
 _ESCALA_PRECIO = Decimal("1E-12")
 _ESCALA_USD = Decimal("1E-8")
@@ -765,6 +768,60 @@ class ValidationReport:
     notas: tuple[str, ...] = field(default=())
 
 
+@dataclass(frozen=True)
+class BootstrapTerciles:
+    """Resultado SIN redondear del método del plan (8.7); cada llamador lo
+    cuantiza a la escala de su métrica."""
+
+    k: int
+    alta: Decimal
+    baja: Decimal
+    ci_lower: Decimal
+    ci_upper: Decimal
+
+
+def bootstrap_diferencia_de_terciles(
+    valores_por_rango: Sequence[Decimal],
+    *,
+    iterations: int = BOOTSTRAP_ITERACIONES,
+    seed: int = BOOTSTRAP_SEMILLA,
+) -> BootstrapTerciles:
+    """Núcleo ÚNICO del método de discriminación del plan (8.7), compartido por
+    la validación de operaciones reales (`validate_score_discrimination`) y por
+    el backtest walk-forward: así no existen dos implementaciones que puedan
+    divergir.
+
+    `valores_por_rango[0]` es el resultado de la observación con el score MÁS
+    ALTO y el último el del más bajo (el llamador ordena, con su propio
+    desempate determinista). Se remuestrea con reemplazo (mismo `n`), se
+    recalculan los terciles en cada remuestreo (`k = n // 3`) y el IC 95% usa
+    los elementos `ceil(B × 2,5%)` y `ceil(B × 97,5%)` de la lista ordenada.
+    """
+    if iterations < BOOTSTRAP_ITERACIONES:
+        raise ValueError(f"el plan exige al menos {BOOTSTRAP_ITERACIONES} iteraciones")
+    n = len(valores_por_rango)
+    if n < MUESTRA_MINIMA_PARA_TERCILES:
+        raise ValueError("se necesitan al menos 3 observaciones para formar terciles")
+    k = n // 3
+
+    alta = sum(valores_por_rango[:k], _CERO) / k
+    baja = sum(valores_por_rango[n - k :], _CERO) / k
+
+    rng = random.Random(seed)
+    diferencias: list[Decimal] = []
+    for _ in range(iterations):
+        rangos = sorted(rng.randrange(n) for _ in range(n))
+        superior = sum((valores_por_rango[r] for r in rangos[:k]), _CERO) / k
+        inferior = sum((valores_por_rango[r] for r in rangos[n - k :]), _CERO) / k
+        diferencias.append(superior - inferior)
+    diferencias.sort()
+
+    cola = Fraction(100 - NIVEL_DE_CONFIANZA_PCT, 2 * 100)  # 2,5% = 1/40
+    idx_inferior = ceil(iterations * cola) - 1
+    idx_superior = ceil(iterations * (1 - cola)) - 1
+    return BootstrapTerciles(k, alta, baja, diferencias[idx_inferior], diferencias[idx_superior])
+
+
 def validate_score_discrimination(
     trades: Sequence[TradeResult],
     *,
@@ -790,17 +847,33 @@ def validate_score_discrimination(
         raise ValueError(f"el plan exige al menos {BOOTSTRAP_ITERACIONES} iteraciones")
 
     puntuadas = [t for t in trades if t.initial_opportunity_score is not None]
-    n = len(puntuadas)
-    sin_score = len(trades) - n
+    sin_score = len(trades) - len(puntuadas)
     notas: list[str] = []
     if sin_score:
         notas.append(f"{sin_score} operación(es) sin score inicial quedaron fuera de la comparación.")
+    ordenadas = sorted(puntuadas, key=_clave_de_orden)  # rango 0 = score más alto
+    return _informe_de_valores(
+        [t.net_pnl for t in ordenadas], n_trades=len(trades), notas=notas, iterations=iterations, seed=seed
+    )
 
+
+def _informe_de_valores(
+    valores_por_rango: Sequence[Decimal],
+    *,
+    n_trades: int,
+    notas: list[str],
+    iterations: int,
+    seed: int,
+) -> ValidationReport:
+    """Arma el informe de §8.7 a partir de los resultados ya ordenados por score
+    (rango 0 = más alto). Compartido por la medición principal y la estratificada
+    (enmienda E4) para que ambas apliquen exactamente el mismo método."""
+    n = len(valores_por_rango)
     if n < MUESTRA_MINIMA_PARA_TERCILES:
         notas.append("Menos de 3 operaciones con score: no se pueden formar terciles.")
         return ValidationReport(
             status=EstadoValidacion.MUESTRA_INSUFICIENTE,
-            n_trades=len(trades),
+            n_trades=n_trades,
             n_trades_con_score=n,
             tercil_size=None,
             high_score_expectancy=None,
@@ -814,27 +887,12 @@ def validate_score_discrimination(
             notas=tuple(notas),
         )
 
-    ordenadas = sorted(puntuadas, key=_clave_de_orden)  # rango 0 = score más alto
-    pnl_por_rango = [t.net_pnl for t in ordenadas]
-    k = n // 3
-
-    alta = _usd(sum(pnl_por_rango[:k], _CERO) / k)
-    baja = _usd(sum(pnl_por_rango[n - k :], _CERO) / k)
-
-    rng = random.Random(seed)
-    diferencias: list[Decimal] = []
-    for _ in range(iterations):
-        rangos = sorted(rng.randrange(n) for _ in range(n))
-        superior = sum((pnl_por_rango[r] for r in rangos[:k]), _CERO) / k
-        inferior = sum((pnl_por_rango[r] for r in rangos[n - k :]), _CERO) / k
-        diferencias.append(superior - inferior)
-    diferencias.sort()
-
-    cola = Fraction(100 - NIVEL_DE_CONFIANZA_PCT, 2 * 100)  # 2,5% = 1/40
-    idx_inferior = ceil(iterations * cola) - 1
-    idx_superior = ceil(iterations * (1 - cola)) - 1
-    ci_lower = _usd(diferencias[idx_inferior])
-    ci_upper = _usd(diferencias[idx_superior])
+    boot = bootstrap_diferencia_de_terciles(valores_por_rango, iterations=iterations, seed=seed)
+    k = boot.k
+    alta = _usd(boot.alta)
+    baja = _usd(boot.baja)
+    ci_lower = _usd(boot.ci_lower)
+    ci_upper = _usd(boot.ci_upper)
 
     if n < MUESTRA_MINIMA_DEL_PLAN:
         estado = EstadoValidacion.PRELIMINAR
@@ -848,7 +906,7 @@ def validate_score_discrimination(
 
     return ValidationReport(
         status=estado,
-        n_trades=len(trades),
+        n_trades=n_trades,
         n_trades_con_score=n,
         tercil_size=k,
         high_score_expectancy=alta,
@@ -861,3 +919,95 @@ def validate_score_discrimination(
         seed=seed,
         notas=tuple(notas),
     )
+
+
+@dataclass(frozen=True)
+class StratifiedValidationReport:
+    """Medición ADICIONAL de la enmienda E4 (plan §8.7), junto a la principal.
+
+    `informe` aplica el método de §8.7 a los P&L netos CENTRADOS por mes
+    calendario UTC de entrada (valor = `net_pnl` − media del mes). Sus
+    `high/low_score_expectancy` y `score_discrimination` son por tanto
+    desviaciones respecto del mes, en USD."""
+
+    informe: ValidationReport
+    estratos_usados: int
+    estratos_excluidos: int
+    operaciones_excluidas: int
+    """Operaciones con score que cayeron en meses con una sola operación con score."""
+    alerta_de_regimen: bool | None
+    """`True` si la medición principal dice 'discrimina' y esta no (posible
+    efecto de régimen); `False` si ambas coinciden en ese sentido; `None` si
+    alguna no se pudo calcular. Es una señal de lectura, no una puerta."""
+
+
+def _mes_utc(momento: datetime) -> tuple[int, int]:
+    utc = momento.astimezone(timezone.utc)
+    return (utc.year, utc.month)
+
+
+def validate_score_discrimination_stratified(
+    trades: Sequence[TradeResult],
+    *,
+    iterations: int = BOOTSTRAP_ITERACIONES,
+    seed: int = BOOTSTRAP_SEMILLA,
+) -> StratifiedValidationReport:
+    """Enmienda E4 (pre-registrada 2026-10-12): mismo método de §8.7 pero sobre
+    resultados centrados por mes calendario UTC de entrada, para separar la
+    capacidad de discriminar del nivel común del periodo (régimen de mercado).
+
+    Los meses con menos de 2 operaciones con score se excluyen y se cuentan. La
+    definición no se ajusta a la vista de resultados."""
+    if iterations < BOOTSTRAP_ITERACIONES:
+        raise ValueError(f"el plan exige al menos {BOOTSTRAP_ITERACIONES} iteraciones")
+
+    puntuadas = [t for t in trades if t.initial_opportunity_score is not None]
+    sin_score = len(trades) - len(puntuadas)
+    por_mes: dict[tuple[int, int], list[TradeResult]] = {}
+    for t in puntuadas:
+        por_mes.setdefault(_mes_utc(t.entry_time), []).append(t)
+
+    centradas: list[tuple[TradeResult, Decimal]] = []
+    excluidas = 0
+    estratos_excluidos = 0
+    for grupo in por_mes.values():
+        if len(grupo) < MUESTRA_MINIMA_POR_ESTRATO:
+            estratos_excluidos += 1
+            excluidas += len(grupo)
+            continue
+        media = sum((t.net_pnl for t in grupo), _CERO) / len(grupo)
+        centradas.extend((t, t.net_pnl - media) for t in grupo)
+
+    notas: list[str] = []
+    if sin_score:
+        notas.append(f"{sin_score} operación(es) sin score inicial quedaron fuera de la comparación.")
+    if estratos_excluidos:
+        notas.append(
+            f"{estratos_excluidos} mes(es) con una sola operación con score quedaron fuera "
+            f"({excluidas} operación(es)): no aportan comparación dentro de su periodo."
+        )
+    notas.append(
+        "Resultados centrados por mes de entrada (enmienda E4). Con pocas operaciones por mes el centrado "
+        "correlaciona levemente los valores y el IC puede ser algo optimista; la potencia es baja."
+    )
+
+    centradas.sort(key=lambda par: _clave_de_orden(par[0]))
+    informe = _informe_de_valores(
+        [valor for _, valor in centradas], n_trades=len(trades), notas=notas, iterations=iterations, seed=seed
+    )
+    return StratifiedValidationReport(
+        informe=informe,
+        estratos_usados=len(por_mes) - estratos_excluidos,
+        estratos_excluidos=estratos_excluidos,
+        operaciones_excluidas=excluidas,
+        alerta_de_regimen=_alerta_de_regimen(trades, informe, iterations=iterations, seed=seed),
+    )
+
+
+def _alerta_de_regimen(
+    trades: Sequence[TradeResult], estratificado: ValidationReport, *, iterations: int, seed: int
+) -> bool | None:
+    principal = validate_score_discrimination(trades, iterations=iterations, seed=seed)
+    if principal.discriminates is None or estratificado.discriminates is None:
+        return None
+    return principal.discriminates and not estratificado.discriminates

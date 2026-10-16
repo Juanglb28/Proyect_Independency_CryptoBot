@@ -29,7 +29,7 @@ from enum import Enum
 
 from sqlalchemy.orm import Session
 
-from app.domain.enums import OrigenObservacionEquity, TipoEventoSistema
+from app.domain.enums import OrigenObservacionEquity, SerieOperacion, TipoEventoSistema
 from app.domain.rules.risk import sistema_pausado
 from app.execution.emergency_stop import EmergencyStop, FileEmergencyStop
 from app.execution.monitor import current_equity
@@ -62,6 +62,8 @@ class EstadoDelSistema:
     ultimo_equity: Decimal | None
     pico_vigente: Decimal
     ultima_observacion_en: datetime | None
+    observaciones_abiertas: int = 0
+    """Posiciones de observación abiertas (fuera del equity y de los cupos de la estrategia)."""
 
 
 def _exigir_utc(now: datetime) -> None:
@@ -78,7 +80,8 @@ def get_system_state(
     return EstadoDelSistema(
         pausado=sistema_pausado(ultimo_evento.event_type if ultimo_evento else None),
         parada_emergencia=(emergency_stop or FileEmergencyStop()).is_active(),
-        posiciones_abiertas=len(list_open_posiciones(session)),
+        posiciones_abiertas=len(list_open_posiciones(session, serie=SerieOperacion.ESTRATEGIA)),
+        observaciones_abiertas=len(list_open_posiciones(session, serie=SerieOperacion.OBSERVACION)),
         ultimo_equity=ultima.equity_usd if ultima else None,
         pico_vigente=ultima.peak_equity_usd if ultima else initial_capital,
         ultima_observacion_en=ultima.observed_at if ultima else None,
@@ -98,7 +101,8 @@ def resume_system(
         return ResultadoReanudacion.NO_PAUSADO, None
 
     precios = {}
-    for posicion in list_open_posiciones(session):
+    # El equity es solo de la estrategia: un precio que falte en una observación no frena la reanudación.
+    for posicion in list_open_posiciones(session, serie=SerieOperacion.ESTRATEGIA):
         try:
             precios[posicion.symbol] = price_source.get_price(posicion.symbol)
         except PriceUnavailable:

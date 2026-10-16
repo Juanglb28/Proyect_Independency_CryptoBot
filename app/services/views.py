@@ -11,6 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
+from app.domain.enums import SerieOperacion
 from app.services.access import es_solo_lectura
 from app.services.dashboard import DashboardView, get_dashboard
 from app.services.decisions import CicloDetalle, CicloResumen, get_ciclo_detalle, list_ciclos
@@ -53,9 +54,11 @@ def operacion_detalle(position_id: uuid.UUID) -> OperacionDetalle | None:
         return get_operacion_detalle(s, position_id)
 
 
-def performance(days: int | None = None) -> PerformanceView:
+def performance(days: int | None = None, serie: SerieOperacion | None = SerieOperacion.ESTRATEGIA) -> PerformanceView:
     with read_session() as s:
-        return get_performance_view(s, initial_capital=settings().paper_capital_usd, now=_ahora(), days=days)
+        return get_performance_view(
+            s, initial_capital=settings().paper_capital_usd, now=_ahora(), days=days, serie=serie
+        )
 
 
 def validacion() -> ValidationView:
@@ -82,6 +85,7 @@ def sistema() -> SistemaView:
             now=_ahora(),
             saldo_declarado_usd=cfg.anthropic_saldo_declarado_usd,
             saldo_declarado_en=cfg.anthropic_saldo_declarado_en,
+            tope_ia_diario_usd=cfg.ai_daily_budget_usd,
         )
 
 

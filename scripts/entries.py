@@ -7,6 +7,7 @@ Binance es el ticker público de precios.
 
 Uso:
     python -m scripts.entries open --ciclo-id <UUID>   # abre/pone en espera las entradas de un ciclo
+                                                       # (estrategia + observación; el scheduler ya lo hace solo)
     python -m scripts.entries list                     # entradas pendientes y posiciones abiertas
     python -m scripts.entries approve <ORDEN_ID>       # aprueba una pendiente y la ejecuta en paper
     python -m scripts.entries reject <ORDEN_ID> [--motivo "texto"]
@@ -26,15 +27,14 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db.session import get_engine, get_sessionmaker, session_scope
-from app.domain.enums import EstadoOrden, IntencionOrden
+from app.domain.enums import EstadoOrden, IntencionOrden, SerieOperacion
 from app.execution.order_manager import (
     ResultadoAprobacion,
     approve_pending_entry,
-    candidates_from_cycle,
     expire_pending_entries,
-    open_entries,
     reject_pending_entry,
 )
+from app.orchestration.entry_opening import abrir_entradas_del_ciclo
 from app.execution.price_source import BinanceTickerPriceSource, PriceSource
 from app.logging_config import configure_logging
 from app.repositories.orders import list_orders
@@ -51,6 +51,10 @@ _MENSAJES_APROBACION = {
     ResultadoAprobacion.BLOQUEADA_POR_PARADA: (
         "Existe el archivo PARAR: no se abren entradas nuevas. "
         "La orden sigue pendiente (puedes rechazarla)."
+    ),
+    ResultadoAprobacion.BLOQUEADA_POR_RECONCILIACION: (
+        "El estado de órdenes y posiciones no cuadra (discrepancia en la reconciliación): no se abren "
+        "entradas nuevas hasta resolverlo. La orden sigue pendiente (puedes rechazarla)."
     ),
     ResultadoAprobacion.SIN_PRECIO: "No se pudo obtener un precio válido de Binance; la orden sigue pendiente.",
 }
@@ -82,28 +86,42 @@ def run_command(
     """Ejecuta el comando y devuelve las líneas a imprimir. Separado de
     `main` para poder probarlo sin red ni sesión propia."""
     if args.comando == "open":
-        candidatos = candidates_from_cycle(session, args.ciclo_id)
-        if not candidatos:
-            return [f"El ciclo {args.ciclo_id} no tiene propuestas NORMAL ni MAYOR_RIESGO."]
-        resultado = open_entries(session, candidatos, now=now, price_source=price_source)
-        lineas = [f"Aprobaciones vencidas liberadas: {resultado.expiradas}"]
-        for p in resultado.procesadas:
-            lineas.append(f"  {p.symbol:10s} {p.resultado.value}  orden={p.orden_id}  posicion={p.posicion_id}")
-        for d in resultado.descartadas:
-            motivos = ", ".join(m.value for m in d.motivos)
-            lineas.append(f"  {d.candidato.symbol:10s} DESCARTADA  {motivos}")
+        apertura = abrir_entradas_del_ciclo(session, args.ciclo_id, now=now, price_source=price_source)
+        if apertura.bloqueada_por_reconciliacion:
+            lineas = [
+                "BLOQUEADO: el estado de órdenes y posiciones no cuadra; no se abrió ninguna entrada. "
+                "Resuélvelo a mano (la página Sistema de la interfaz muestra las discrepancias)."
+            ]
+            lineas.extend(f"  [{d.codigo.value}] {d.detalle}" for d in apertura.discrepancias)
+            return lineas
+        if not apertura.entradas:
+            return [
+                f"El ciclo {args.ciclo_id} no tiene propuestas NORMAL ni MAYOR_RIESGO "
+                "ni candidatos del pre-filtro para observar."
+            ]
+        lineas = [f"Aprobaciones vencidas liberadas: {apertura.expiradas}"]
+        for e in apertura.entradas:
+            serie = e.serie.value
+            if e.resultado == "DESCARTADA":
+                lineas.append(f"  {e.symbol:10s} DESCARTADA  [{serie}]  {', '.join(e.motivos)}")
+            else:
+                lineas.append(
+                    f"  {e.symbol:10s} {e.resultado}  [{serie}]  orden={e.orden_id}  posicion={e.posicion_id}"
+                )
         return lineas
 
     if args.comando == "list":
         pendientes = list_orders(session, estados=[EstadoOrden.PENDING_APPROVAL], intencion=IntencionOrden.ENTRY)
         abiertas = list_open_posiciones(session)
+        ids_observacion = {p.id for p in list_open_posiciones(session, serie=SerieOperacion.OBSERVACION)}
         lineas = [f"Entradas pendientes de aprobación: {len(pendientes)}"]
         for o in pendientes:
             lineas.append(f"  {o.id}  {o.symbol:10s} {o.requested_usd} USD  vence={o.expires_at.isoformat()}")
         lineas.append(f"Posiciones abiertas: {len(abiertas)}")
         for p in abiertas:
+            serie = "observación" if p.id in ids_observacion else "estrategia"
             lineas.append(
-                f"  {p.id}  {p.symbol:10s} entrada={p.entry_price} cantidad={p.remaining_quantity} "
+                f"  {p.id}  {p.symbol:10s} [{serie}] entrada={p.entry_price} cantidad={p.remaining_quantity} "
                 f"stop={p.initial_stop_price} objetivo={p.initial_target_price}"
             )
         return lineas

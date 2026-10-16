@@ -151,7 +151,9 @@ try {
             exit 1
         }
 
-        Start-Process -FilePath $dockerDesktopExe
+        # Minimizado: para no ponerse en primer plano sobre lo que el usuario este
+        # haciendo (2026-10-15). Docker Desktop puede ignorarlo; ver README.
+        Start-Process -FilePath $dockerDesktopExe -WindowStyle Minimized
 
         $maxWaitSeconds = 120
         $elapsed = 0

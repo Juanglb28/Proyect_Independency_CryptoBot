@@ -55,7 +55,7 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from app.domain.enums import EstadoOrden, OrigenObservacionEquity, TipoAlerta, TipoEventoSistema
+from app.domain.enums import EstadoOrden, OrigenObservacionEquity, SerieOperacion, TipoAlerta, TipoEventoSistema
 from app.domain.rules.risk import (
     OrdenEjecutada,
     PosicionMarcada,
@@ -139,13 +139,18 @@ def current_equity(
     session: Session, *, initial_capital: Decimal, precios: dict[str, Decimal]
 ) -> tuple[Decimal, int] | None:
     """Equity actual y cuántas posiciones abiertas se valoraron, o `None` si
-    falta el precio de alguna posición abierta (no se inventa)."""
-    abiertas = list_open_posiciones(session)
+    falta el precio de alguna posición abierta (no se inventa).
+
+    Solo cuenta la serie de ESTRATEGIA (decisión del 2026-10-12): las
+    operaciones de observación no mueven el equity, el pico ni la pausa por
+    drawdown. Siguen vigiladas por el monitor (stop, TP, trailing) como
+    cualquier otra posición."""
+    abiertas = list_open_posiciones(session, serie=SerieOperacion.ESTRATEGIA)
     if any(p.symbol not in precios for p in abiertas):
         return None
     ejecutadas = [
         OrdenEjecutada(side=o.side, quantity=o.quantity, execution_price=o.execution_price, fee=o.fee)
-        for o in list_orders(session, estados=[EstadoOrden.FILLED])
+        for o in list_orders(session, estados=[EstadoOrden.FILLED], serie=SerieOperacion.ESTRATEGIA)
     ]
     equity = calculate_equity(
         initial_capital=initial_capital,
@@ -179,6 +184,8 @@ def run_monitor_tick(
     precios: dict[str, Decimal] = {}
 
     abiertas_al_inicio = list_open_posiciones(session)
+    # Un símbolo sin posición abierta en dos series a la vez (índice único parcial).
+    simbolos_estrategia = {p.symbol for p in list_open_posiciones(session, serie=SerieOperacion.ESTRATEGIA)}
     for posicion in abiertas_al_inicio:
         try:
             precio = price_source.get_price(posicion.symbol)
@@ -218,10 +225,23 @@ def run_monitor_tick(
         resultados_reparados=reparados,
     )
 
-    escalaciones = evaluar_escalaciones(session, now=now, posiciones=abiertas_al_inicio, precios=precios)
+    # Los avisos por Telegram son solo de la estrategia (decisión del 2026-10-12): una
+    # observación no la puedes aprobar ni gestionar, y avisar de cada una sería ruido.
+    escalaciones = evaluar_escalaciones(
+        session,
+        now=now,
+        posiciones=[p for p in abiertas_al_inicio if p.symbol in simbolos_estrategia],
+        precios=precios,
+    )
     avisos = list(escalaciones.creadas)
 
-    if sin_precio or errores:
+    # El equity y la pausa por drawdown son SOLO de la estrategia (decisión del
+    # 2026-10-12): un precio que falta o un error en una observación no debe
+    # impedir calcularlos (apagaría el control de riesgo de la estrategia).
+    bloquea_equity = any(s in simbolos_estrategia for s in sin_precio) or any(
+        e.symbol in simbolos_estrategia for e in errores
+    )
+    if bloquea_equity:
         return ResultadoTick(
             **base,
             posiciones_abiertas=len(list_open_posiciones(session)),

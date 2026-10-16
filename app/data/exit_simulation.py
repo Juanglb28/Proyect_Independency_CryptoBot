@@ -55,9 +55,17 @@ class SalidaSimulada:
     """`STOP_LOSS` o `TRAILING_STOP`."""
 
 
-def simular_salida(velas: list[Candle], indice_entrada: int) -> SalidaSimulada | None:
-    """Entra al cierre de `velas[indice_entrada]` y aplica las reglas de salida
-    del motor paper sobre las velas siguientes."""
+@dataclass(frozen=True)
+class _Recorrido:
+    salida: SalidaSimulada | None
+    cobrado: Decimal
+    restante: Decimal
+    comision_entrada: Decimal
+
+
+def _recorrer(velas: list[Candle], indice_entrada: int) -> _Recorrido:
+    """Camino ÚNICO de la simulación: lo usan `simular_salida` y
+    `retorno_marcado_a_mercado`, así no hay dos copias de las reglas."""
     entrada = velas[indice_entrada]["close"]
     niveles = calculate_initial_levels(entrada)
     cantidad = _UNO / entrada  # valor de entrada normalizado a 1
@@ -72,7 +80,10 @@ def simular_salida(velas: list[Candle], indice_entrada: int) -> SalidaSimulada |
             if vela["low"] <= niveles.stop_price:
                 ingreso = restante * niveles.stop_price
                 cobrado += ingreso * (_UNO - COMISION_POR_LADO)
-                return SalidaSimulada(cobrado - _UNO - comision_entrada, offset, "STOP_LOSS")
+                return _Recorrido(
+                    SalidaSimulada(cobrado - _UNO - comision_entrada, offset, "STOP_LOSS"),
+                    cobrado, Decimal(0), comision_entrada,
+                )
             if vela["high"] >= niveles.target_price:
                 vendida = restante * TAKE_PROFIT_FRACCION_A_CERRAR
                 cobrado += vendida * niveles.target_price * (_UNO - COMISION_POR_LADO)
@@ -84,5 +95,32 @@ def simular_salida(velas: list[Candle], indice_entrada: int) -> SalidaSimulada |
         trailing = calculate_trailing_stop(pico)
         if vela["low"] <= trailing:
             cobrado += restante * trailing * (_UNO - COMISION_POR_LADO)
-            return SalidaSimulada(cobrado - _UNO - comision_entrada, offset, "TRAILING_STOP")
-    return None
+            return _Recorrido(
+                SalidaSimulada(cobrado - _UNO - comision_entrada, offset, "TRAILING_STOP"),
+                cobrado, Decimal(0), comision_entrada,
+            )
+    return _Recorrido(None, cobrado, restante, comision_entrada)
+
+
+def simular_salida(velas: list[Candle], indice_entrada: int) -> SalidaSimulada | None:
+    """Entra al cierre de `velas[indice_entrada]` y aplica las reglas de salida
+    del motor paper sobre las velas siguientes."""
+    return _recorrer(velas, indice_entrada).salida
+
+
+def retorno_marcado_a_mercado(velas: list[Candle], indice_entrada: int) -> Decimal | None:
+    """Retorno neto si la posición se VALORARA al cierre de la última vela
+    disponible (lo ya cobrado + lo que queda, con la comisión de una venta).
+
+    Para una posición ya cerrada devuelve el mismo retorno que `simular_salida`.
+    Sirve SOLO para el diagnóstico de sesgo de censura del backtest: una
+    posición abierta al terminar los datos no tiene resultado definitivo y este
+    valor es una estimación a precio de mercado, no un resultado. `None` si no
+    hay ninguna vela posterior a la de entrada."""
+    if indice_entrada + 1 >= len(velas):
+        return None
+    r = _recorrer(velas, indice_entrada)
+    if r.salida is not None:
+        return r.salida.retorno_neto
+    ultimo = velas[-1]["close"]
+    return r.cobrado + r.restante * ultimo * (_UNO - COMISION_POR_LADO) - _UNO - r.comision_entrada

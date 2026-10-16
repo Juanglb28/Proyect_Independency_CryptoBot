@@ -4,6 +4,9 @@
 # Interruptor de emergencia (archivo vacío que frena las entradas nuevas)
 /PARAR
 
+# Heartbeat del scheduler (lo escribe el proceso cada 5 min)
+.scheduler_heartbeat.json
+
 # Python
 __pycache__/
 *.py[cod]
@@ -33,3 +36,16 @@ htmlcov/
 
 # Streamlit: secretos locales (la configuración .streamlit/config.toml sí se versiona)
 .streamlit/secrets.toml
+
+# Experimento Kronos (E6): los pesos (cientos de MB) no se versionan; el archivo de
+# bloqueo con revisión y SHA-256 (data/kronos/pesos.lock.json) SÍ.
+data/kronos/pesos/
+data/kronos/k0-*.json
+
+# Registros y estado local de los scripts de Windows
+logs/
+.scheduler_watchdog_state.json
+
+# Registros y estado local de los scripts de Windows
+logs/
+.scheduler_watchdog_state.json

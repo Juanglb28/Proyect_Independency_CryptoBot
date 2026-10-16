@@ -22,9 +22,19 @@ Uso:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from decimal import Decimal
+
 from app.config import get_settings
 from app.db.session import get_engine, get_sessionmaker, session_scope
 from app.logging_config import configure_logging
+from app.domain.rules.cycle_summary import OrigenCiclo
+from app.domain.rules.recovery import inicio_del_dia_utc
+from app.notifications.dispatcher import dispatch_pending_alerts
+from app.notifications.telegram import build_sender
+from app.domain.rules.ai_budget import saldo_insuficiente
+from app.orchestration.ai_budget import leer_saldo_estimado_ia
+from app.orchestration.cycle_summary import registrar_ciclo_fallido, registrar_resumen_ciclo
 from app.orchestration.daily_cycle import run_daily_cycle
 from app.repositories.ai_calls import get_gasto_acumulado_desde
 from app.repositories.analysis import get_factores_de_propuesta, get_propuestas_de_ciclo
@@ -36,6 +46,11 @@ def _imprimir_control_de_gastos(session, settings, costo_de_esta_corrida) -> Non
     saldo real exacto, que solo lo sabe la consola de Anthropic (ver
     `Settings.anthropic_saldo_declarado_usd` sobre por qué esto es una
     estimación, no una cifra exacta)."""
+    gasto_hoy = get_gasto_acumulado_desde(session, inicio_del_dia_utc(datetime.now(timezone.utc)))
+    print(
+        f"\nGasto de IA de hoy (UTC): ${gasto_hoy} USD de un tope diario de ${settings.ai_daily_budget_usd} USD "
+        "(el tope solo frena los ciclos AUTOMÁTICOS del scheduler; esta corrida manual no se bloquea)."
+    )
     if settings.anthropic_saldo_declarado_usd is None or settings.anthropic_saldo_declarado_en is None:
         print(
             "\n(Para ver gasto acumulado y saldo estimado restante, configura "
@@ -88,15 +103,77 @@ def explicar_sin_propuestas(result) -> list[str]:
     ]
 
 
+def _enviar_avisos_pendientes(session_factory, settings) -> None:
+    """Manda a Telegram los avisos pendientes (el resumen de esta corrida, y
+    cualquier otro que estuviera esperando). Nunca falla la corrida por esto."""
+    sender = build_sender(settings.telegram_bot_token, settings.telegram_chat_id)
+    if sender is None:
+        print("\nTelegram no está configurado: el resumen quedó guardado y se enviará cuando lo esté.")
+        return
+    try:
+        despacho = dispatch_pending_alerts(session_factory, sender, now=datetime.now(timezone.utc))
+    except Exception as exc:  # noqa: BLE001 - un fallo de Telegram no puede tumbar el ciclo
+        print(f"\nNo se pudo enviar el aviso a Telegram ({type(exc).__name__}); queda pendiente.")
+        return
+    if despacho.fallidas:
+        print(f"\nTelegram: {despacho.enviadas} enviado(s), {despacho.fallidas} fallido(s); los fallidos se reintentan.")
+    elif despacho.enviadas:
+        print(f"\nTelegram: {despacho.enviadas} aviso(s) enviado(s) (incluye el resumen de esta corrida).")
+
+
+def _advertir_saldo_bajo(session_factory, settings) -> None:
+    """Avisa ANTES de gastar si el saldo estimado de Anthropic no alcanza para un
+    ciclo. Solo advierte: esta corrida la lanza el usuario a propósito (o la tarea
+    de Windows, sin nadie delante) y el saldo es una estimación; nunca la bloquea."""
+    try:
+        with session_scope(session_factory) as session:
+            saldo = leer_saldo_estimado_ia(
+                session,
+                saldo_declarado_usd=settings.anthropic_saldo_declarado_usd,
+                saldo_declarado_en=settings.anthropic_saldo_declarado_en,
+            )
+    except Exception:  # noqa: BLE001 - es solo una advertencia
+        return
+    if saldo is not None and saldo_insuficiente(saldo, settings.ai_min_balance_per_cycle_usd):
+        print(
+            f"\nADVERTENCIA: el saldo estimado de Anthropic es ${saldo.quantize(Decimal('0.01'))} USD, menos de los "
+            f"${settings.ai_min_balance_per_cycle_usd} USD que suele costar un ciclo. Si el saldo se agota a mitad de "
+            "camino el ciclo falla y se cobra lo ya gastado. (Estimación: revisa la consola de Anthropic.)\n"
+        )
+
+
 def main() -> int:
     configure_logging()
     settings = get_settings()
     engine = get_engine(settings)
     session_factory = get_sessionmaker(engine)
 
-    with session_scope(session_factory) as session:
-        result = run_daily_cycle(session, settings)
+    _advertir_saldo_bajo(session_factory, settings)
+    try:
+        with session_scope(session_factory) as session:
+            result = run_daily_cycle(session, settings)
+    except Exception as exc:
+        registrar_ciclo_fallido(
+            session_factory, origen=OrigenCiclo.MANUAL, error=exc, now=datetime.now(timezone.utc)
+        )
+        _enviar_avisos_pendientes(session_factory, settings)
+        raise
 
+    # El resumen se guarda y se envía ANTES de imprimir el detalle: así llega
+    # aunque la impresión de abajo falle por cualquier motivo.
+    registrar_resumen_ciclo(
+        session_factory,
+        result,
+        origen=OrigenCiclo.MANUAL,
+        tope_usd=settings.ai_daily_budget_usd,
+        now=datetime.now(timezone.utc),
+        saldo_declarado_usd=settings.anthropic_saldo_declarado_usd,
+        saldo_declarado_en=settings.anthropic_saldo_declarado_en,
+        saldo_minimo_por_ciclo_usd=settings.ai_min_balance_per_cycle_usd,
+    )
+    _enviar_avisos_pendientes(session_factory, settings)
+
+    with session_scope(session_factory) as session:
         print(f"Ciclo: {result.ciclo_id}")
         print(f"Candidatos evaluados: {', '.join(result.candidatos_evaluados) or '(ninguno)'}")
         if result.candidatos_excluidos_por_calidad:

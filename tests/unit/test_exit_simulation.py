@@ -87,3 +87,34 @@ def test_censurada_si_nunca_cierra_del_todo():
 
 def test_sin_velas_posteriores_devuelve_none():
     assert simular_salida([_v(0, 100, 100, 100, 100)], 0) is None
+
+
+# --------------------------------------------------- marcado a mercado (diagnóstico de censura)
+from app.data.exit_simulation import retorno_marcado_a_mercado  # noqa: E402
+
+
+def test_marcado_de_una_posicion_cerrada_es_el_resultado_real():
+    velas = [_v(0, 100, 100, 100, 100), _v(1, 100, 101, 91, 92)]
+    assert retorno_marcado_a_mercado(velas, 0) == simular_salida(velas, 0).retorno_neto
+
+
+def test_marcado_de_una_posicion_abierta_sin_parcial_valora_todo_al_ultimo_cierre():
+    velas = [_v(0, 100, 100, 100, 100), _v(1, 100, 104, 98, 103)]
+    assert simular_salida(velas, 0) is None
+    esperado = (UNO / ENTRADA) * Decimal(103) * (UNO - COMISION_POR_LADO) - UNO - COMISION_POR_LADO
+    assert retorno_marcado_a_mercado(velas, 0) == esperado
+
+
+def test_marcado_tras_cierre_parcial_suma_lo_cobrado_y_valora_lo_que_queda():
+    objetivo = NIV.target_price
+    velas = [_v(0, 100, 100, 100, 100), _v(1, 100, objetivo + 1, 99, objetivo), _v(2, objetivo, objetivo + 1, objetivo - 1, objetivo + Decimal("0.5"))]
+    assert simular_salida(velas, 0) is None  # trailing 6 % bajo el pico no se tocó
+    cantidad = UNO / ENTRADA
+    vendida = cantidad * TAKE_PROFIT_FRACCION_A_CERRAR
+    cobrado = vendida * objetivo * (UNO - COMISION_POR_LADO)
+    resto = (cantidad - vendida) * (objetivo + Decimal("0.5")) * (UNO - COMISION_POR_LADO)
+    assert retorno_marcado_a_mercado(velas, 0) == cobrado + resto - UNO - COMISION_POR_LADO
+
+
+def test_marcado_sin_velas_posteriores_es_none():
+    assert retorno_marcado_a_mercado([_v(0, 100, 100, 100, 100)], 0) is None

@@ -45,3 +45,30 @@ def render_validation_report(informe) -> None:
             st.warning("Muestra preliminar: el resultado es solo orientativo.")
     for nota in informe.notas:
         st.caption(f"Nota: {nota}")
+
+
+def render_stratified_report(est) -> None:
+    """Medición adicional de la enmienda E4: resultados centrados por mes de entrada."""
+    informe = est.informe
+    st.caption(
+        "Misma comparación de terciles, pero cada resultado se mide contra el promedio de su mes de entrada, "
+        "para separar la capacidad del score del régimen de mercado (enmienda E4). Es una medición adicional: "
+        "no sustituye a la principal."
+    )
+    st.markdown(f"**Estado de la muestra:** `{informe.status.value}` · {informe.n_trades_con_score} operaciones usadas · "
+                f"{est.estratos_usados} meses usados, {est.estratos_excluidos} excluidos")
+    if informe.tercil_size is None:
+        st.info("Muestra insuficiente para formar terciles dentro de los meses.")
+    else:
+        a, b, c = st.columns(3)
+        a.metric("Desviación tercio alto", f.usd(informe.high_score_expectancy))
+        b.metric("Desviación tercio bajo", f.usd(informe.low_score_expectancy))
+        c.metric("Discriminación", f.usd(informe.score_discrimination))
+        st.markdown(f"IC {informe.confidence_level_pct}%: [{f.num(informe.ci_lower)}, {f.num(informe.ci_upper)}] · "
+                    f"discrimina (límite inferior > 0): **{f.si_no(informe.discriminates)}**")
+        if informe.status.value == "PRELIMINAR":
+            st.warning("Muestra preliminar: el resultado es solo orientativo.")
+    if est.alerta_de_regimen:
+        st.warning("La medición principal dice que discrimina y la estratificada no: posible efecto de régimen de mercado.")
+    for nota in informe.notas:
+        st.caption(f"Nota: {nota}")

@@ -25,6 +25,7 @@ from app.domain.rules.risk import (
     calculate_drawdown_pct,
     calculate_entry_quantity,
     calculate_fee,
+    calculate_position_value,
     calculate_initial_levels,
     evaluate_position,
     is_drawdown_limit_reached,
@@ -504,3 +505,12 @@ def test_calculate_trailing_stop_es_maximo_por_94_porciento_y_rechaza_no_positiv
     assert calculate_trailing_stop(D("112")) == D("105.28")
     with pytest.raises(ValueError):
         calculate_trailing_stop(D("0"))
+
+
+def test_valor_de_la_posicion_es_cantidad_por_precio_sin_comision():
+    assert calculate_position_value(D("2.5"), D("3.333")) == D("8.33250000")  # cantidad x precio, a 8 decimales
+    assert calculate_position_value(D(1), D(100)) == D("100.00000000")
+    with pytest.raises(ValueError):
+        calculate_position_value(D(0), D(100))
+    with pytest.raises(ValueError):
+        calculate_position_value(D(1), D(-1))

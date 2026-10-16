@@ -57,7 +57,11 @@ def render_cycle_detail(d, *, con_llamadas: bool = True) -> None:
     if not d.propuestas:
         st.info("Este ciclo no produjo propuestas.")
     for p in d.propuestas:
-        estado = "supera el umbral de entrada" if p.supera_umbral_entrada else "no supera el umbral de entrada"
+        es_observacion = p.tier_entrada == "OBSERVACION"
+        estado = (
+            "OBSERVACIÓN (pre-filtro, sin IA)" if es_observacion
+            else "supera el umbral de entrada" if p.supera_umbral_entrada else "no supera el umbral de entrada"
+        )
         with st.expander(f"{p.symbol} · score {f.num(p.puntaje_ponderado)} · {estado}"):
             a, b, c = st.columns(3)
             a.metric("Puntaje base", f.num(p.puntaje_base), help=f"Calidad de datos aplicada: {f.num(p.calidad_datos)}")

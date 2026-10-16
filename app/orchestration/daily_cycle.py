@@ -17,13 +17,14 @@ explícitamente con el usuario para este paso (2026-09-30).
 1. Si el pre-filtro no encuentra candidatos, el ciclo termina sin ninguna
    llamada a la API (sección 4.2 del plan: "cero llamadas en días sin
    candidatos").
-2. Si el Auditor marca `calidad_global="insuficiente"` para un candidato,
-   ESE candidato queda excluido del bloque DATOS que recibe el
-   Consolidador — nunca se le pide invertir sobre datos que su propio
-   auditor declaró insuficientes (comentario ya dejado en
-   `scripts/run_agent_demo_full_cycle.py` durante el Paso 6, al construir
-   este paso). Si TODOS los candidatos quedan excluidos, el Consolidador
-   ni siquiera se llama.
+2. Si la fórmula determinista de calidad de datos
+   (`app.domain.rules.data_quality`) detecta condiciones bloqueantes para
+   un candidato (lista cerrada: sin velas diarias, etc.), ESE candidato
+   queda excluido del bloque DATOS que recibe el Consolidador. El Auditor
+   IA se mantiene como observador: su output se guarda en el snapshot para
+   trazabilidad, pero ya no determina ni el score ni el bloqueo (decisión
+   del usuario, 2026-10-08). Si TODOS los candidatos quedan excluidos, el
+   Consolidador ni siquiera se llama.
 3. Se persiste como `Propuesta` CADA opción que el Consolidador devuelve,
    incluidas las que no superan `SCORE_MINIMO_ENTRADA` — trazabilidad
    completa; decidir cuál se convierte en orden paper es Paso 8.
@@ -68,6 +69,17 @@ from app.ai.prompts.events import PROMPT_VERSION as PROMPT_VERSION_EVENTOS
 from app.ai.prompts.quantitative import PROMPT_VERSION as PROMPT_VERSION_CUANTITATIVO
 from app.config import Settings
 from app.data.prefilter import PREFILTER_FORMULA_VERSION, clasificar_resultados
+from app.data.indicator_calculator import SMA_PERIODS
+from app.domain.rules.data_quality import (
+    DATA_QUALITY_FORMULA_VERSION,
+    DataQualityResult,
+    calculate_data_quality,
+)
+from app.domain.rules.quantitative_score import (
+    QUANTITATIVE_FORMULA_VERSION,
+    QuantitativeScore,
+    calculate_quantitative_score,
+)
 from app.data.prefilter_pipeline import run_prefilter
 from app.data.relative_strength import calculate_ratio_rsi
 from app.domain.enums import EstadoCiclo
@@ -104,8 +116,6 @@ from app.repositories.candles import get_candles
 
 logger = logging.getLogger(__name__)
 
-AUDITOR_CALIDAD_INSUFICIENTE = "insuficiente"
-
 _PESO_POR_FACTOR: dict[str, Decimal] = {
     "tendencia_momentum": PESO_TENDENCIA_MOMENTUM,
     "volumen_liquidez": PESO_VOLUMEN_LIQUIDEZ,
@@ -141,6 +151,12 @@ class _DatosCandidato:
     analista_eventos: dict | None = None
     auditoria_datos: dict | None = None
     calidad_datos: Decimal | None = None
+    data_quality: DataQualityResult | None = None
+    """Resultado de la fórmula determinista de calidad de datos (reemplaza
+    a `100 - auditor.penalizacion_confianza_pct` como fuente de
+    `calidad_datos`). `auditoria_datos` se mantiene como observador: su
+    output se guarda en el snapshot para comparación, pero ya no afecta el
+    score ni la decisión de bloqueo."""
 
 
 @dataclass(frozen=True)
@@ -279,6 +295,10 @@ def run_daily_cycle(session: Session, settings: Settings, *, now: datetime | Non
             r3 = run_analista_eventos(session, settings, info.datos_eventos, ciclo_id=ciclo_id)
             costo_total += r3.cost_usd
 
+            # Auditor IA: se mantiene como OBSERVADOR — su output se guarda
+            # en el decision_snapshot para comparación y trazabilidad, pero
+            # ya no afecta ni el score ni la decisión de bloqueo (decisión
+            # del usuario, 2026-10-08: reemplazar con fórmula determinista).
             datos_aud = build_datos_auditor(
                 session,
                 symbol,
@@ -290,29 +310,62 @@ def run_daily_cycle(session: Session, settings: Settings, *, now: datetime | Non
             costo_total += r4.cost_usd
             session.commit()  # 3 llamadas reales ya pagadas para este candidato
 
+            # Calidad de datos DETERMINISTA: reemplaza la opinión subjetiva
+            # del auditor IA (`penalizacion_confianza_pct`) como fuente de
+            # `calidad_datos` para el multiplicador del score. Usa los mismos
+            # inputs que ya se prepararon para el auditor.
+            dq = calculate_data_quality(
+                campos_faltantes_cuantitativo=info.faltantes_cuantitativo,
+                campos_faltantes_eventos=info.faltantes_eventos,
+                huecos_en_series=datos_aud["huecos_en_series_detectados"],
+                ultima_vela_hace_horas=datos_aud["ultima_vela_hace_horas"],
+                velas_diarias_disponibles=datos_aud["velas_diarias_disponibles"],
+                eventos_en_catalogo=datos_aud["eventos_del_catalogo_en_alcance_de_este_simbolo"],
+            )
+
             datos_candidatos[symbol] = _DatosCandidato(
                 **{
                     **info.__dict__,
                     "analista_cuantitativo": r2.output.model_dump(),
                     "analista_eventos": r3.output.model_dump(),
                     "auditoria_datos": r4.output.model_dump(),
-                    "calidad_datos": Decimal(100) - Decimal(str(r4.output.penalizacion_confianza_pct)),
+                    "calidad_datos": dq.calidad_datos,
+                    "data_quality": dq,
                 }
             )
 
-            if r4.output.calidad_global == AUDITOR_CALIDAD_INSUFICIENTE:
+            # Bloqueo determinista: lista cerrada de condiciones que impiden
+            # generar una propuesta (reemplaza `calidad_global == "insuficiente"`).
+            if dq.bloqueantes:
+                logger.info(
+                    "Candidato %s excluido por bloqueantes deterministas: %s",
+                    symbol,
+                    dq.bloqueantes,
+                )
                 excluidos.append(symbol)
                 continue
 
-            candidatos_para_consolidador.append(
-                {
-                    "simbolo": symbol,
-                    "analisis_cuantitativo": r2.output.model_dump(),
-                    "analisis_eventos": r3.output.model_dump(),
-                    "auditoria_datos": r4.output.model_dump(),
-                }
-            )
-            calidad_datos_por_simbolo[symbol] = datos_candidatos[symbol].calidad_datos
+            if dq.presenta_anomalias:
+                logger.info(
+                    "Candidato %s presenta anomalías (informativo, sin penalización): %s",
+                    symbol,
+                    dq.anomalias,
+                )
+
+            bloque_consolidador: dict = {
+                "simbolo": symbol,
+                "analisis_cuantitativo": r2.output.model_dump(),
+                "analisis_eventos": r3.output.model_dump(),
+                "auditoria_datos": r4.output.model_dump(),
+            }
+            # Informar al Consolidador de las anomalías detectadas para que
+            # pueda mencionarlas en su tesis si lo considera relevante — pero
+            # esto es CONTEXTO, no una instrucción de penalizar.
+            if dq.presenta_anomalias:
+                bloque_consolidador["anomalias_datos_detectadas"] = list(dq.anomalias)
+
+            candidatos_para_consolidador.append(bloque_consolidador)
+            calidad_datos_por_simbolo[symbol] = dq.calidad_datos
 
         if not candidatos_para_consolidador:
             finalizar_ciclo(
@@ -424,6 +477,52 @@ def _evaluar_segunda_ronda_si_aplica(session: Session, *, symbol: str, score, ca
     return evaluar_segunda_ronda(rsi_por_temporalidad=rsi_por_tf, rsi_ratio_btc_diario=rsi_ratio)
 
 
+def _calcular_score_cuantitativo_paralelo(
+    candidato: _DatosCandidato,
+    calculated_at: datetime,
+) -> QuantitativeScore | None:
+    """Extrae los indicadores diarios del bloque DATOS del candidato y
+    calcula el score cuantitativo paralelo (Fase B — shadow scoring).
+
+    Devuelve `None` si faltan datos diarios o algún indicador — misma
+    filosofía P3 que el resto del sistema.
+
+    Este score NO decide nada: se guarda en el `decision_snapshot` para
+    comparación futura con el score del Consolidador (IA).
+    """
+    temporalidades = candidato.datos_cuantitativo.get("temporalidades", {})
+    bloque_diario = temporalidades.get("1d")
+    if bloque_diario is None:
+        return None
+
+    # Extraer distancias %-vs-SMA para cada periodo (90, 120, 180)
+    sma_pct_values: list[Decimal | None] = []
+    for period in SMA_PERIODS:
+        raw = bloque_diario.get(f"distancia_pct_sma_{period}")
+        sma_pct_values.append(None if raw is None else Decimal(str(raw)))
+
+    # Volumen relativo
+    raw_vol = bloque_diario.get("volumen_relativo_30")
+    volumen_relativo = None if raw_vol is None else Decimal(str(raw_vol))
+
+    # Distancia al máximo de 90 días
+    raw_dist = bloque_diario.get("distancia_pct_max_90d")
+    distancia_max_90d_pct = None if raw_dist is None else Decimal(str(raw_dist))
+
+    # RSI 14
+    raw_rsi = bloque_diario.get("rsi_14")
+    rsi = None if raw_rsi is None else Decimal(str(raw_rsi))
+
+    return calculate_quantitative_score(
+        candidato.symbol,
+        calculated_at,
+        sma_pct_values=sma_pct_values,
+        volumen_relativo=volumen_relativo,
+        distancia_max_90d_pct=distancia_max_90d_pct,
+        rsi=rsi,
+    )
+
+
 def _congelar_y_guardar_propuesta(
     session: Session,
     *,
@@ -476,6 +575,16 @@ def _congelar_y_guardar_propuesta(
         get_puntajes_de_ciclos_previos(session, opcion.simbolo, ciclo_id),
     )
 
+    # Score cuantitativo PARALELO (Fase B — shadow scoring): se calcula
+    # en código, sin componente de IA, usando los mismos indicadores diarios
+    # que ya están en el bloque DATOS. Se guarda en el snapshot como
+    # INFORMACIÓN para la futura validación walk-forward (Fase C), NUNCA
+    # como decisión — el score del Consolidador sigue siendo el que decide.
+    score_cuantitativo = _calcular_score_cuantitativo_paralelo(
+        candidato, congelado_en,
+    )
+
+    dq = candidato.data_quality
     decision_snapshot = {
         "symbol": opcion.simbolo,
         "analysis_cycle_id": str(ciclo_id),
@@ -484,7 +593,33 @@ def _congelar_y_guardar_propuesta(
         "analisis_cuantitativo": candidato.analista_cuantitativo,
         "contexto_eventos": candidato.datos_eventos["eventos_del_catalogo_en_alcance"],
         "analisis_eventos": candidato.analista_eventos,
-        "auditoria_datos": candidato.auditoria_datos,
+        # El auditor IA se mantiene como OBSERVADOR: su output queda en el
+        # snapshot para trazabilidad y comparación futura con la fórmula
+        # determinista, pero ya no determina el score ni el bloqueo.
+        "auditoria_datos_ia": candidato.auditoria_datos,
+        # Calidad de datos DETERMINISTA: la fuente real del multiplicador.
+        "calidad_datos_determinista": {
+            "calidad_datos": str(dq.calidad_datos) if dq else None,
+            "penalizacion_campos": str(dq.penalizacion_campos) if dq else None,
+            "penalizacion_antiguedad": str(dq.penalizacion_antiguedad) if dq else None,
+            "penalizacion_huecos": str(dq.penalizacion_huecos) if dq else None,
+            "presenta_anomalias": dq.presenta_anomalias if dq else None,
+            "anomalias": list(dq.anomalias) if dq else [],
+            "formula_version": dq.formula_version if dq else None,
+        },
+        # Score cuantitativo paralelo (Fase B): informativo, no decisorio.
+        "score_cuantitativo_paralelo": {
+            "score_final": str(score_cuantitativo.score_final) if score_cuantitativo else None,
+            "score_tendencia": str(score_cuantitativo.score_tendencia) if score_cuantitativo else None,
+            "score_volumen": str(score_cuantitativo.score_volumen) if score_cuantitativo else None,
+            "score_distancia": str(score_cuantitativo.score_distancia) if score_cuantitativo else None,
+            "score_rsi": str(score_cuantitativo.score_rsi) if score_cuantitativo else None,
+            "tendencia_pct": str(score_cuantitativo.tendencia_pct) if score_cuantitativo else None,
+            "volumen_relativo": str(score_cuantitativo.volumen_relativo) if score_cuantitativo else None,
+            "distancia_max_90d_pct": str(score_cuantitativo.distancia_max_90d_pct) if score_cuantitativo else None,
+            "rsi": str(score_cuantitativo.rsi) if score_cuantitativo else None,
+            "formula_version": score_cuantitativo.formula_version if score_cuantitativo else None,
+        },
         "datos_faltantes": {
             "cuantitativo": candidato.faltantes_cuantitativo,
             "eventos": candidato.faltantes_eventos,

@@ -92,10 +92,42 @@ class Settings(BaseSettings):
         "cerca de la realidad.",
     )
 
+    ai_daily_budget_usd: Decimal = Field(
+        default=Decimal("2.00"),
+        gt=Decimal("0"),
+        description="Tope diario (día UTC) de gasto de IA para los ciclos AUTOMÁTICOS "
+        "del scheduler (el programado y el disparado por candidatos nuevos). Tope "
+        "BLANDO: no se inicia un ciclo si el gasto de hoy ya lo alcanzó; uno en marcha "
+        "termina. Los ciclos manuales no se bloquean. Fijado por el usuario en 2 USD "
+        "el 2026-10-10 ('por ahora'). Es un tope de COSTO, no una regla de riesgo "
+        "financiero: por eso vive en la configuración y no en `domain/rules/risk.py`.",
+    )
+
+    ai_min_balance_per_cycle_usd: Decimal = Field(
+        default=Decimal("0.60"),
+        gt=Decimal("0"),
+        description="Saldo ESTIMADO mínimo de Anthropic para iniciar un ciclo AUTOMÁTICO "
+        "(guardia de saldo, 2026-10-11). Un ciclo con 5 candidatos costó 0,50-0,55 USD en "
+        "las corridas reales; 0,60 deja un margen pequeño. Solo actúa si el usuario declaró su "
+        "saldo (`anthropic_saldo_declarado_usd` y `_en`). Es un umbral de COSTO, no una regla de "
+        "riesgo financiero.",
+    )
+
     # --- Telegram: avisos salientes (Paso 11a). Opcionales: sin ellos los avisos
     # se guardan en la tabla `alertas` y se envían cuando se configuren. ---
     telegram_bot_token: str | None = Field(default=None)
     telegram_chat_id: str | None = Field(default=None)
+
+    # --- Vigilancia del scheduler (2026-10-12): dead-man's-switch externo ---
+    scheduler_deadman_url: str | None = Field(
+        default=None,
+        description="URL opaca de un servicio externo (p. ej. healthchecks.io) a la "
+        "que el scheduler hace un GET en cada latido (cada 5 min). Si los pings dejan "
+        "de llegar, ESE servicio avisa por su cuenta — cubre el caso de máquina apagada "
+        "o sin energía, que un vigía en la misma máquina no puede detectar. Opcional: "
+        "sin ella no se hace ningún ping. Puede llevar un identificador secreto, así que "
+        "es un secreto como las demás claves: nunca se registra ni se expone.",
+    )
 
     # --- Parámetros operativos de paper trading (sección 9 del plan) ---
     paper_capital_usd: Decimal = Field(

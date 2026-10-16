@@ -110,6 +110,10 @@ def test_posiciones_vacia_y_con_una_abierta(ui, db_session):
     at = ui("posiciones")
     assert not at.exception and "No hay posiciones abiertas" not in _textos(at)
     assert any(e.label.startswith(("BTCUSDT", "ETHUSDT", "SOLUSDT")) or "USDT" in e.label for e in at.expander)
+    # tamaño de la posición: unidades compradas y precio total de compra
+    metricas = {m.label: m.value for m in at.metric}
+    assert metricas["Unidades compradas"].endswith(" BTC")
+    assert metricas["Precio total de compra"] == "100.00 USD"
 
 
 def test_validacion_vacia_declara_muestra_insuficiente_y_pendientes(ui):
@@ -153,7 +157,10 @@ def test_validacion_con_seis_operaciones_muestra_factores_puntuados(ui, seis_ope
     assert not at.exception
     tabla = at.dataframe[-1].value
     assert list(tabla["Operaciones"]) == [6, 6, 6, 6]
-    assert "Menos de 3" not in _textos(at)
+    # La estrategia (6 operaciones) forma sus terciles; la serie de observación (aparte, sin operaciones) lo dice.
+    textos = _textos(at)
+    assert "Expectancy tercio alto" in textos
+    assert "Muestra insuficiente" in textos and "Serie de observación (aparte)" in textos
 
 
 def test_sistema_muestra_base_ok_y_sin_saldo_declarado(ui):
@@ -188,6 +195,13 @@ def _boton(at: AppTest, etiqueta: str):
     return next(b for b in at.button if b.label == etiqueta)
 
 
+ETIQUETA_DESLIZADOR = "Desliza hasta el final para abrir la posición"
+
+
+def _deslizador(at: AppTest):
+    return next(sl for sl in at.slider if sl.label == ETIQUETA_DESLIZADOR)
+
+
 def test_un_boton_nunca_ejecuta_sin_confirmar(con_acciones, db_session):
     from app.domain.enums import EstadoOrden
     from app.repositories.orders import get_orden
@@ -196,6 +210,8 @@ def test_un_boton_nunca_ejecuta_sin_confirmar(con_acciones, db_session):
     at = con_acciones("posiciones")
     _boton(at, "Aprobar entrada").click().run()
     assert any("ABRIR una posición paper" in w.value for w in at.warning)
+    assert any("es irreversible" in e.value for e in at.error)
+    assert not any(b.label == "Aprobar entrada" for b in at.button)  # el primer botón se reemplaza
     assert get_orden(db_session, oid).estado == EstadoOrden.PENDING_APPROVAL  # aún no pasó nada
 
 
@@ -211,6 +227,68 @@ def test_cancelar_no_cambia_nada(con_acciones, db_session):
     assert any(b.label == "Aprobar entrada" for b in at.button)
 
 
+def test_la_aprobacion_se_confirma_con_un_deslizador_y_no_con_un_segundo_boton(con_acciones, db_session):
+    from app.domain.enums import EstadoOrden
+    from app.repositories.orders import get_orden
+
+    oid = _pendiente(db_session)
+    at = con_acciones("posiciones")
+    _boton(at, "Aprobar entrada").click().run()
+    assert _deslizador(at).value == 0
+    assert not any(b.label == "Sí, abrir la posición" for b in at.button)
+    assert any(b.label == "Cancelar" for b in at.button)
+    assert get_orden(db_session, oid).estado == EstadoOrden.PENDING_APPROVAL
+
+
+def test_un_deslizador_a_medias_no_abre_la_posicion(con_acciones, db_session):
+    from app.domain.enums import EstadoOrden
+    from app.repositories.orders import get_orden
+
+    oid = _pendiente(db_session)
+    at = con_acciones("posiciones")
+    _boton(at, "Aprobar entrada").click().run()
+    for avance in (1, 50, 99):
+        _deslizador(at).set_value(avance).run()
+        assert not at.exception
+        assert get_orden(db_session, oid).estado == EstadoOrden.PENDING_APPROVAL
+        assert any("ABRIR una posición paper" in w.value for w in at.warning)  # sigue pidiendo confirmar
+    _deslizador(at).set_value(100).run()
+    assert get_orden(db_session, oid).estado == EstadoOrden.FILLED
+
+
+def test_cancelar_tras_mover_el_deslizador_no_cambia_nada_y_al_reabrir_empieza_en_cero(con_acciones, db_session):
+    from app.domain.enums import EstadoOrden
+    from app.repositories.orders import get_orden
+
+    oid = _pendiente(db_session)
+    at = con_acciones("posiciones")
+    _boton(at, "Aprobar entrada").click().run()
+    _deslizador(at).set_value(70).run()
+    _boton(at, "Cancelar").click().run()
+    assert get_orden(db_session, oid).estado == EstadoOrden.PENDING_APPROVAL
+    _boton(at, "Aprobar entrada").click().run()
+    assert _deslizador(at).value == 0
+
+
+def test_tras_un_fallo_el_deslizador_vuelve_a_cero_y_no_reintenta_solo(con_acciones, db_session, monkeypatch):
+    _pendiente(db_session)
+    at = con_acciones("posiciones")
+    llamadas = []
+
+    def falla(*a, **k):
+        llamadas.append(1)
+        raise ZeroDivisionError
+
+    monkeypatch.setattr("app.services.commands.approve_pending_entry", falla)
+    _boton(at, "Aprobar entrada").click().run()
+    _deslizador(at).set_value(100).run()
+    assert len(llamadas) == 1 and not at.exception
+    at.run()  # un rerun cualquiera no vuelve a ejecutar la acción
+    assert len(llamadas) == 1
+    _boton(at, "Aprobar entrada").click().run()
+    assert _deslizador(at).value == 0 and len(llamadas) == 1
+
+
 def test_aprobar_confirmado_abre_la_posicion_y_muestra_el_resultado(con_acciones, db_session):
     from app.domain.enums import EstadoOrden
     from app.repositories.orders import get_orden
@@ -219,7 +297,7 @@ def test_aprobar_confirmado_abre_la_posicion_y_muestra_el_resultado(con_acciones
     oid = _pendiente(db_session)
     at = con_acciones("posiciones")
     _boton(at, "Aprobar entrada").click().run()
-    _boton(at, "Confirmar").click().run()
+    _deslizador(at).set_value(100).run()
     assert not at.exception
     assert get_orden(db_session, oid).estado == EstadoOrden.FILLED
     assert get_open_posicion_by_symbol(db_session, "ETHUSDT").entry_price == 105
@@ -269,7 +347,7 @@ def test_un_fallo_de_la_accion_se_muestra_como_aviso_sin_traza(con_acciones, db_
     at = con_acciones("posiciones")
     monkeypatch.setattr("app.services.commands.approve_pending_entry", lambda *a, **k: 1 / 0)
     _boton(at, "Aprobar entrada").click().run()
-    _boton(at, "Confirmar").click().run()
+    _deslizador(at).set_value(100).run()
     assert not at.exception
     assert any("no se cambió nada" in w.value for w in at.warning)
 

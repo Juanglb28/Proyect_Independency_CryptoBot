@@ -15,11 +15,12 @@ from enum import Enum
 
 from sqlalchemy.orm import Session
 
+from app.domain.enums import SerieOperacion
 from app.domain.rules.factors import FactorAnalysisReport
-from app.domain.rules.results import PerformanceMetrics, ValidationReport
+from app.domain.rules.results import PerformanceMetrics, StratifiedValidationReport, ValidationReport
 from app.results.factor_analysis_service import analyze_factors_for_period
 from app.results.performance_service import compute_performance
-from app.results.validation_service import validate_score
+from app.results.validation_service import validate_score, validate_score_stratified
 from app.services._periodo import inicio_del_historial
 
 
@@ -70,10 +71,16 @@ class ValidationView:
     generado_en: datetime
     periodo_inicio: datetime
     informe: ValidationReport
+    estratificado: StratifiedValidationReport
     terciles: tuple[PerformanceMetrics, ...]
     global_: PerformanceMetrics
     factores: FactorAnalysisReport
     preguntas: tuple[PreguntaDeValidacion, ...]
+    informe_observacion: ValidationReport | None = None
+    """Serie de OBSERVACIÓN (puntaje del pre-filtro), medida aparte (decisión del 2026-10-12)."""
+    estratificado_observacion: StratifiedValidationReport | None = None
+    informe_conjunto: ValidationReport | None = None
+    """Estrategia + observación juntas: SOLO comparación (mezcla dos escalas de puntaje)."""
 
 
 def get_validation_view(session: Session, *, initial_capital: Decimal, now: datetime) -> ValidationView:
@@ -83,8 +90,12 @@ def get_validation_view(session: Session, *, initial_capital: Decimal, now: date
         generado_en=now,
         periodo_inicio=inicio,
         informe=validate_score(session),
+        estratificado=validate_score_stratified(session),
         terciles=tuple(m for m in metricas if m.scope_type == "SCORE_TERCIL"),
         global_=metricas[0],
         factores=analyze_factors_for_period(session),
         preguntas=_PREGUNTAS,
+        informe_observacion=validate_score(session, serie=SerieOperacion.OBSERVACION),
+        estratificado_observacion=validate_score_stratified(session, serie=SerieOperacion.OBSERVACION),
+        informe_conjunto=validate_score(session, serie=None),
     )

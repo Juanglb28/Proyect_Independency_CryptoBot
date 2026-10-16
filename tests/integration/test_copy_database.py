@@ -14,7 +14,7 @@ import uuid
 
 import psycopg
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
@@ -106,13 +106,48 @@ def test_sin_ejecutar_no_escribe_nada(bases):
     assert sum(_conteos(bases["d"]).values()) == 0
 
 
-def test_no_copia_si_el_destino_no_esta_vacio(bases):
+def test_re_ejecutar_sobre_un_destino_ya_poblado_es_idempotente(bases):
+    # La sincronización NO exige destino vacío y se puede repetir: la segunda
+    # corrida no cambia nada (ya está todo) y no falla.
     _llenar(bases["o"])
-    _llenar(bases["d"])
-    antes = _conteos(bases["d"])
-    with conectar(bases["o"]) as o, conectar(bases["d"]) as d, pytest.raises(CopiaAbortada, match="NO está vacío"):
+    with conectar(bases["o"]) as o, conectar(bases["d"]) as d:
         copiar(o, d, ejecutar=True)
-    assert _conteos(bases["d"]) == antes
+    primero = _conteos(bases["d"])
+    with conectar(bases["o"]) as o, conectar(bases["d"]) as d:
+        r = copiar(o, d, ejecutar=True)
+    assert r.ejecutada and _conteos(bases["d"]) == primero
+
+
+def test_upsert_propaga_cambios_de_una_fila_mutable(bases):
+    # `ordenes` es mutable (cambia de estado): una re-sincronización debe
+    # reflejar el cambio en el destino.
+    _llenar(bases["o"])
+    with conectar(bases["o"]) as o, conectar(bases["d"]) as d:
+        copiar(o, d, ejecutar=True)
+    with conectar(bases["o"]) as o:
+        o.execute("UPDATE ordenes SET estado = 'CANCELLED'")
+        o.commit()
+        estado_origen = o.execute("SELECT estado FROM ordenes").fetchone()[0]
+    with conectar(bases["o"]) as o, conectar(bases["d"]) as d:
+        copiar(o, d, ejecutar=True)
+    with conectar(bases["d"]) as d:
+        assert d.execute("SELECT estado FROM ordenes").fetchone()[0] == estado_origen == "CANCELLED"
+
+
+def test_velas_solo_sincroniza_las_cerradas(bases):
+    # La vela en curso (cerrada=false) no se copia hasta que cierra.
+    with conectar(bases["o"]) as o:
+        o.execute(
+            "INSERT INTO velas (symbol, timeframe, open_time, open, high, low, close, volume, cerrada) VALUES "
+            "('BTCUSDT','1h','2024-01-01 00:00+00', 1,1,1,1,1, true), "
+            "('BTCUSDT','1h','2024-01-01 01:00+00', 1,1,1,1,1, false)"
+        )
+        o.commit()
+    with conectar(bases["o"]) as o, conectar(bases["d"]) as d:
+        copiar(o, d, ejecutar=True)
+    with conectar(bases["d"]) as d:
+        filas = d.execute("SELECT cerrada FROM velas ORDER BY open_time").fetchall()
+    assert filas == [(True,)]  # solo la cerrada
 
 
 def test_no_copia_si_las_migraciones_difieren(bases):
@@ -141,5 +176,6 @@ def test_main_exige_las_variables_y_no_imprime_las_urls(bases, monkeypatch, caps
     monkeypatch.setenv("DEST_DATABASE_URL", bases["d"])
     assert main(["--ejecutar"]) == 0
     salida = capsys.readouterr().out
-    assert "Copiado y verificado" in salida
-    assert make_url(bases["o"]).password not in salida and "postgresql" not in salida
+    assert "Sincronizado y verificado" in salida
+    pw = make_url(bases["o"]).password  # puede ser None si la base local no usa contraseña
+    assert (pw is None or pw not in salida) and "postgresql" not in salida

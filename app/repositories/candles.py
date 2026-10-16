@@ -81,7 +81,14 @@ def save_candles(session: Session, candles: list[Candle]) -> int:
     return upsert_candles(session, candles).insertadas
 
 
-def get_candles(session: Session, symbol: str, timeframe: str, *, solo_cerradas: bool = True) -> list[Candle]:
+def get_candles(
+    session: Session,
+    symbol: str,
+    timeframe: str,
+    *,
+    solo_cerradas: bool = True,
+    tail: int | None = None,
+) -> list[Candle]:
     """Lee las velas guardadas de `symbol`/`timeframe`, ordenadas
     ascendentemente por `open_time`. Por defecto SOLO las cerradas: una vela
     en curso tiene valores provisionales y jamás entra a un indicador ni al
@@ -92,6 +99,16 @@ def get_candles(session: Session, symbol: str, timeframe: str, *, solo_cerradas:
     indicador puede calcularse usando datos que en ese instante todavía no
     existían (sección 15 del plan, look-ahead bias).
 
+    `tail`: si se da, devuelve solo las ÚLTIMAS `tail` velas (igual orden
+    ascendente). Lo usa el cálculo incremental de indicadores del ciclo
+    horario: solo necesita una cola reciente, no toda la historia. El orden y
+    el contenido de esa cola son idénticos al final de la lista completa, así
+    que los indicadores de ventana fija (SMA, volumen, distancia 90 d) salen
+    EXACTOS, y los recursivos (RSI/ATR de Wilder) salen idénticos a los de
+    historia completa a la escala guardada cuando la cola trae suficiente
+    calentamiento (ver `app/data/indicator_pipeline.py`). `tail <= 0` se
+    comporta como una cola vacía.
+
     Devuelve `Candle` (el mismo TypedDict de `exchange_client.py`), no el
     modelo ORM `Vela`: así `app/data/indicator_calculator.py`, que consume
     este resultado, no necesita importar SQLAlchemy — igual que
@@ -101,8 +118,15 @@ def get_candles(session: Session, symbol: str, timeframe: str, *, solo_cerradas:
     statement = select(Vela).where(Vela.symbol == symbol, Vela.timeframe == timeframe)
     if solo_cerradas:
         statement = statement.where(Vela.cerrada.is_(True))
-    statement = statement.order_by(Vela.open_time.asc())
-    rows = session.execute(statement).scalars().all()
+    if tail is not None:
+        # Las últimas `tail` por fecha descendente + límite (evita traer toda
+        # la serie para quedarnos con el final), luego se invierte a ascendente.
+        if tail <= 0:
+            return []
+        rows = list(session.execute(statement.order_by(Vela.open_time.desc()).limit(tail)).scalars().all())
+        rows.reverse()
+    else:
+        rows = list(session.execute(statement.order_by(Vela.open_time.asc())).scalars().all())
     return [
         Candle(
             symbol=row.symbol,

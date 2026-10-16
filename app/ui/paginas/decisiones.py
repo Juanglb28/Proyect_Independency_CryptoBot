@@ -23,6 +23,7 @@ def render() -> None:
                       "Última etapa": [c.ultima_etapa.value for c in ciclos],
                       "Propuestas": [c.n_propuestas for c in ciclos],
                       "Sobre el umbral": [c.n_sobre_umbral for c in ciclos],
+                      "Observaciones abiertas": [c.n_observaciones for c in ciclos],
                       "Costo IA (USD)": [f.num(c.cost_usd, 4) for c in ciclos]}),
         hide_index=True,
     )

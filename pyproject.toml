@@ -37,11 +37,42 @@ dependencies = [
     # exchange. Impacto arquitectónico: solo `app/ui/` lo importa (test de
     # arquitectura); el resto del código no depende de él.
     "streamlit>=1.50,<2.0",
+    # apscheduler: scheduler de tareas periódicas para el proceso operativo
+    # (Paso 11b del plan: ingesta horaria, ciclo diario a las 00:05 UTC,
+    # monitor cada 60 s, heartbeat cada 5 min, copia de datos). Problema que
+    # resuelve: correr múltiples jobs con distintas periodicidades en un
+    # único proceso Python con `max_instances=1` y `coalesce=True`, sin
+    # inventar un scheduler propio (regla de dependencias, sección 31 del
+    # master prompt). Alternativa: un bucle manual con `time.sleep` o un
+    # crontab del sistema — pero pierden la gestión de concurrencia, el
+    # coalescing y la detección de misfire que APScheduler da gratis. Se fija
+    # en la rama 3.x (estable, ampliamente usada): la 4.x todavía está en
+    # alpha, cambia la API de forma incompatible y no tiene el mismo grado
+    # de madurez en producción. Impacto: dependencias ligeras (pytz, six).
+    "apscheduler>=3.10,<4.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0,<9.0",
+]
+# Experimento Kronos (enmienda E6): NO se instala con el resto. Lo usa solo
+# `Dockerfile.kronos`, que instala torch en su variante CPU desde el índice de
+# PyTorch y el resto con las versiones que fija el requirements.txt de Kronos.
+# Se lista aquí para que la dependencia quede declarada y justificada:
+#   torch       -> ejecuta el Transformer de Kronos (no hay alternativa sin dependencia).
+#   numpy/pandas-> entradas/salidas del predictor de Kronos.
+#   einops, safetensors, huggingface_hub, tqdm -> las exige el código de Kronos.
+# Riesgo: código y pesos de terceros; se mitiga fijando el commit del código y la
+# revisión + SHA-256 de los pesos, y aislando el contenedor (sin credenciales).
+kronos = [
+    "torch>=2.0",
+    "numpy",
+    "pandas",
+    "einops",
+    "safetensors",
+    "huggingface_hub",
+    "tqdm",
 ]
 
 [build-system]

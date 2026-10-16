@@ -17,6 +17,7 @@ def _correr(db_session, *argv, dias=40):
 def test_sin_operaciones_los_comandos_lo_dicen(db_session):
     assert _correr(db_session, "trades") == ["Todavía no hay operaciones cerradas."]
     assert any("MUESTRA_INSUFICIENTE" in l for l in _correr(db_session, "validate"))
+    assert any("enmienda E4" in linea for linea in _correr(db_session, "validate"))
     lineas = _correr(db_session, "performance")
     assert lineas[0].startswith("Periodo:") and "operaciones=0" in lineas[1]
 
@@ -41,8 +42,44 @@ def test_validate_imprime_el_intervalo_y_la_advertencia_de_muestra_preliminar(db
     texto = "\n".join(_correr(db_session, "validate"))
     assert "PRELIMINAR" in texto and "bootstrap (1000 iteraciones" in texto and "orientativo" in texto
     assert "Tercil de 2 operaciones" in texto
+    assert "estratificada por mes (enmienda E4)" in texto
 
 
 def test_performance_sin_operaciones_no_imprime_notacion_cientifica(db_session):
     texto = "\n".join(_correr(db_session, "performance"))
     assert "0E-" not in texto and "P&L neto=0.00 USD (bruto 0.00, comisiones 0.00)" in texto
+
+
+# --- corrección auditable (CLI) ---
+
+from tests.integration.test_results_schema import _cerrar  # noqa: E402
+
+
+def test_corregir_uuid_invalido_lo_dice(db_session):
+    assert any("inválido" in linea for linea in _correr(db_session, "corregir", "--position", "no-uuid", "--motivo", "x"))
+
+
+def test_corregir_sin_resultado_lo_dice(db_session):
+    import uuid
+
+    salida = _correr(db_session, "corregir", "--position", str(uuid.uuid4()), "--motivo", "x")
+    assert any("no tiene un resultado" in linea for linea in salida)
+
+
+def test_corregir_sin_cambios_no_escribe(db_session):
+    pos = _cerrar(db_session)
+    salida = _correr(db_session, "corregir", "--position", str(pos.id), "--motivo", "revisión")
+    assert any("coincide con la versión vigente" in linea for linea in salida)
+
+
+def test_versiones_muestra_el_original(db_session):
+    pos = _cerrar(db_session)
+    salida = "\n".join(_correr(db_session, "versiones", "--position", str(pos.id)))
+    assert "1 versión/es" in salida and "original" in salida and "VIGENTE" in salida
+
+
+def test_corregir_requiere_motivo_en_argparse():
+    import pytest
+
+    with pytest.raises(SystemExit):
+        parse_args(["corregir", "--position", "x"])  # falta --motivo

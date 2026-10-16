@@ -36,7 +36,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.db.models.orders import Orden
-from app.domain.enums import EstadoOrden, IntencionOrden, LadoOrden
+from app.domain.enums import EstadoOrden, IntencionOrden, LadoOrden, SerieOperacion
+from app.repositories.series import filtro_serie
 
 
 @dataclass(frozen=True)
@@ -166,13 +167,17 @@ def list_orders(
     *,
     estados: Collection[EstadoOrden],
     intencion: IntencionOrden | None = None,
+    serie: SerieOperacion | None = None,
 ) -> list[Orden]:
-    """Órdenes en cualquiera de `estados` (opcionalmente de una intención),
-    de la más antigua a la más reciente, con desempate por `id` para que el
-    orden sea reproducible."""
+    """Órdenes en cualquiera de `estados` (opcionalmente de una intención y de
+    una serie), de la más antigua a la más reciente, con desempate por `id`
+    para que el orden sea reproducible. Sin `serie` devuelve TODAS (la
+    reconciliación necesita ver las dos)."""
     stmt = select(Orden).where(Orden.estado.in_(list(estados)))
     if intencion is not None:
         stmt = stmt.where(Orden.intencion == intencion)
+    if serie is not None:
+        stmt = stmt.where(filtro_serie(Orden.proposal_id, serie))
     return list(session.execute(stmt.order_by(Orden.created_at, Orden.id)).scalars())
 
 
@@ -193,16 +198,19 @@ def count_entry_orders(
     estados: Collection[EstadoOrden],
     created_from: datetime,
     created_before: datetime,
+    serie: SerieOperacion | None = None,
 ) -> int:
     """Cuántas órdenes `ENTRY` en `estados` se crearon en
-    `[created_from, created_before)`. Quien llama define qué estados y qué
-    ventana UTC cuentan como "entradas del día"."""
+    `[created_from, created_before)` (de una serie, si se indica). Quien llama
+    define qué estados y qué ventana UTC cuentan como "entradas del día"."""
     stmt = select(func.count()).select_from(Orden).where(
         Orden.intencion == IntencionOrden.ENTRY,
         Orden.estado.in_(list(estados)),
         Orden.created_at >= created_from,
         Orden.created_at < created_before,
     )
+    if serie is not None:
+        stmt = stmt.where(filtro_serie(Orden.proposal_id, serie))
     return int(session.execute(stmt).scalar_one())
 
 

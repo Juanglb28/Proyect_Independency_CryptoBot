@@ -16,6 +16,16 @@ cuentan por su hora de SALIDA):
 - `SCORE_TERCIL`: `SUPERIOR` / `MEDIO` / `INFERIOR` si hay al menos 3
   operaciones con score.
 
+SERIES (decisión del 2026-10-12): las operaciones de OBSERVACIÓN (candidatos del
+pre-filtro abiertos sin IA) se miden aparte de las de la ESTRATEGIA, porque su
+puntaje es de otra escala y no pasan por el riesgo del capital. Todas las
+funciones reciben `serie`: `ESTRATEGIA` (por defecto, lo que valida el plan),
+`OBSERVACION`, o `None` para la comparación conjunta. La tabla
+`performance_metrics` guarda SOLO la serie de estrategia (no tiene columna de
+serie); las demás se calculan al pedirlas, que es válido porque son derivadas.
+La curva de equity es la del capital de la estrategia: sin ella (observación o
+conjunto) el drawdown máximo queda `NULL`, no se inventa.
+
 El drawdown máximo y el benchmark describen la trayectoria del CAPITAL y de
 BTC, no la de un activo o un tercil: solo se calculan en `GLOBAL`; en los
 demás alcances quedan `NULL` (no se inventa una curva por activo).
@@ -29,7 +39,7 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from app.domain.enums import AlcanceMetricas
+from app.domain.enums import AlcanceMetricas, SerieOperacion
 from app.domain.rules.results import (
     PerformanceMetrics,
     PuntoDeSerie,
@@ -46,9 +56,18 @@ from app.results.trade_result_service import to_domain
 _NOMBRES_TERCIL = ("SUPERIOR", "MEDIO", "INFERIOR")
 
 
-def load_trades(session: Session, *, period_start: datetime | None, period_end: datetime | None) -> list[TradeResult]:
-    """Resultados cuya salida cae en el periodo (sin límites = todos)."""
-    return [to_domain(r) for r in list_trade_results(session, exit_desde=period_start, exit_hasta=period_end)]
+def load_trades(
+    session: Session,
+    *,
+    period_start: datetime | None,
+    period_end: datetime | None,
+    serie: SerieOperacion | None = SerieOperacion.ESTRATEGIA,
+) -> list[TradeResult]:
+    """Resultados cuya salida cae en el periodo (sin límites = todos), de la
+    `serie` pedida (`None` = ambas)."""
+    return [
+        to_domain(r) for r in list_trade_results(session, exit_desde=period_start, exit_hasta=period_end, serie=serie)
+    ]
 
 
 def _exigir_utc(*momentos: datetime) -> None:
@@ -57,10 +76,13 @@ def _exigir_utc(*momentos: datetime) -> None:
             raise ValueError("Las fechas deben tener zona horaria UTC explícita (sección 15.3 del plan).")
 
 
-def history_start(session: Session, *, now: datetime) -> datetime:
-    """Inicio del historial completo: la entrada más antigua (o `now` si aún no
-    hay operaciones). Lo usan el comando `performance` y la interfaz."""
-    return min((r.entry_time for r in list_trade_results(session)), default=now)
+def history_start(
+    session: Session, *, now: datetime, serie: SerieOperacion | None = SerieOperacion.ESTRATEGIA
+) -> datetime:
+    """Inicio del historial completo de la `serie`: la entrada más antigua (o
+    `now` si aún no hay operaciones). Lo usan el comando `performance` y la
+    interfaz."""
+    return min((r.entry_time for r in list_trade_results(session, serie=serie)), default=now)
 
 
 def compute_performance(
@@ -69,16 +91,22 @@ def compute_performance(
     period_start: datetime,
     period_end: datetime,
     initial_capital: Decimal,
+    serie: SerieOperacion | None = SerieOperacion.ESTRATEGIA,
 ) -> list[PerformanceMetrics]:
     """Calcula las métricas del periodo SIN guardar nada (solo lectura; es lo
     que usa la interfaz). Devuelve GLOBAL, SYMBOL (por símbolo) y
     SCORE_TERCIL, en ese orden. `recalculate_performance` es esto más guardar."""
     _exigir_utc(period_start, period_end)
-    trades = load_trades(session, period_start=period_start, period_end=period_end)
-    curva = [
-        PuntoDeSerie(o.observed_at, o.equity_usd)
-        for o in list_observaciones_between(session, desde=period_start, hasta=period_end)
-    ]
+    trades = load_trades(session, period_start=period_start, period_end=period_end, serie=serie)
+    # La curva de equity es la del capital de la estrategia (ver el docstring del módulo).
+    curva = (
+        [
+            PuntoDeSerie(o.observed_at, o.equity_usd)
+            for o in list_observaciones_between(session, desde=period_start, hasta=period_end)
+        ]
+        if serie == SerieOperacion.ESTRATEGIA
+        else []
+    )
     benchmark = calculate_period_benchmark(session, period_start=period_start, period_end=period_end)
 
     def _calcular(scope: AlcanceMetricas, key: str | None, subset: list[TradeResult], *, global_: bool):
@@ -113,12 +141,16 @@ def recalculate_performance(
     initial_capital: Decimal,
     now: datetime,
 ) -> list[PerformanceMetrics]:
-    """Calcula y guarda las métricas del periodo (ver el docstring del
-    módulo). Devuelve lo que guardó, en el orden GLOBAL, SYMBOL (por
+    """Calcula y guarda las métricas del periodo de la serie de ESTRATEGIA (ver el
+    docstring del módulo: la tabla no distingue series). Devuelve lo que guardó, en el orden GLOBAL, SYMBOL (por
     símbolo), SCORE_TERCIL."""
     _exigir_utc(now)
     resultados = compute_performance(
-        session, period_start=period_start, period_end=period_end, initial_capital=initial_capital
+        session,
+        period_start=period_start,
+        period_end=period_end,
+        initial_capital=initial_capital,
+        serie=SerieOperacion.ESTRATEGIA,
     )
     for m in resultados:
         valores = dataclasses.asdict(m)

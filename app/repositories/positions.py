@@ -32,7 +32,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.db.models.positions import Posicion
-from app.domain.enums import EstadoPosicion
+from app.domain.enums import EstadoPosicion, SerieOperacion
+from app.repositories.series import filtro_serie
 
 
 @dataclass(frozen=True)
@@ -99,16 +100,14 @@ def get_open_posicion_by_symbol(session: Session, symbol: str) -> Posicion | Non
     ).scalar_one_or_none()
 
 
-def list_open_posiciones(session: Session) -> list[Posicion]:
-    """Posiciones abiertas, de la más antigua a la más reciente (desempate
-    por `id`: orden reproducible para el monitor)."""
-    return list(
-        session.execute(
-            select(Posicion)
-            .where(Posicion.status == EstadoPosicion.OPEN)
-            .order_by(Posicion.opened_at, Posicion.id)
-        ).scalars()
-    )
+def list_open_posiciones(session: Session, *, serie: SerieOperacion | None = None) -> list[Posicion]:
+    """Posiciones abiertas (de una serie, si se indica), de la más antigua a la
+    más reciente (desempate por `id`: orden reproducible para el monitor). Sin
+    `serie` devuelve TODAS: el monitor vigila las dos series."""
+    stmt = select(Posicion).where(Posicion.status == EstadoPosicion.OPEN)
+    if serie is not None:
+        stmt = stmt.where(filtro_serie(Posicion.proposal_id, serie))
+    return list(session.execute(stmt.order_by(Posicion.opened_at, Posicion.id)).scalars())
 
 
 def list_posiciones(session: Session) -> list[Posicion]:

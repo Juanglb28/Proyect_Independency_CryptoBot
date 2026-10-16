@@ -6,11 +6,16 @@ Garantías que vive en la base de datos:
 
 - **Un solo resultado por posición** (`position_id` único, sección 15.7): un
   reintento del servicio no crea un segundo resultado.
-- **Solo-agregar**: un trigger rechaza `UPDATE` y `DELETE`. Si algún día hay
-  un error de cálculo, el plan pide "una nueva versión/corrección
-  auditable", no reescribir (sección 15.3). TODO — DECISIÓN PENDIENTE: ese
-  mecanismo de corrección no existe todavía porque ninguna regla de v1 lo
-  necesita; hasta definirlo, una corrección exige una decisión humana.
+- **Solo-agregar**: un trigger rechaza `UPDATE` y `DELETE`. Un error de cálculo
+  se corrige con "una nueva versión/corrección auditable", nunca reescribiendo
+  (sección 15.3). Ese mecanismo YA existe (2026-10-13): una corrección es una
+  fila nueva que apunta con `supersedes_id` a la que corrige, con un
+  `correction_reason` obligatorio; la original queda intacta. La versión
+  VIGENTE de una posición es la que ninguna otra corrige. Un índice único
+  parcial permite un solo original por posición y una sola corrección por
+  versión (cadena lineal); un trigger exige que la corrección sea de la misma
+  posición. La corrección SIEMPRE recalcula con `calculate_trade_result`
+  (nunca números a mano, §37.8): ver `app/results/trade_result_service.py`.
 - Coherencia: `exit_time >= entry_time`, cantidades y precios positivos,
   `side = 'LONG'` (v1 es solo spot largo, sección 3), `exit_reason` nunca
   `ENTRY` y `exit_quantity = entry_quantity` (solo se crea con la posición
@@ -35,7 +40,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, CheckConstraint, DateTime, Enum, ForeignKey, Numeric, func
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, Enum, ForeignKey, Index, Numeric, Text, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -54,12 +59,37 @@ class TradeResultModel(Base):
         CheckConstraint("exit_reason <> 'ENTRY'", name="exit_reason_es_salida"),
         CheckConstraint("duration_seconds >= 0", name="duracion_no_negativa"),
         CheckConstraint("total_fees = entry_fee + exit_fee", name="total_fees_coherente"),
+        # Corrección auditable (§15.3): el motivo es obligatorio exactamente
+        # cuando la fila corrige a otra.
+        CheckConstraint(
+            "(supersedes_id IS NULL) = (correction_reason IS NULL)", name="motivo_si_corrige"
+        ),
+        # Un solo ORIGINAL por posición (reemplaza al UNIQUE(position_id) total;
+        # conserva la idempotencia de save_trade_result) y una sola CORRECCIÓN
+        # por versión (cadena lineal, sin bifurcaciones).
+        Index(
+            "uq_trade_results_original_por_posicion", "position_id",
+            unique=True, postgresql_where=text("supersedes_id IS NULL"),
+        ),
+        Index(
+            "uq_trade_results_una_correccion_por_version", "supersedes_id",
+            unique=True, postgresql_where=text("supersedes_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     position_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("posiciones.id"), nullable=False, unique=True
+        UUID(as_uuid=True), ForeignKey("posiciones.id"), nullable=False
     )
+    # Versionado por encadenamiento (corrección auditable, §15.3): la fila que
+    # esta corrige (NULL en el original), su motivo (obligatorio si corrige) y,
+    # opcional, quién la ordenó. La versión VIGENTE de una posición es la fila
+    # que ninguna otra corrige (ver repositories/trade_results.py).
+    supersedes_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("trade_results.id")
+    )
+    correction_reason: Mapped[str | None] = mapped_column(Text)
+    corrected_by: Mapped[str | None] = mapped_column(Text)
     entry_order_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("ordenes.id"))
     exit_order_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("ordenes.id"))
     symbol: Mapped[str] = mapped_column(nullable=False)

@@ -72,3 +72,25 @@ def test_reject_y_expire(db_session):
 def test_open_de_un_ciclo_sin_candidatos(db_session):
     ciclo = _ciclo_con(db_session, ("BTCUSDT", TierEntrada.NINGUNO, "40"))
     assert "no tiene propuestas" in _correr(db_session, ["open", "--ciclo-id", str(ciclo)])[0]
+
+
+def test_open_con_una_discrepancia_no_abre_nada_y_la_muestra(db_session):
+    from sqlalchemy import text
+
+    from app.repositories.orders import list_orders
+    from app.repositories.positions import list_open_posiciones
+    from app.domain.enums import EstadoOrden
+
+    ciclo = _ciclo_con(db_session, ("BTCUSDT", TierEntrada.NORMAL, "70"), ("SOLUSDT", TierEntrada.NORMAL, "66"))
+    _correr(db_session, ["open", "--ciclo-id", str(ciclo)], {"BTCUSDT": "100", "SOLUSDT": "50"})
+    pos = list_open_posiciones(db_session)[0]
+    db_session.execute(text("UPDATE posiciones SET remaining_quantity = 0.5 WHERE id = :id"), {"id": pos.id})
+    db_session.expire_all()
+    antes = len(list_orders(db_session, estados=[EstadoOrden.FILLED]))
+
+    otro = _ciclo_con(db_session, ("ETHUSDT", TierEntrada.NORMAL, "68"))
+    salida = "\n".join(_correr(db_session, ["open", "--ciclo-id", str(otro)], {"ETHUSDT": "2000"}))
+
+    assert "BLOQUEADO" in salida and "CANTIDAD_RESTANTE_NO_COINCIDE" in salida
+    assert "ABIERTA" not in salida
+    assert len(list_orders(db_session, estados=[EstadoOrden.FILLED])) == antes

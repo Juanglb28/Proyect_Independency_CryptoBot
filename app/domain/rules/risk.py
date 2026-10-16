@@ -71,6 +71,14 @@ MAX_MAYOR_RIESGO_ABIERTAS = 1
 """Tope propio de las entradas de mayor riesgo (decisión del 2026-10-04):
 además de compartir los cupos generales."""
 
+MAX_OBSERVACIONES_ABIERTAS = 4
+MAX_OBSERVACIONES_POR_DIA = 3
+"""Cupos PROPIOS de las operaciones de observación (decisión del usuario,
+2026-10-12): hasta 4 abiertas y 3 nuevas por día UTC, APARTE de los cupos de la
+estrategia. Son los mismos números que los de la estrategia a propósito: no se
+inventa ninguna magnitud nueva. Con el tamaño fijo de 100 USD, la exposición
+máxima de observación es 400 USD, además de los 400 USD posibles de estrategia."""
+
 TAMANO_POSICION_USD = Decimal(100)
 """Tamaño FIJO de cada entrada en v1 (decisión del 2026-10-04): el mínimo del
 plan. Mantiene el tamaño fuera de la validación del score."""
@@ -130,6 +138,15 @@ def calculate_entry_quantity(requested_usd: Decimal, execution_price: Decimal) -
     _exigir_positivo("requested_usd", requested_usd)
     _exigir_positivo("execution_price", execution_price)
     return (requested_usd / execution_price).quantize(_ESCALA_PRECIO, rounding=ROUND_DOWN)
+
+
+def calculate_position_value(quantity: Decimal, execution_price: Decimal) -> Decimal:
+    """Valor en USD de `quantity` unidades al precio `execution_price`
+    (`cantidad × precio`, a 8 decimales). Para una compra es el precio total de
+    la entrada SIN la comisión, que se cobra aparte (sección 8.4 del plan)."""
+    _exigir_positivo("quantity", quantity)
+    _exigir_positivo("execution_price", execution_price)
+    return _usd(quantity * execution_price)
 
 
 def calculate_fee(quantity: Decimal, execution_price: Decimal) -> Decimal:
@@ -376,6 +393,8 @@ class MotivoRechazoEntrada(str, Enum):
     MAXIMO_POSICIONES = "MAXIMO_POSICIONES"
     MAXIMO_ENTRADAS_DIA = "MAXIMO_ENTRADAS_DIA"
     MAXIMO_MAYOR_RIESGO = "MAXIMO_MAYOR_RIESGO"
+    MAXIMO_OBSERVACIONES = "MAXIMO_OBSERVACIONES"
+    MAXIMO_OBSERVACIONES_DIA = "MAXIMO_OBSERVACIONES_DIA"
     TAMANO_FUERA_DE_RANGO = "TAMANO_FUERA_DE_RANGO"
 
 
@@ -394,7 +413,14 @@ class SituacionDeCupos:
       día UTC en curso;
     - `mayor_riesgo_abiertas`: posiciones `OPEN` de mayor riesgo + entradas
       pendientes de mayor riesgo;
-    - `simbolos_abiertos`: símbolos con posición `OPEN` o entrada pendiente.
+    - `simbolos_abiertos`: símbolos con posición `OPEN` o entrada pendiente, de
+      CUALQUIER serie (la base impide dos posiciones abiertas del mismo
+      símbolo, sea de estrategia o de observación).
+
+    Los tres primeros contadores cuentan SOLO la estrategia: las operaciones de
+    observación (decisión del 2026-10-12) tienen los suyos
+    (`observacion_abiertas`, `observacion_entradas_hoy`) y no consumen cupos de
+    la estrategia, ni al revés.
 
     Este módulo no consulta nada: cuenta lo que el servicio le entregue."""
 
@@ -412,6 +438,11 @@ class SituacionDeCupos:
     Paso 11, ver `app.domain.rules.escalation.binance_figura_caido`). Como la
     pausa, solo bloquea entradas nuevas: el monitor sigue vigilando y aplicará
     los stops en cuanto vuelva a haber precio."""
+    observacion_abiertas: int = 0
+    """Posiciones `OPEN` de observación (no tienen entradas pendientes: las de
+    observación nunca piden aprobación)."""
+    observacion_entradas_hoy: int = 0
+    """Órdenes de entrada de observación ejecutadas en el día UTC en curso."""
 
 
 @dataclass(frozen=True)
@@ -448,13 +479,27 @@ def validate_entry(
         motivos.append(MotivoRechazoEntrada.TIER_NO_CALIFICA)
     if symbol in cupos.simbolos_abiertos:
         motivos.append(MotivoRechazoEntrada.SIMBOLO_YA_ABIERTO)
-    if cupos.posiciones_abiertas >= MAX_POSICIONES_ABIERTAS:
-        motivos.append(MotivoRechazoEntrada.MAXIMO_POSICIONES)
-    if cupos.entradas_hoy >= MAX_ENTRADAS_POR_DIA:
-        motivos.append(MotivoRechazoEntrada.MAXIMO_ENTRADAS_DIA)
+    if tier == TierEntrada.OBSERVACION:
+        # Cupos propios (decisión del 2026-10-12): NO se mira ni se consume
+        # ningún cupo de la estrategia.
+        if cupos.observacion_abiertas >= MAX_OBSERVACIONES_ABIERTAS:
+            motivos.append(MotivoRechazoEntrada.MAXIMO_OBSERVACIONES)
+        if cupos.observacion_entradas_hoy >= MAX_OBSERVACIONES_POR_DIA:
+            motivos.append(MotivoRechazoEntrada.MAXIMO_OBSERVACIONES_DIA)
+    else:
+        if cupos.posiciones_abiertas >= MAX_POSICIONES_ABIERTAS:
+            motivos.append(MotivoRechazoEntrada.MAXIMO_POSICIONES)
+        if cupos.entradas_hoy >= MAX_ENTRADAS_POR_DIA:
+            motivos.append(MotivoRechazoEntrada.MAXIMO_ENTRADAS_DIA)
     if tier == TierEntrada.MAYOR_RIESGO and cupos.mayor_riesgo_abiertas >= MAX_MAYOR_RIESGO_ABIERTAS:
         motivos.append(MotivoRechazoEntrada.MAXIMO_MAYOR_RIESGO)
-    if not (TAMANO_MINIMO_USD <= monto_usd <= TAMANO_MAXIMO_USD):
+    fuera_de_rango = not (TAMANO_MINIMO_USD <= monto_usd <= TAMANO_MAXIMO_USD)
+    if tier == TierEntrada.OBSERVACION and monto_usd != TAMANO_POSICION_USD:
+        # Una observación es SIEMPRE del tamaño fijo y nunca pide aprobación:
+        # cualquier otro monto (en particular uno sobre 200 USD, que la exigiría)
+        # se rechaza en vez de ejecutarse sin aprobación.
+        fuera_de_rango = True
+    if fuera_de_rango:
         motivos.append(MotivoRechazoEntrada.TAMANO_FUERA_DE_RANGO)
 
     requiere_aprobacion = tier == TierEntrada.MAYOR_RIESGO or monto_usd > UMBRAL_APROBACION_MANUAL_USD

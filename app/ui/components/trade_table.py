@@ -16,6 +16,7 @@ def render_trade_table(filas) -> None:
         pd.DataFrame(
             {
                 "Cierre": [f.fecha(x.exit_time) for x in filas],
+                "Serie": [x.serie.value.lower() for x in filas],
                 "Símbolo": [x.symbol for x in filas],
                 "Score": [f.num(x.score) for x in filas],
                 "Entrada": [f.precio(x.entry_price) for x in filas],

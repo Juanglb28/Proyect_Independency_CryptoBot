@@ -1,4 +1,4 @@
-"""Sistema: salud de la base, datos, monitor, reconciliación y costo de IA; reanudar tras una pausa (con confirmación)."""
+"""Sistema: salud de la base, datos, monitor, scheduler, reconciliación y costo de IA; reanudar tras una pausa (con confirmación)."""
 
 from __future__ import annotations
 
@@ -22,6 +22,19 @@ def render() -> None:
     a.metric("Estado", "PARADA DE EMERGENCIA" if v.parada_emergencia else ("PAUSADO" if v.sistema_pausado else "Activo"))
     b.metric("Posiciones abiertas", v.posiciones_abiertas)
     c.metric("Último dato del monitor", f.duracion(v.edad_monitor), help=f.fecha(v.ultima_observacion_monitor))
+
+    # ── Scheduler / Heartbeat ──
+    hb = v.heartbeat
+    st.subheader("Scheduler")
+    if not hb.disponible:
+        st.warning("Heartbeat no disponible: el scheduler no se ha ejecutado o el archivo no es accesible.")
+    elif hb.stale:
+        st.error(
+            f"Heartbeat VIEJO: última señal hace {f.duracion(hb.edad)} "
+            f"({f.fecha(hb.timestamp)}). El scheduler puede estar caído."
+        )
+    else:
+        st.success(f"Scheduler activo: última señal hace {f.duracion(hb.edad)} (PID {hb.pid})")
 
     if v.sistema_pausado:
         st.subheader("Reanudar tras la pausa por drawdown")
@@ -53,6 +66,14 @@ def render() -> None:
     st.subheader("Costo de IA")
     st.metric("Últimos 30 días (USD)", f.num(v.costo_ia.costo_usd, 4),
               help=f"{v.costo_ia.llamadas} llamadas, {v.costo_ia.fallidas} fallidas (se cobran igual).")
+    if v.presupuesto_ia is not None:
+        pr = v.presupuesto_ia
+        st.metric("Gasto de IA hoy, UTC (USD)", f.num(pr.gasto_hoy_usd, 4),
+                  help=f"Tope diario de los ciclos automáticos: {f.num(pr.tope_usd)} USD. "
+                       "Al alcanzarlo no se inician más ciclos con IA hasta las 00:00 UTC; "
+                       "el monitor y los stops no usan IA y siguen funcionando.")
+        if pr.agotado:
+            st.warning("Tope diario de IA alcanzado: no se inician más ciclos automáticos con IA hoy.")
     if v.saldo_ia is None:
         st.caption("Saldo estimado no disponible: no hay saldo declarado en la configuración.")
     else:

@@ -69,6 +69,13 @@ class TierEntrada(str, Enum):
       estas entradas con las normales en una misma muestra impediría saber
       si el criterio relajado rinde mejor o peor.
     - `NINGUNO`: no califica por ninguna de las dos vías.
+    - `OBSERVACION` (decisión del usuario, 2026-10-12): NO es una propuesta
+      de la estrategia. Es una operación paper abierta por regla sobre un
+      candidato del pre-filtro (puntaje >= 45) que no abrió una entrada de la
+      estrategia, para ir reuniendo operaciones con una variedad de puntajes
+      mientras la estrategia casi no califica. No pasa por IA, tiene cupos
+      propios, no cuenta en el equity ni en la pausa por drawdown y se mide
+      como SERIE APARTE (ver `app/domain/rules/observation.py`).
 
     Se guarda como VARCHAR validado en Python (`native_enum=False`), igual
     que `EstadoCiclo`, para no necesitar un `ALTER TYPE` si el criterio
@@ -77,6 +84,7 @@ class TierEntrada(str, Enum):
     NORMAL = "NORMAL"
     MAYOR_RIESGO = "MAYOR_RIESGO"
     NINGUNO = "NINGUNO"
+    OBSERVACION = "OBSERVACION"
 
 
 class EstadoPrefiltro(str, Enum):
@@ -148,6 +156,21 @@ class EstadoOrden(str, Enum):
     EXPIRED = "EXPIRED"
 
 
+class SerieOperacion(str, Enum):
+    """A qué serie pertenece una operación (decisión del usuario, 2026-10-12).
+
+    - `ESTRATEGIA`: las entradas de la estrategia real (tier `NORMAL` o
+      `MAYOR_RIESGO`, y las propuestas anteriores al tier, que son NULL).
+    - `OBSERVACION`: las operaciones de observación (tier `OBSERVACION`).
+
+    No es una columna: se DERIVA del tier de la propuesta de la que sale la
+    operación, para que haya una sola fuente de verdad (ver
+    `app/repositories/series.py`). Las dos series se miden por separado."""
+
+    ESTRATEGIA = "ESTRATEGIA"
+    OBSERVACION = "OBSERVACION"
+
+
 class EstadoPosicion(str, Enum):
     """`posiciones.status`: `OPEN` mientras quede cantidad, `CLOSED` cuando
     la cantidad restante llega a 0 (un cierre parcial sigue siendo `OPEN`)."""
@@ -196,6 +219,32 @@ class TipoAlerta(str, Enum):
     Más uno elegido por el usuario o el asistente por defecto:
     - `PAUSA_DRAWDOWN`: el sistema se pausó por llegar al drawdown máximo.
 
+    Y uno de la recuperación al arrancar (Paso 11c, decisión del 2026-10-10):
+    - `CICLO_DIARIO_PERDIDO`: el scheduler arrancó después de la hora
+      programada del ciclo diario y no existe un ciclo completo de hoy
+      (típicamente porque el proceso murió a mitad o estuvo apagado). Solo
+      avisa: NO relanza el ciclo (gastaría IA sin que el usuario lo pida).
+
+    Y uno del tope de gasto de IA (decisión del 2026-10-10):
+    - `PRESUPUESTO_IA_AGOTADO`: el gasto de IA de hoy (UTC) alcanzó el tope
+      diario; no se inician más ciclos automáticos con IA hasta el día
+      siguiente. Un aviso por día. No afecta al monitor ni a los stops.
+
+    Y uno de la guardia de saldo de IA (decisión del 2026-10-11):
+    - `SALDO_IA_INSUFICIENTE`: el saldo estimado de Anthropic no alcanza para un
+      ciclo; no se inician ciclos automáticos con IA. Un aviso por día UTC.
+
+    Y dos del resumen de cada ciclo de análisis (decisión del 2026-10-11):
+    - `RESUMEN_CICLO`: el ciclo terminó; cuenta candidatos, propuestas, costo y
+      gasto de IA del día. Uno por ciclo. Solo informa.
+    - `CICLO_FALLIDO`: el ciclo no terminó (solo el nombre del error, nunca su
+      texto). Solo informa.
+
+    Y uno de la apertura automática de posiciones paper (decisión del 2026-10-12):
+    - `POSICION_ABIERTA`: se abrió una posición paper (de la estrategia, de
+      observación, o una entrada que aprobaste). Uno por posición, con unidades,
+      precio, total de compra, stop y objetivo. Solo informa.
+
     Se guarda como VARCHAR validado (`native_enum=False`), igual que el resto
     de enums."""
 
@@ -206,6 +255,12 @@ class TipoAlerta(str, Enum):
     BINANCE_RESTABLECIDO = "BINANCE_RESTABLECIDO"
     DISCREPANCIA_RECONCILIACION = "DISCREPANCIA_RECONCILIACION"
     PAUSA_DRAWDOWN = "PAUSA_DRAWDOWN"
+    CICLO_DIARIO_PERDIDO = "CICLO_DIARIO_PERDIDO"
+    PRESUPUESTO_IA_AGOTADO = "PRESUPUESTO_IA_AGOTADO"
+    SALDO_IA_INSUFICIENTE = "SALDO_IA_INSUFICIENTE"
+    RESUMEN_CICLO = "RESUMEN_CICLO"
+    CICLO_FALLIDO = "CICLO_FALLIDO"
+    POSICION_ABIERTA = "POSICION_ABIERTA"
 
 
 class OrigenObservacionEquity(str, Enum):

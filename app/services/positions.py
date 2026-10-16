@@ -15,11 +15,11 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from app.domain.enums import EstadoOrden
-from app.domain.rules.risk import MAX_POSICIONES_ABIERTAS
+from app.domain.enums import EstadoOrden, IntencionOrden, SerieOperacion
+from app.domain.rules.risk import MAX_POSICIONES_ABIERTAS, calculate_position_value
 from app.execution.emergency_stop import EmergencyStop
 from app.execution.system_control import get_system_state
-from app.repositories.orders import list_orders
+from app.repositories.orders import list_orders, list_orders_for_position
 from app.repositories.positions import list_open_posiciones
 from app.repositories.snapshots import get_ultimo_snapshot
 
@@ -47,6 +47,14 @@ class PosicionAbiertaView:
     distancia_objetivo_pct: Decimal | None
     mae_pct: Decimal | None
     mfe_pct: Decimal | None
+    unidad: str = ""
+    """Activo base de la posición (BTC en BTCUSDT): lo que se compró, para rotular las unidades."""
+    valor_de_compra_usd: Decimal | None = None
+    """Precio total de la compra: unidades compradas × precio de ejecución (la orden de
+    entrada ejecutada), SIN comisión. `None` si no hay orden de entrada ejecutada."""
+    comision_entrada_usd: Decimal | None = None
+    serie: SerieOperacion = SerieOperacion.ESTRATEGIA
+    """Estrategia u observación (decisión del 2026-10-12); la observación no usa los cupos de la estrategia."""
 
 
 @dataclass(frozen=True)
@@ -72,14 +80,38 @@ class PosicionesView:
     ultima_observacion_en: datetime | None
 
 
+_QUOTE = "USDT"
+
+
+def _unidad(symbol: str) -> str:
+    return symbol[: -len(_QUOTE)] if symbol.endswith(_QUOTE) and len(symbol) > len(_QUOTE) else symbol
+
+
+def _compra(session: Session, position_id: uuid.UUID) -> tuple[Decimal | None, Decimal | None]:
+    """(valor de compra, comisión) de la orden de ENTRADA ejecutada de la posición."""
+    entrada = next(
+        (
+            o
+            for o in list_orders_for_position(session, position_id)
+            if o.intencion == IntencionOrden.ENTRY and o.estado == EstadoOrden.FILLED
+        ),
+        None,
+    )
+    if entrada is None or entrada.quantity is None or entrada.execution_price is None:
+        return None, None
+    return calculate_position_value(entrada.quantity, entrada.execution_price), entrada.fee
+
+
 def get_positions_view(
     session: Session, *, initial_capital: Decimal, now: datetime, emergency_stop: EmergencyStop | None = None
 ) -> PosicionesView:
     estado = get_system_state(session, initial_capital=initial_capital, emergency_stop=emergency_stop)
 
     filas: list[PosicionAbiertaView] = []
+    ids_observacion = {p.id for p in list_open_posiciones(session, serie=SerieOperacion.OBSERVACION)}
     for p in list_open_posiciones(session):
         snap = get_ultimo_snapshot(session, p.id)
+        valor_de_compra, comision = _compra(session, p.id)
         filas.append(
             PosicionAbiertaView(
                 position_id=p.id,
@@ -103,6 +135,10 @@ def get_positions_view(
                 distancia_objetivo_pct=None if snap is None else snap.distance_to_target_pct,
                 mae_pct=None if snap is None else snap.current_mae_pct,
                 mfe_pct=None if snap is None else snap.current_mfe_pct,
+                unidad=_unidad(p.symbol),
+                valor_de_compra_usd=valor_de_compra,
+                comision_entrada_usd=comision,
+                serie=SerieOperacion.OBSERVACION if p.id in ids_observacion else SerieOperacion.ESTRATEGIA,
             )
         )
 
@@ -123,7 +159,9 @@ def get_positions_view(
         posiciones=tuple(filas),
         entradas_pendientes=pendientes,
         maximo_posiciones=MAX_POSICIONES_ABIERTAS,
-        cupos_libres=max(MAX_POSICIONES_ABIERTAS - len(filas) - len(pendientes), 0),
+        cupos_libres=max(
+            MAX_POSICIONES_ABIERTAS - sum(1 for x in filas if x.serie == SerieOperacion.ESTRATEGIA) - len(pendientes), 0
+        ),
         sistema_pausado=estado.pausado,
         parada_emergencia=estado.parada_emergencia,
         ultima_observacion_en=estado.ultima_observacion_en,

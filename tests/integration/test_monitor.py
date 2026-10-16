@@ -8,6 +8,7 @@ from __future__ import annotations
 import dataclasses
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import text
@@ -58,12 +59,21 @@ class FakePrices:
         return self.precios[symbol]
 
 
-def _abrir(db_session, symbol="BTCUSDT", precio="100", tier=TierEntrada.NORMAL, puntaje="64.60", now=_AHORA):
+def _abrir(
+    db_session, symbol="BTCUSDT", precio="100", tier=TierEntrada.NORMAL, puntaje="64.60", now=_AHORA, con_aviso=False
+):
+    """Abre una posición. El aviso `POSICION_ABIERTA` que deja la apertura se borra
+    por defecto: estas pruebas miden los avisos del MONITOR, no el de la apertura
+    (ese tiene sus propias pruebas en `test_position_opened_alert.py`)."""
     ciclo = create_ciclo(db_session, started_at=now, status=EstadoCiclo.PREFILTER)
     row = dataclasses.replace(_propuesta_row(ciclo, symbol), tier_entrada=tier, puntaje_ponderado=D(puntaje))
     pid = save_propuesta(db_session, row)
     cand = CandidatoEntrada(pid, symbol, tier, D(puntaje))
-    open_entries(db_session, [cand], now=now, price_source=FakePrices({symbol: precio}))
+    if con_aviso:
+        open_entries(db_session, [cand], now=now, price_source=FakePrices({symbol: precio}))
+    else:  # `alertas` es de solo-agregar: no se puede borrar el aviso, así que no se escribe
+        with patch("app.execution.order_manager._avisar_posicion_abierta"):
+            open_entries(db_session, [cand], now=now, price_source=FakePrices({symbol: precio}))
     return pid
 
 

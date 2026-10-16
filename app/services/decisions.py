@@ -23,7 +23,7 @@ from enum import Enum
 
 from sqlalchemy.orm import Session
 
-from app.domain.enums import EstadoCiclo, EstadoOrden, EstadoPosicion, EstadoPrefiltro
+from app.domain.enums import EstadoCiclo, EstadoOrden, EstadoPosicion, EstadoPrefiltro, TierEntrada
 from app.repositories.ai_calls import list_llamadas_de_ciclo
 from app.repositories.analysis import (
     get_ciclo,
@@ -69,7 +69,10 @@ class CicloResumen:
     cost_usd: Decimal | None
     error_message: str | None
     n_propuestas: int
+    """Propuestas de la ESTRATEGIA (con IA). Las de observación se cuentan aparte."""
     n_sobre_umbral: int
+    n_observaciones: int = 0
+    """Posiciones de observación abiertas por este ciclo (candidatos del pre-filtro, sin IA)."""
 
 
 @dataclass(frozen=True)
@@ -80,7 +83,8 @@ class PropuestaDelCiclo:
     horizonte: str
     nivel_riesgo: str
     puntaje_base: Decimal
-    calidad_datos: Decimal
+    calidad_datos: Decimal | None
+    """`None` en las observaciones: no pasaron por el Auditor y no se inventa."""
     puntaje_ponderado: Decimal
     supera_umbral_entrada: bool
     tier_entrada: str | None
@@ -151,7 +155,8 @@ def _resultado(ciclo, n_propuestas: int) -> ResultadoCiclo:
 
 
 def _resumen(session: Session, ciclo) -> CicloResumen:
-    propuestas = get_propuestas_de_ciclo(session, ciclo.id)
+    todas = get_propuestas_de_ciclo(session, ciclo.id)
+    propuestas = [p for p in todas if p.tier_entrada != TierEntrada.OBSERVACION]
     return CicloResumen(
         ciclo_id=ciclo.id,
         started_at=ciclo.started_at,
@@ -162,6 +167,7 @@ def _resumen(session: Session, ciclo) -> CicloResumen:
         error_message=ciclo.error_message,
         n_propuestas=len(propuestas),
         n_sobre_umbral=sum(1 for p in propuestas if p.supera_umbral_entrada),
+        n_observaciones=len(todas) - len(propuestas),
     )
 
 

@@ -215,11 +215,42 @@ def mensaje_caida_1h(symbol: str, caida: CaidaDetectada) -> str:
     )
 
 
-def mensaje_volumen_atipico(symbol: str, *, vela: datetime, zscore: Decimal, volumen: Decimal) -> str:
+def _fmt_miles(valor: Decimal, decimales: int = 2) -> str:
+    """Con separador de miles para que cifras grandes se lean de un vistazo."""
+    return f"{valor.quantize(Decimal(1).scaleb(-decimales), rounding=ROUND_HALF_EVEN):,.{decimales}f}"
+
+
+def promedio_volumen(volumenes_previos: list[Decimal]) -> Decimal:
+    """Promedio simple de los volúmenes de referencia (el mismo que usa el z-score)."""
+    return sum(volumenes_previos, Decimal(0)) / len(volumenes_previos)
+
+
+def mensaje_volumen_atipico(
+    symbol: str,
+    *,
+    vela: datetime,
+    zscore: Decimal,
+    volumen: Decimal,
+    volumen_vela_anterior: Decimal,
+    volumen_promedio: Decimal,
+) -> str:
+    """Aviso de volumen atípico con las cifras que lo explican: el volumen de la
+    vela, el de la vela inmediatamente anterior y el promedio de las 30 previas,
+    todos en unidades del activo (volumen BASE, no dólares). Todo viene ya
+    calculado; aquí solo se arma el texto (P1)."""
+    unidad = _unidad(symbol)
+    veces = (
+        f" El volumen de la vela es {_fmt(volumen / volumen_promedio, 1)} veces ese promedio."
+        if volumen_promedio > 0
+        else ""
+    )
     return (
         f"VOLUMEN ATÍPICO {symbol}: la vela de 1 h de las {_hora(vela)} tuvo un volumen de "
-        f"{_fmt(volumen, 2)}, a {_fmt(zscore)} desviaciones estándar de las 30 velas previas "
-        f"(umbral: {_fmt(Z_VOLUMEN_UMBRAL, 0)}). {_NO_ACCION}"
+        f"{_fmt_miles(volumen)} {unidad}, a {_fmt(zscore)} desviaciones estándar de las 30 velas previas "
+        f"(umbral: {_fmt(Z_VOLUMEN_UMBRAL, 0)}).\n"
+        f"Vela anterior ({_hora(vela - DURACION_VELA_1H)}): {_fmt_miles(volumen_vela_anterior)} {unidad}. "
+        f"Promedio de las 30 velas previas: {_fmt_miles(volumen_promedio)} {unidad}.{veces}\n"
+        f"El volumen se mide en {unidad}, no en dólares. {_NO_ACCION}"
     )
 
 
@@ -228,6 +259,37 @@ def mensaje_orden_pendiente(symbol: str, *, monto_usd: Decimal, vence: datetime 
     return (
         f"APROBACIÓN PENDIENTE {symbol}: entrada de {_fmt(monto_usd)} USD que requiere tu aprobación "
         f"manual (pestaña Posiciones).{caduca} Sin tu aprobación no se abre; al vencer se descarta."
+    )
+
+
+_QUOTE = "USDT"
+
+
+def _unidad(symbol: str) -> str:
+    return symbol[: -len(_QUOTE)] if symbol.endswith(_QUOTE) and len(symbol) > len(_QUOTE) else symbol
+
+
+def mensaje_posicion_abierta(
+    symbol: str,
+    *,
+    origen: str,
+    cantidad: Decimal,
+    precio: Decimal,
+    valor_usd: Decimal,
+    comision_usd: Decimal,
+    stop: Decimal,
+    objetivo: Decimal,
+    puntaje: Decimal,
+    etiqueta_puntaje: str,
+) -> str:
+    """Aviso de que se abrió una posición paper. Todas las cifras ya vienen
+    calculadas y guardadas (orden de entrada y posición); aquí solo se arma el texto."""
+    return (
+        f"POSICIÓN PAPER ABIERTA {symbol} ({origen})\n"
+        f"Compra: {_fmt(cantidad, 6)} {_unidad(symbol)} a {_fmt(precio, 6)} USDT\n"
+        f"Total de compra: {_fmt(valor_usd)} USD (comisión {_fmt(comision_usd, 4)} USD)\n"
+        f"Stop {_fmt(stop, 6)} · objetivo {_fmt(objetivo, 6)}\n"
+        f"{etiqueta_puntaje}: {_fmt(puntaje)}. Simulado: no hay dinero real. {_NO_ACCION}"
     )
 
 

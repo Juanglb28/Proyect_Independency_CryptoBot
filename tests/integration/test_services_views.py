@@ -138,6 +138,9 @@ def test_posiciones_muestra_abierta_con_su_ultimo_snapshot(db_session):
     assert p.stop_vigente == D("92") and p.objetivo_vigente == D("112")
     assert (p.distancia_stop_pct is not None and p.mae_pct == D("0") and p.mfe_pct == D("4"))
     assert v.maximo_posiciones == 4 and v.cupos_libres == 3 and v.entradas_pendientes == ()
+    # tamaño de la posición: unidades compradas y precio total de compra (de la orden de entrada ejecutada)
+    assert p.unidad == "BTC" and p.initial_quantity == D("1") and p.remaining_quantity == D("1")
+    assert p.valor_de_compra_usd == D("100") and p.comision_entrada_usd == D("0.1")
 
 
 def test_posiciones_sin_nada_abierto(db_session):
@@ -235,6 +238,7 @@ def test_validacion_expone_informe_terciles_y_seis_preguntas(db_session, seis_op
     v = get_validation_view(db_session, initial_capital=CAPITAL, now=AHORA)
     assert v.informe.n_trades == 6 and v.informe.status.value == "PRELIMINAR"
     assert len(v.terciles) == 3 and v.global_.total_trades == 6
+    assert v.estratificado.informe.n_trades == 6 and v.estratificado.estratos_usados >= 1
     assert [p.numero for p in v.preguntas] == [1, 2, 3, 4, 5, 6]
     assert {p.numero for p in v.preguntas if p.estado == EstadoPregunta.PENDIENTE} == {4}
 
@@ -242,6 +246,7 @@ def test_validacion_expone_informe_terciles_y_seis_preguntas(db_session, seis_op
 def test_validacion_sin_operaciones(db_session):
     v = get_validation_view(db_session, initial_capital=CAPITAL, now=AHORA)
     assert v.informe.status.value == "MUESTRA_INSUFICIENTE" and v.terciles == ()
+    assert v.estratificado.informe.status.value == "MUESTRA_INSUFICIENTE" and v.estratificado.alerta_de_regimen is None
 
 
 # --- decisiones ---

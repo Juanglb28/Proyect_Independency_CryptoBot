@@ -96,7 +96,10 @@ def _cerrar(db_session, symbol="BTCUSDT"):
 
 def _valores_de_resultado(db_session, pos):
     fila = db_session.execute(text("SELECT * FROM trade_results WHERE position_id = :p"), {"p": pos.id}).mappings().one()
-    return {k: v for k, v in fila.items() if k not in ("id", "created_at")}
+    # Las columnas de versionado (corrección auditable) no son valores del
+    # resultado: las pone `insertar_correccion`, no un guardado normal.
+    fuera = ("id", "created_at", "supersedes_id", "correction_reason", "corrected_by")
+    return {k: v for k, v in fila.items() if k not in fuera}
 
 
 def test_un_solo_resultado_por_posicion_y_el_reintento_no_lo_toca(db_session):

@@ -12,7 +12,11 @@ from app.ui.components.thesis_result import render_thesis_result
 
 def render_trade_detail(detalle) -> None:
     fila, r, decision = detalle.fila, detalle.resultado, detalle.decision
-    st.subheader(f"{fila.symbol} · {fila.resultado.value}")
+    es_observacion = fila.serie.value == "OBSERVACION"
+    st.subheader(f"{fila.symbol} · {fila.resultado.value}" + (" · observación" if es_observacion else ""))
+    if es_observacion:
+        st.caption("Operación de OBSERVACIÓN: candidato del pre-filtro abierto sin IA. Su score es el del pre-filtro "
+                   "(otra escala que el ponderado de la estrategia) y no tiene calidad de datos ni factores.")
     a, b, c, d = st.columns(4)
     a.metric("P&L neto", f.usd(r.net_pnl), help=f"Bruto {f.usd(r.gross_pnl)} · comisiones {f.usd(r.total_fees)}")
     b.metric("Retorno neto", f.pct(r.net_return_pct))

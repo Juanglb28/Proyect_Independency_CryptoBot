@@ -23,7 +23,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Date, and_, cast, func, select
+from sqlalchemy import Date, and_, cast, func, or_, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.db.models.analysis import CicloAnalisis, Factor, PrefiltroResultado, Propuesta
@@ -92,6 +93,29 @@ def get_ciclo(session: Session, ciclo_id: uuid.UUID) -> CicloAnalisis | None:
     return session.get(CicloAnalisis, ciclo_id)
 
 
+def list_ciclos_sin_terminar(session: Session) -> list[CicloAnalisis]:
+    """Ciclos con `finished_at` vacío: o están corriendo ahora, o el proceso
+    murió a mitad (Paso 11c). Orden reproducible: inicio y luego `id`."""
+    return list(
+        session.execute(
+            select(CicloAnalisis)
+            .where(CicloAnalisis.finished_at.is_(None))
+            .order_by(CicloAnalisis.started_at, CicloAnalisis.id)
+        ).scalars()
+    )
+
+
+def list_ciclos_iniciados_desde(session: Session, desde: datetime) -> list[CicloAnalisis]:
+    """Ciclos iniciados en `desde` o después, del más viejo al más nuevo."""
+    return list(
+        session.execute(
+            select(CicloAnalisis)
+            .where(CicloAnalisis.started_at >= desde)
+            .order_by(CicloAnalisis.started_at, CicloAnalisis.id)
+        ).scalars()
+    )
+
+
 # --- propuestas / factores ---------------------------------------------------
 
 
@@ -119,7 +143,7 @@ class PropuestaRow:
     horizonte: str
     nivel_riesgo: str
     puntaje_base: Decimal
-    calidad_datos: Decimal
+    calidad_datos: Decimal | None
     puntaje_ponderado: Decimal
     supera_umbral_entrada: bool
     tesis: str
@@ -178,6 +202,41 @@ def save_propuesta(session: Session, row: PropuestaRow) -> uuid.UUID:
     return propuesta.id
 
 
+def insertar_propuesta_observacion(session: Session, row: PropuestaRow, *, propuesta_id: uuid.UUID) -> tuple[uuid.UUID, bool]:
+    """Guarda la propuesta de una operación de observación con un id DADO (el
+    determinista de `app.domain.rules.observation`). Idempotente: si ya existe,
+    no inserta nada y devuelve `(id, False)`; así reintentar la apertura de un
+    ciclo no crea una segunda propuesta (ni una segunda posición).
+
+    No hace `commit`. Una observación no tiene factores."""
+    valores = dict(
+        id=propuesta_id,
+        ciclo_id=row.ciclo_id,
+        symbol=row.symbol,
+        categoria=row.categoria,
+        horizonte=row.horizonte,
+        nivel_riesgo=row.nivel_riesgo,
+        puntaje_base=row.puntaje_base,
+        calidad_datos=row.calidad_datos,
+        puntaje_ponderado=row.puntaje_ponderado,
+        supera_umbral_entrada=row.supera_umbral_entrada,
+        tier_entrada=row.tier_entrada,
+        ciclos_consecutivos_en_zona=row.ciclos_consecutivos_en_zona,
+        segunda_ronda=row.segunda_ronda,
+        tesis=row.tesis,
+        invalidacion=row.invalidacion,
+        escenario_adverso=row.escenario_adverso,
+        comentario_chartista=row.comentario_chartista,
+        fuentes=row.fuentes,
+        confianza_global=row.confianza_global,
+        decision_snapshot=row.decision_snapshot,
+    )
+    creada = session.execute(
+        pg_insert(Propuesta).values(**valores).on_conflict_do_nothing(index_elements=["id"]).returning(Propuesta.id)
+    ).scalar_one_or_none()
+    return propuesta_id, creada is not None
+
+
 def get_propuesta(session: Session, propuesta_id: uuid.UUID) -> Propuesta | None:
     return session.get(Propuesta, propuesta_id)
 
@@ -216,6 +275,7 @@ def get_puntajes_de_ciclos_previos(session: Session, symbol: str, ciclo_id: uuid
       del ciclo actual, para que una segunda corrida el mismo día no cuente
       como "el día anterior". Si hubo varios ciclos exitosos el mismo día,
       se toma el mayor puntaje del símbolo.
+    - Las propuestas de observación (tier `OBSERVACION`) se ignoran.
     - Un día con ciclo exitoso donde el símbolo no tuvo propuesta aparece
       como `None` (no se sabe si estuvo cerca; ver el docstring de la
       función de dominio)."""
@@ -228,7 +288,16 @@ def get_puntajes_de_ciclos_previos(session: Session, symbol: str, ciclo_id: uuid
     stmt = (
         select(func.max(Propuesta.puntaje_ponderado))
         .select_from(CicloAnalisis)
-        .outerjoin(Propuesta, and_(Propuesta.ciclo_id == CicloAnalisis.id, Propuesta.symbol == symbol))
+        .outerjoin(
+            Propuesta,
+            and_(
+                Propuesta.ciclo_id == CicloAnalisis.id,
+                Propuesta.symbol == symbol,
+                # Una observación NO es una propuesta de la estrategia (su puntaje es el
+                # del pre-filtro, otra escala): no cuenta como "día en la zona cercana".
+                or_(Propuesta.tier_entrada.is_(None), Propuesta.tier_entrada != TierEntrada.OBSERVACION),
+            ),
+        )
         .where(
             CicloAnalisis.finished_at.is_not(None),
             CicloAnalisis.error_message.is_(None),

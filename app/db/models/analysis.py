@@ -139,6 +139,14 @@ class CicloAnalisis(Base):
 
 class Propuesta(Base):
     __tablename__ = "propuestas"
+    __table_args__ = (
+        # La calidad de datos solo puede faltar en una observación (no hay Auditor:
+        # no se inventa un número). Decisión del 2026-10-12.
+        CheckConstraint(
+            "calidad_datos IS NOT NULL OR tier_entrada = 'OBSERVACION'",
+            name="calidad_datos_salvo_observacion",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     ciclo_id: Mapped[uuid.UUID] = mapped_column(
@@ -152,7 +160,7 @@ class Propuesta(Base):
     nivel_riesgo: Mapped[str] = mapped_column(nullable=False)
 
     puntaje_base: Mapped[Decimal] = mapped_column(Numeric(6, 2), nullable=False)
-    calidad_datos: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+    calidad_datos: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
     puntaje_ponderado: Mapped[Decimal] = mapped_column(Numeric(6, 2), nullable=False)
     supera_umbral_entrada: Mapped[bool] = mapped_column(Boolean, nullable=False)
 

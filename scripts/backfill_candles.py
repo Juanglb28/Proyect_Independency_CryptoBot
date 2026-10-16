@@ -13,6 +13,11 @@ Uso:
     python -m scripts.backfill_candles --days 30
     python -m scripts.backfill_candles --symbols BTCUSDT,ETHUSDT --timeframes 1d
 
+Ampliar el historial HACIA ATRÁS (p. ej. para el backtest, sin volver a bajar lo
+que ya tienes): `--days` es hasta dónde retroceder y `--hasta-dias` dónde parar,
+ambos contados desde hoy. Ejemplo, de hace ~5 años a hace ~2 años:
+    python -m scripts.backfill_candles --days 1825 --hasta-dias 740 --timeframes 1h,1d
+
 Por defecto descarga ~2 años (sección 3 del plan) para los 20 símbolos de
 la whitelist en las 4 temporalidades decididas (sección 6.1). Eso son 80
 combinaciones símbolo/temporalidad y, para 1h, unas 18 páginas cada una:
@@ -49,6 +54,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=f"Días hacia atrás a descargar (default: {_DEFAULT_DAYS}, ~2 años).",
     )
     parser.add_argument(
+        "--hasta-dias",
+        type=int,
+        default=0,
+        help="Dejar de descargar en esta antigüedad, en días desde hoy (default: 0 = hasta el presente). "
+        "Debe ser menor que --days.",
+    )
+    parser.add_argument(
         "--symbols",
         type=str,
         default=None,
@@ -63,6 +75,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def calcular_rango(ahora: datetime, days: int, hasta_dias: int) -> tuple[datetime, datetime]:
+    """(desde, hasta) de la descarga. `hasta_dias` < `days` y ambos >= 0."""
+    if days < 1 or hasta_dias < 0 or hasta_dias >= days:
+        raise ValueError(f"--hasta-dias ({hasta_dias}) debe ser >= 0 y menor que --days ({days}).")
+    return ahora - timedelta(days=days), ahora - timedelta(days=hasta_dias)
+
+
 def main(argv: list[str] | None = None) -> int:
     configure_logging()
     args = parse_args(argv)
@@ -71,17 +90,21 @@ def main(argv: list[str] | None = None) -> int:
     timeframes = (
         tuple(t.strip() for t in args.timeframes.split(",")) if args.timeframes else SUPPORTED_TIMEFRAMES
     )
-    since = datetime.now(timezone.utc) - timedelta(days=args.days)
+    try:
+        since, until = calcular_rango(datetime.now(timezone.utc), args.days, args.hasta_dias)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
 
     settings = get_settings()
     engine = get_engine(settings)
     session_factory = get_sessionmaker(engine)
 
-    print(f"Backfill desde {since.isoformat()} para {len(symbols)} símbolos x {len(timeframes)} temporalidades...")
+    print(f"Backfill desde {since.isoformat()} hasta {until.isoformat()} para {len(symbols)} símbolos x {len(timeframes)} temporalidades...")
 
     ahora = datetime.now(timezone.utc)
     with session_scope(session_factory) as session:
-        results = backfill_all(session, symbols, timeframes, since, now=ahora)
+        results = backfill_all(session, symbols, timeframes, since, until=until, now=ahora)
         vencidas = velas_vencidas_sin_cerrar(session, ahora=ahora, symbols=symbols)
 
     total_inserted = 0

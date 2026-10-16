@@ -1,0 +1,113 @@
+{
+  "descartes": {
+    "sin_observacion_del_arnes": 4
+  },
+  "informes": {
+    "PRIMARIO — protocolo K1 v1 (fechas >= 2024-07-01)": {
+      "n_observaciones": 0,
+      "n_fechas": 0,
+      "fechas_excluidas": 0,
+      "ic": {},
+      "dif_vs_mom_24h": null,
+      "dif_vs_mom_7d": null,
+      "p_permutacion": null,
+      "terciles": null,
+      "terciles_e4": null,
+      "corr_kronos_score": null,
+      "veredicto": "NO_CONCLUYENTE_MUESTRA_INSUFICIENTE",
+      "notas": [
+        "Solo 0 fecha(s) con >= 10 monedas resueltas; el protocolo pide al menos 30: NO_CONCLUYENTE."
+      ]
+    },
+    "SENSIBILIDAD (fechas >= 2025-03-19)": {
+      "n_observaciones": 0,
+      "n_fechas": 0,
+      "fechas_excluidas": 0,
+      "ic": {},
+      "dif_vs_mom_24h": null,
+      "dif_vs_mom_7d": null,
+      "p_permutacion": null,
+      "terciles": null,
+      "terciles_e4": null,
+      "corr_kronos_score": null,
+      "veredicto": "NO_CONCLUYENTE_MUESTRA_INSUFICIENTE",
+      "notas": [
+        "Solo 0 fecha(s) con >= 10 monedas resueltas; el protocolo pide al menos 30: NO_CONCLUYENTE."
+      ]
+    },
+    "DIAGNÓSTICO PRE-CORTE (fechas < 2024-07-01; posible memoria del preentrenamiento)": {
+      "n_observaciones": 71,
+      "n_fechas": 4,
+      "fechas_excluidas": 0,
+      "ic": {
+        "kronos": {
+          "n": 4,
+          "media": "-0.17806025",
+          "ci_inferior": "-0.17806025",
+          "ci_superior": "-0.17806025"
+        },
+        "score_v1": {
+          "n": 4,
+          "media": "0.1541945",
+          "ci_inferior": "0.1541945",
+          "ci_superior": "0.1541945"
+        },
+        "mom_24h": {
+          "n": 4,
+          "media": "-0.0195035",
+          "ci_inferior": "-0.0195035",
+          "ci_superior": "-0.0195035"
+        },
+        "mom_7d": {
+          "n": 4,
+          "media": "0.24135275",
+          "ci_inferior": "0.24135275",
+          "ci_superior": "0.24135275"
+        }
+      },
+      "dif_vs_mom_24h": {
+        "n": 4,
+        "media": "-0.15855675",
+        "ci_inferior": "-0.15855675",
+        "ci_superior": "-0.15855675"
+      },
+      "dif_vs_mom_7d": {
+        "n": 4,
+        "media": "-0.419413",
+        "ci_inferior": "-0.419413",
+        "ci_superior": "-0.419413"
+      },
+      "p_permutacion": "0.940000",
+      "terciles": {
+        "n": 71,
+        "k": 23,
+        "alta": "-0.05735569860308910622371822961",
+        "baja": "0.02349325851328138710800300518",
+        "diferencia": "-0.08084895711637049333172123479",
+        "ci_inferior": "-0.1361402646866386251081112086",
+        "ci_superior": "-0.02763883322686600768473533202",
+        "estratos_excluidos": 0,
+        "observaciones_excluidas": 0
+      },
+      "terciles_e4": {
+        "n": 71,
+        "k": 23,
+        "alta": "-0.03029063315427902757729754169",
+        "baja": "0.03137158153119887777875059406",
+        "diferencia": "-0.06166221468547790535604813575",
+        "ci_inferior": "-0.1162213467312819919954665189",
+        "ci_superior": "-0.005733173220086054390900791964",
+        "estratos_excluidos": 0,
+        "observaciones_excluidas": 0
+      },
+      "corr_kronos_score": "-0.584134",
+      "veredicto": "NO_CONCLUYENTE_MUESTRA_INSUFICIENTE",
+      "notas": [
+        "Solo 4 fecha(s) con >= 10 monedas resueltas; el protocolo pide al menos 30: NO_CONCLUYENTE.",
+        "IC por bloques de 5 fechas; con ~20 monedas muy correlacionadas la muestra efectiva es menor que n y el IC puede ser optimista. Los contrastes secundarios son exploratorios."
+      ]
+    }
+  },
+  "fechas_primarias_sin_pronostico": 279,
+  "generado_el": "2026-10-15T17:35:21.227896+00:00"
+}

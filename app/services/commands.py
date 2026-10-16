@@ -47,6 +47,10 @@ _MENSAJES_APROBACION = {
     ResultadoAprobacion.BLOQUEADA_POR_PARADA: (
         "Existe el archivo PARAR: no se abren entradas nuevas. La orden sigue pendiente (puedes rechazarla)."
     ),
+    ResultadoAprobacion.BLOQUEADA_POR_RECONCILIACION: (
+        "El estado de órdenes y posiciones no cuadra (discrepancia en la reconciliación): no se abren "
+        "entradas nuevas hasta resolverlo. La orden sigue pendiente (puedes rechazarla)."
+    ),
     ResultadoAprobacion.SIN_PRECIO: "No se pudo obtener un precio válido de Binance; la orden sigue pendiente.",
 }
 

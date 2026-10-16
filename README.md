@@ -390,6 +390,14 @@ DATOS de cada llamada lo arma quien invoca al agente — construirlo a
 partir de datos reales de la base es responsabilidad del Paso 7
 (orquestación), todavía no implementado.
 
+**Prompt del Analista cuantitativo — v3 (2026-10-15).** Añade solo una sección
+"CONVENCIÓN DE TIEMPOS": `vela_mas_reciente_utc` es la hora de *apertura* de la última vela
+cerrada y cada temporalidad cierra en un momento distinto, así que la diaria con fecha del día
+anterior y los cierres distintos entre temporalidades **no** son desfase ni incoherencia (la IA
+los reportaba como baja fiabilidad). Los datos de entrada no cambian; la versión queda en cada
+decisión. Pendiente, solo si las observaciones lo piden: añadir la hora de cierre de cada vela al
+bloque DATOS (`claude/decisiones-prompt-cuantitativo-v3.md`).
+
 **Bug real (2026-10-02):** el saldo real de la cuenta de Anthropic bajaba
 más rápido que el `cost_usd` que este sistema venía reportando. Causa:
 el prompt de sistema de cada agente se manda con `cache_control: ephemeral`
@@ -555,6 +563,59 @@ del `AgentCallResult` ya recibido cuando la falla es posterior (JSON
 inválido o schema incorrecto); si ninguno está disponible (un error antes
 de recibir cualquier respuesta de la API), no se persiste nada, porque no
 hay tokens reales que registrar.
+
+### Tope diario de gasto de IA (decisión del usuario, 2026-10-10)
+
+El tope diario es **2,00 USD por día UTC** (`AI_DAILY_BUDGET_USD`, por defecto
+`2.00`, debe ser > 0; se puede cambiar en `.env`). Es un tope de COSTO, no una
+regla de riesgo de trading: no toca capital, stops ni posiciones.
+
+- **Tope blando, antes de empezar.** Antes de iniciar cualquier ciclo
+  AUTOMÁTICO (el diario de las 00:05 UTC o el disparado cada hora por candidatos
+  nuevos) el scheduler suma `llamadas_ia.cost_usd` del día UTC en curso. Si ya
+  es ≥ al tope, el ciclo NO corre. Un ciclo que ya empezó termina aunque
+  cruce el tope: no se corta a medias (dejaría análisis incompletos), así que
+  el gasto de un día puede superar el tope por, como máximo, un ciclo.
+- **Falla cerrada.** Si no se puede leer el gasto (error de base de datos), el
+  ciclo tampoco corre: ante la duda no se gasta.
+- **Un aviso por día** (`PRESUPUESTO_IA_AGOTADO`, Telegram); reiniciar el
+  scheduler no lo repite.
+- **El ciclo manual no se bloquea.** `python -m scripts.run_daily_cycle` sigue
+  funcionando (tú decides gastar) y ahora imprime primero el gasto de hoy frente
+  al tope.
+- La página **Sistema** de la interfaz muestra el gasto de hoy frente al tope y
+  avisa si está agotado.
+- Sin migración: `alertas.tipo` es VARCHAR sin restricción.
+
+### Guardia de saldo de IA (decisión del usuario, 2026-10-11)
+
+Con poco crédito, un ciclo (≈0,50-0,55 USD con 5 candidatos) se quedaría sin saldo a
+mitad de camino y se cobraría lo ya gastado. Como la API de Anthropic no expone el
+saldo real, la guardia usa el que TÚ declaras en `.env`:
+
+```bash
+ANTHROPIC_SALDO_DECLARADO_USD=0.34
+ANTHROPIC_SALDO_DECLARADO_EN=2026-10-11T17:30:00+00:00   # la hora (UTC) a la que lo leíste en la consola
+# AI_MIN_BALANCE_PER_CYCLE_USD=0.60                      # opcional; este es el valor por defecto
+```
+
+- **Saldo estimado = saldo declarado − gasto registrado en `llamadas_ia` desde esa
+  hora.** Es una ESTIMACIÓN: no incluye gasto que el sistema no pudo registrar (por
+  ejemplo una corrida cortada a mitad). Recalíbralo cada vez que revises la consola.
+- **Ciclos automáticos** (el de las 00:05 UTC y el disparado por candidatos nuevos): si
+  el saldo estimado es menor que el mínimo (0,60 USD por defecto; igual alcanza), el
+  ciclo NO arranca y llega UN aviso por día UTC (`SALDO_IA_INSUFICIENTE`). El monitor y
+  los stops siguen (no usan IA). Se revisa DESPUÉS del tope diario y antes de tocar nada.
+- **Falla cerrada**: si no se puede leer el gasto, el ciclo no arranca.
+- **Opcional**: sin saldo y fecha declarados la guardia no actúa (no se inventa un
+  número).
+- **Ciclo manual** (`scripts/run_daily_cycle.py`): imprime una ADVERTENCIA antes de gastar
+  si el saldo estimado es bajo, pero no se bloquea (lo lanzas tú o la tarea de Windows).
+- El resumen de cada ciclo por Telegram añade el saldo estimado (y avisa si ya no
+  alcanza para otro ciclo).
+- **Al recargar**: pon el saldo real y la hora nueva en `.env` y reinicia el scheduler
+  (`docker compose up -d --force-recreate scheduler`; las variables se leen al arrancar).
+  Hora UTC actual en PowerShell: `(Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss+00:00")`.
 
 ## Segunda ronda: entradas "de mayor riesgo" (decisión del usuario, 2026-10-04)
 
@@ -950,6 +1011,13 @@ mismo símbolo y que, si está abierta, su símbolo siga en la lista autorizada;
 que ninguna orden ejecutada quede sin posición. No corrige nada. Cuando exista
 Binance real se agregará la comparación contra el exchange.
 
+Desde el Paso 11c, **abrir y aprobar entradas también reconcilian primero**
+(`open_entries`, `approve_pending_entry`): con una discrepancia no se abre
+ninguna entrada, la orden pendiente se queda pendiente (resultado
+`BLOQUEADA_POR_RECONCILIACION`) y rechazar sigue permitido. Es la regla del plan
+"bloquear operación hasta resolver", ahora respetada en el monitor **y** en las
+entradas.
+
 **Tabla nueva `equity_observaciones` (migración `c5dbbf4b3553`):** solo-agregar
 (trigger que rechaza `UPDATE`/`DELETE`), con `peak_equity_usd >= equity_usd` y,
 si el origen es `REANUDACION`, `pico = equity`. Para aplicarla:
@@ -965,7 +1033,7 @@ backtest.
 
 Los avisos de escalamiento (caída >5% en una hora, volumen >3σ, Binance caído
 >5 min) existen desde el Paso 11a-2 (ver "Avisos por Telegram"); queda pendiente
-empaquetar el monitor como proceso programado (APScheduler, Paso 11b). Tests:
+empaquetar el monitor como proceso programado (hecho en el Paso 11b: ver `app/orchestration/scheduler.py`). Tests:
 `tests/unit/test_equity_rules.py`, `tests/unit/test_reconciliation.py`,
 `tests/unit/test_emergency_stop.py`, `tests/integration/test_position_manager.py`,
 `tests/integration/test_monitor.py`, `tests/integration/test_monitor_scripts.py`,
@@ -988,7 +1056,7 @@ decisión → posición → trade_snapshots → trade_result → performance_met
 | Tabla | Qué es | Reglas en la base de datos |
 |---|---|---|
 | `trade_snapshots` | Trayectoria de una posición abierta: un snapshot por chequeo (`SCHEDULED`) y uno por evento (`ENTRY`, `PARTIAL_TAKE_PROFIT`, `TRAILING_ACTIVATED`, `TRAILING_UPDATED`, `SYSTEM_PAUSED`, `EXIT`) | Solo-agregar (trigger). Único por `(posición, instante, estado)`: un reintento no duplica |
-| `trade_results` | Resultado definitivo de una operación cerrada: P&L bruto/neto, comisiones, R-multiple, MAE/MFE, scores iniciales, estado de tesis, motivo de salida, benchmark | Solo-agregar (trigger). Un solo resultado por posición (`position_id` único). CHECK de coherencia |
+| `trade_results` | Resultado definitivo de una operación cerrada: P&L bruto/neto, comisiones, R-multiple, MAE/MFE, scores iniciales, estado de tesis, motivo de salida, benchmark | Solo-agregar (trigger). Un solo ORIGINAL por posición; las correcciones son versiones nuevas encadenadas (ver "Corrección auditable"). CHECK de coherencia |
 | `performance_metrics` | Métricas agregadas: global, por activo y por tercil del score | Derivada y reconstruible: recalcular el mismo periodo REEMPLAZA la fila |
 
 Además `posiciones.reference_prices_at_entry` (JSONB, se escribe una sola vez
@@ -1066,9 +1134,44 @@ explícitamente el 2026-10-05; cambiarlos requiere una nueva decisión.
   (los equilibrios aportan 0).
 - **No existe el alcance "estrategia"** de `performance_metrics`: no hay
   versiones de estrategia registradas todavía.
-- **`TODO — DECISIÓN PENDIENTE`:** mecanismo de corrección auditable de un
-  `trade_result` (el plan pide "nueva versión", no reescribir). Ninguna regla de
-  v1 lo necesita; hasta definirlo, una corrección exige una decisión humana.
+- **Corrección auditable de un `trade_result`** (2026-10-13): implementada. Ver
+  la sección siguiente.
+
+### Corrección auditable de un trade_result (2026-10-13)
+
+El plan §15.3 pide que un error de cálculo se corrija "registrando una nueva
+versión/corrección auditable", nunca reescribiendo; §37.8 prohíbe modificar
+resultados históricos para mejorar los números. `trade_results` sigue siendo de
+solo-agregar (un trigger rechaza UPDATE/DELETE).
+
+Una corrección es una **fila nueva** que apunta con `supersedes_id` a la que
+corrige, con un `correction_reason` obligatorio y, opcional, `corrected_by`. La
+original queda intacta. La versión **vigente** de una posición es la punta de la
+cadena (la que ninguna otra corrige); toda la lectura de métricas, validación y
+listados usa solo las vigentes, y la auditoría puede ver todas.
+
+Garantías en la base: un índice único parcial permite un solo original por
+posición y una sola corrección por versión (cadena lineal, sin bifurcaciones, y
+solo se puede corregir la punta); un trigger exige que la corrección sea de la
+misma posición. Una corrección **siempre recalcula** con `calculate_trade_result`
+(nunca números a mano, §37.8); si el recálculo coincide con la versión vigente no
+registra nada.
+
+Comandos (la corrección es humana en el bucle: sin `--confirmar` solo simula):
+
+```
+# Simula qué cambiaría (no escribe nada):
+docker compose run --rm app python -m scripts.results corregir --position <UUID> --motivo "error en ..."
+# Aplica la corrección:
+docker compose run --rm app python -m scripts.results corregir --position <UUID> --motivo "error en ..." --autor juan --confirmar
+# Historial de versiones de una operación (auditoría):
+docker compose run --rm app python -m scripts.results versiones --position <UUID>
+```
+
+Migración `f3a2d9c1b4e7`. Decisiones en `claude/decisiones-correccion-trade-result.md`.
+Tests: `tests/unit/test_trade_result_correction_guards.py`,
+`tests/integration/test_trade_result_correction.py`, y casos del CLI en
+`tests/integration/test_results_script.py`.
 
 ### Comandos
 
@@ -1077,6 +1180,16 @@ docker compose run --rm app python -m scripts.results trades                 # o
 docker compose run --rm app python -m scripts.results performance [--days 30]  # recalcula y muestra métricas
 docker compose run --rm app python -m scripts.results validate               # ¿el score discrimina?
 ```
+
+**Medición adicional estratificada por mes (enmienda E4, 2026-10-12).** `validate` imprime, debajo de la
+medición principal de §8.7, una segunda medición: el mismo método de terciles y bootstrap, pero sobre el P&L
+neto de cada operación menos el promedio de su mes de entrada (UTC). Sirve para separar la capacidad del
+score del régimen de mercado: el backtest walk-forward mostró que agrupar trimestres puede dar "discrimina"
+(+0,37 pp en la muestra completa) aunque dentro de casi todos los trimestres no lo haga (4 de 14 positivos).
+Los meses con una sola operación con score se excluyen y se cuentan; si la principal discrimina y la
+estratificada no, el informe avisa de un posible efecto de régimen. No sustituye a la regla de §8.7 ni es una
+puerta automática. También aparece en la página Validación. Definición y limitaciones:
+`claude/enmiendas-al-plan.md` (E4).
 
 `performance` guarda en `performance_metrics`; `validate` no guarda nada. Hasta
 tener ~30 operaciones el resultado de `validate` es solo orientativo
@@ -1090,6 +1203,14 @@ con confirmación en dos pasos: aprobar una entrada pendiente, rechazarla y
 reanudar el sistema tras una pausa por drawdown. Siguen existiendo los comandos de
 terminal (`scripts.entries`, `scripts.system_control`) y hacen lo mismo.
 
+**Aprobar una entrada se confirma con un deslizador (2026-10-15).** Primero "Aprobar
+entrada" muestra el resumen y el aviso de que no se puede deshacer; después, en vez de
+un segundo botón, hay que arrastrar el deslizador hasta el 100 %. Si lo sueltas antes,
+no pasa nada, y "Cancelar" cierra el panel (al reabrirlo empieza en 0 %). Es solo
+presentación: la acción, sus validaciones y los bloqueos (modo solo lectura, archivo
+PARAR, pausa por drawdown) son los mismos. Rechazar entrada y reanudar el sistema siguen
+con su botón "Confirmar" (`slide_to_confirm` en `app/ui/components/confirm_action.py`).
+
 ### Cómo abrirla
 
 ```
@@ -1098,6 +1219,17 @@ docker compose up -d ui
 ```
 
 Y abrir <http://localhost:8501>.
+
+**Con doble clic (Windows, 2026-10-11):** `Abrir interfaz.bat`, en la raíz del proyecto
+(`scripts\abrir_interfaz.ps1`). Se asegura de que Docker Desktop esté corriendo (lo
+levanta y espera hasta 2 minutos), arranca SOLO la base de datos y la interfaz (no el
+scheduler ni ningún ciclo de IA), espera a que responda y abre el navegador. Si la
+interfaz ya estaba en marcha, solo abre el navegador. La primera vez puede tardar unos
+minutos en construir la imagen. `Detener interfaz.bat` detiene únicamente la interfaz
+(no toca la base de datos ni el scheduler). Para tenerlo en el escritorio: clic derecho
+sobre `Abrir interfaz.bat` -> Mostrar más opciones -> Enviar a -> Escritorio (crear
+acceso directo). Es un `.bat` y no un `.exe` a propósito: es texto que puedes leer, no
+no necesita empaquetadores y evita crear un binario sin firmar (Smart App Control ya bloqueó otros binarios en esta máquina).
 
 > **Nota:** la carpeta de páginas se llama `app/ui/paginas/`, no `pages/`, a
 > propósito: Streamlit descubre sola cualquier carpeta `pages/` junto al archivo
@@ -1231,6 +1363,57 @@ Decisiones (cerradas con el usuario el 2026-10-06):
   estado es `MUESTRA_INSUFICIENTE`/`PRELIMINAR`.
 - No hay caché: cada interacción vuelve a leer la base (suficiente para uso
   personal; se añade si se vuelve lenta).
+
+### Acceso remoto seguro con Tailscale (cliente web seguro, 2026-10-13)
+
+Para ver la interfaz —y usar sus tres acciones (aprobar/rechazar entrada,
+reanudar)— desde el celular o fuera del PC, **sin exponer nada a internet**. Es
+una enmienda consciente a §21/§10 del plan (que piden no exponer en la fase
+inicial): se resuelve con una **red privada**, no con un dominio público ni con
+código de login. Decisión y alcance en `claude/decisiones-cliente-web-seguro.md`.
+
+Por qué Tailscale y no OAuth/contraseña/TOTP en la app: cero código de
+autenticación nuevo, cero dependencias nuevas, cero puerto o dominio público — la
+menor superficie de ataque posible (§21, §31, §38). La identidad la pone tu
+tailnet (tus dispositivos); la credencial de escritura **nunca sale de tu PC**.
+
+Montaje (una vez):
+
+1. Instala Tailscale en tu PC (donde corre Docker) y en tu celular; inicia sesión
+   con la MISMA cuenta en los dos. Quedan en tu red privada.
+2. En el panel de Tailscale, habilita **MagicDNS** y los **certificados HTTPS**
+   (necesario para la URL `https://…ts.net`).
+3. Deja la interfaz local corriendo (`Abrir interfaz.bat` o `docker compose up -d ui`;
+   escucha en `127.0.0.1:8501`).
+4. Publica esa interfaz SOLO dentro de tu tailnet, con TLS:
+
+   ```powershell
+   tailscale serve --bg 8501
+   ```
+
+   Imprime una URL del tipo `https://<tu-pc>.<tu-tailnet>.ts.net`, accesible solo
+   desde tus dispositivos. Ábrela en el celular (con Tailscale activo) y tienes la
+   interfaz con sus acciones.
+
+Comandos útiles: `tailscale serve status` (ver qué está publicado) y
+`tailscale serve off` (dejar de publicar).
+
+**IMPORTANTE — nunca uses `tailscale funnel`.** `serve` es privado (solo tu
+tailnet); `funnel` publicaría la interfaz a todo internet, justo lo que §21
+prohíbe. Para este caso siempre `serve`.
+
+Notas:
+
+- Las tres acciones ya quedan registradas en las tablas operativas (la orden
+  aprobada/rechazada, el evento de reanudación): hay rastro de auditoría sin
+  código extra.
+- Si la página carga pero se queda "conectando" (Streamlit tras el proxy), añade
+  al arranque de la UI `--server.enableXsrfProtection=false` (aceptable porque la
+  frontera de seguridad es la tailnet); normalmente no hace falta.
+- La pila pesada que propusiste al inicio (OAuth de Google + contraseña + TOTP)
+  queda para la **Fase 6** (capital real), como prerrequisito duro de esa fase y
+  solo si entonces se decide que la tailnet no basta. Hoy, en paper, no se
+  construye (§29).
 
 ## Orquestación del ciclo diario (Paso 7 del plan)
 
@@ -1401,7 +1584,9 @@ Con ese rol la interfaz **detecta** que no puede escribir (mira el privilegio re
 Aprobar entrada, Rechazar entrada, Reanudar el sistema, Iniciar/Rehacer la entrevista
 y Guardar perfil. Las lecturas funcionan igual. La entrevista del Perfil queda
 deshabilitada en este modo (decisión por defecto: escribe en `perfil_usuario`); las
-acciones se hacen desde la interfaz local, conectada con el usuario de escritura.
+acciones se hacen desde la interfaz local, conectada con el usuario de escritura
+(y, desde 2026-10-13, también desde el celular/PC por Tailscale apuntando a esa
+interfaz local — ver "Acceso remoto seguro con Tailscale").
 
 Crear el rol (idempotente; repetirlo actualiza contraseña y permisos). La contraseña
 del rol se genera en tu PC, vive solo en esa ventana y **debes guardarla en tu
@@ -1432,23 +1617,40 @@ Remove-Item Env:DATABASE_URL, Env:UI_DB_PASSWORD, Env:UI_DATABASE_URL
 
 (Si cierras la ventana sin guardar la contraseña, basta repetir `create_ui_role`: genera una nueva.)
 
-### Copiar tus datos locales a Railway (`scripts.copy_database`)
+### Sincronizar tus datos locales con Railway (`scripts.copy_database`)
 
-Copia **todas** las tablas de la base local a la de Railway, una sola vez. No usa
-`pg_dump`/`pg_restore` porque `velas` es una hipertabla de TimescaleDB (restaurarla así
-exige la misma versión de la extensión). Garantías (si algo falla, no se copia nada):
+Sincroniza **todas** las tablas de la base local con la de Railway. Es
+**re-ejecutable** (tarea #68, 2026-10-13): no exige destino vacío y la puedes
+correr cuantas veces quieras — cada corrida converge el destino hacia el origen.
+No usa `pg_dump`/`pg_restore` porque `velas` es una hipertabla de TimescaleDB
+(restaurarla así exige la misma versión de la extensión).
+
+Estrategia por tabla (se decide sola):
+
+- **Tablas inmutables** (las que tienen un trigger que rechaza cambios: velas
+  cerradas, `trade_results`, `trade_snapshots`, `alertas`, `equity_observaciones`,
+  `eventos_sistema`, `perfil_usuario`, `prefiltro_resultados`): solo se agregan las
+  filas nuevas (`ON CONFLICT DO NOTHING`).
+- **Tablas mutables** (`posiciones`, `ordenes`, `performance_metrics`): se
+  actualizan (`UPSERT`), para reflejar los cambios de estado.
+- **`velas`**: solo las **cerradas**; la vela en curso entra cuando cierra.
+
+Garantías (si algo falla, no se escribe nada):
 
 - Las dos bases deben estar en la **misma migración** y tener las mismas tablas.
-- El destino debe estar **vacío**: nunca sobrescribe ni mezcla.
-- Todo el destino se escribe en **una transacción** y solo se confirma si el conteo de
-  filas de cada tabla coincide con el origen.
-- El origen se lee con una foto consistente; las secuencias de identidad se reajustan.
+- Todo el destino se escribe en **una transacción** y solo se confirma si, al
+  final, el destino es **superconjunto** del origen (ninguna fila del origen falta).
+- Los ids se preservan (no se rompen las claves foráneas); las secuencias se reajustan.
+- El origen se lee con una foto consistente (`REPEATABLE READ`).
 - Sin `--ejecutar` solo informa (simulación, no escribe nada). Nunca imprime las URLs.
 
-**Cuándo copiar:** la copia es de un solo uso (el destino debe estar vacío). Haz la
-simulación cuando quieras; la copia real conviene hacerla en el momento de pasar el
-monitor y el ciclo diario a Railway (Paso 11b), con el monitor y la tarea programada
-locales detenidos, para que no queden datos nuevos sin copiar en tu PC.
+Limitaciones menores: el recibo de entrega de `alertas` y la vela en curso no se
+reflejan en el espejo.
+
+**Cuándo sincronizar:** cuando quieras un respaldo al día. Conviene con el monitor
+y la tarea programada locales detenidos (o aceptando que la vela en curso y algún
+estado muy reciente entren en la siguiente corrida). Puedes programarla tú con el
+Programador de tareas de Windows.
 
 ```powershell
 docker compose run --rm app alembic upgrade head          # la base local, en la última migración
@@ -1456,14 +1658,43 @@ $pw = Read-Host "Contraseña de la BD en Railway (usuario crypto)" -AsSecureStri
 $env:DEST_DATABASE_URL = "postgresql+psycopg://crypto:" + [System.Net.NetworkCredential]::new("", $pw).Password + "@iriguchi.proxy.rlwy.net:11001/crypto_trading?sslmode=verify-ca&sslrootcert=/app/docker/railway-db-server.crt"
 $env:SOURCE_DATABASE_URL = "postgresql+psycopg://crypto:crypto@postgres:5432/crypto_trading"
 docker compose run --rm -e SOURCE_DATABASE_URL -e DEST_DATABASE_URL app python -m scripts.copy_database             # simulación
-docker compose run --rm -e SOURCE_DATABASE_URL -e DEST_DATABASE_URL app python -m scripts.copy_database --ejecutar # copia real
+docker compose run --rm -e SOURCE_DATABASE_URL -e DEST_DATABASE_URL app python -m scripts.copy_database --ejecutar # sincroniza
 $env:DATABASE_URL = $env:DEST_DATABASE_URL
 docker compose run --rm -e DATABASE_URL app python -m scripts.db_summary                                          # comparar conteos
 Remove-Item Env:SOURCE_DATABASE_URL, Env:DEST_DATABASE_URL, Env:DATABASE_URL
 ```
 
-Tests: `tests/integration/test_copy_database.py` (copia completa con identidades,
-simulación, destino no vacío, migraciones distintas, fallo a mitad = nada copiado).
+#### Sincronización diaria sin ventana (20:00 hora de Windows)
+
+Una sola vez, en PowerShell, en la carpeta del proyecto:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\instalar_sync_railway.ps1
+```
+
+- Te pide la contraseña de la base de Railway y la guarda **cifrada con tu usuario de
+  Windows (DPAPI)** en `%LOCALAPPDATA%\CryptoTradingPlatform\railway_db.cred`: fuera del
+  proyecto (nunca llega a Git), ilegible para otro usuario u otro equipo, y no aparece en la
+  tarea ni en ningún registro.
+- Registra la tarea `CryptoTradingPlatform_SyncRailway`: cada día a las 20:00, sin ventana
+  (`wscript //B` + `scripts\sync_railway_oculto.vbs` → `scripts\sync_railway.ps1`). Si Docker
+  Desktop está cerrado lo inicia (espera hasta 180 s). Solo corre con tu sesión abierta y no se
+  pone al día si el equipo estaba apagado a esa hora.
+- Al terminar hace una **simulación** (no escribe en Railway) para comprobar la conexión. Si dice
+  que las migraciones son distintas, migra Railway una vez:
+  `powershell -ExecutionPolicy Bypass -File scripts\sync_railway.ps1 -MigrarRailway`.
+- Cada corrida escribe `logs\sync_railway_<fecha>.log`; la última exitosa deja
+  `logs\sync_railway_ultimo_ok.txt`. Si falla (Docker, red, migraciones distintas, la copia
+  aborta) avisa **una vez por Telegram** y termina con código 1.
+- Comprobar: `(Get-ScheduledTaskInfo -TaskName CryptoTradingPlatform_SyncRailway).LastTaskResult`
+  (0 = bien) y `Get-Content logs\sync_railway_ultimo_ok.txt`.
+- Opciones: `-Hora 21:00`, `-SoloContrasena` (renovar la contraseña), `-Quitar` (borra la tarea;
+  la contraseña cifrada se borra a mano). Manual: `scripts\sync_railway.ps1 [-Simulacion]`.
+
+Tests: `tests/integration/test_copy_database.py` (primera sincronización con
+identidades, simulación, re-ejecución idempotente, UPSERT propaga cambios de filas
+mutables, velas solo cerradas, migraciones distintas, fallo a mitad = nada escrito).
+Decisión en `claude/decisiones-copia-incremental-railway.md`.
 
 ## Avisos por Telegram (Paso 11a-1, 2026-10-07)
 
@@ -1531,6 +1762,34 @@ registra en el log. Las reglas son funciones puras en
 | `BINANCE_CAIDO` / `BINANCE_RESTABLECIDO` | ningún precio durante más de 5 min / vuelve a llegar | episodio |
 | `PAUSA_DRAWDOWN` | el equity llegó a -15 % del pico | pausa |
 | `DISCREPANCIA_RECONCILIACION` | la reconciliación no cuadra y el monitor se detiene | hallazgos y hora UTC |
+| `CICLO_DIARIO_PERDIDO` | el scheduler arrancó pasadas las 00:05 UTC y hoy no hay un ciclo de análisis completo (Paso 11c) | día UTC |
+| `PRESUPUESTO_IA_AGOTADO` | el gasto de IA del día UTC alcanzó el tope diario y el ciclo automático no corrió | día UTC |
+| `SALDO_IA_INSUFICIENTE` | el saldo estimado de Anthropic no alcanza para un ciclo y el ciclo automático no corrió | día UTC |
+| `RESUMEN_CICLO` | un ciclo de análisis terminó (resumen de la corrida; ver abajo) | ciclo |
+| `CICLO_FALLIDO` | un ciclo de análisis no terminó (solo el nombre del error) | instante del fallo |
+
+**Resumen de cada corrida (decisión del usuario, 2026-10-11).** Al terminar cada
+ciclo de análisis llega UN mensaje con: cómo se lanzó (programado 00:05 UTC,
+disparado por candidatos nuevos, o manual), los candidatos evaluados, las
+propuestas con su puntaje, tier y confianza (o, si no hubo, el motivo: el
+pre-filtro no dejó candidatos, todos se excluyeron por calidad de datos, o el
+Consolidador recomendó no invertir con su razón citada), el costo del ciclo y
+el gasto de IA del día frente al tope. Si el ciclo falla llega `CICLO_FALLIDO`
+con el NOMBRE del error (nunca su texto, que podría traer datos que no deben
+viajar a un chat) y un recordatorio de revisar los logs.
+
+- Cubre el ciclo del scheduler (diario y disparado por candidatos nuevos) y el
+  manual (`scripts/run_daily_cycle.py`, también cuando lo lanza
+  `run_daily_cycle.ps1`). El ciclo horario que no encuentra candidatos nuevos NO
+  manda nada (sería un mensaje por hora sin información).
+- Solo informa (P2): no cambia posiciones, órdenes ni reglas de riesgo, y un
+  fallo al guardar o enviar el resumen nunca detiene el ciclo.
+- Sin migración: `alertas.tipo` es VARCHAR sin restricción. Un resumen por
+  ciclo (`dedup_key = resumen-ciclo:<ciclo_id>`): reintentar no lo duplica.
+- Si Telegram no responde, el aviso queda pendiente y se reintenta (hasta 5
+  veces) en el siguiente despacho.
+- Código: `app/domain/rules/cycle_summary.py` (texto),
+  `app/orchestration/cycle_summary.py` (guardado).
 
 **Único efecto operativo:** mientras el último aviso del par Binance sea
 `BINANCE_CAIDO`, `validate_entry` rechaza entradas nuevas con el motivo
@@ -1562,6 +1821,236 @@ Tests: `tests/unit/test_escalation_rules.py`, `tests/integration/test_escalation
 `tests/integration/test_monitor_avisos.py`. No hay migración nueva: usa la tabla
 `alertas` de 11a-1.
 
+## Vigilancia del scheduler (2026-10-12)
+
+Los avisos anteriores salen DESDE el scheduler: si el propio scheduler se cae o
+se congela, no hay quien avise. Esta vigilancia lo cubre con dos piezas que viven
+fuera del scheduler, porque un proceso muerto no puede avisar de su propia muerte.
+El scheduler ya escribía un latido (`.scheduler_heartbeat.json`) cada 5 minutos;
+las dos piezas se apoyan en él.
+
+**1. Vigía local (PowerShell, fuera de Docker) — `scripts/scheduler_watchdog.ps1`.**
+Lee el archivo de latido y, si tiene más de 15 minutos o no existe, avisa una vez
+por Telegram. Avisa de nuevo (recuperado) cuando el latido vuelve a estar fresco,
+y no repite mientras el estado no cambie (guarda `.scheduler_watchdog_state.json`).
+Como corre en Windows y no en Docker, detecta tanto que el proceso murió o se
+congeló como que Docker se detuvo. Punto ciego: si el equipo está apagado o sin
+energía, el Programador de tareas tampoco corre. No necesita Python; lee el token
+de Telegram del `.env`. El umbral de 15 min es el mismo de la regla de dominio
+(`app/domain/rules/heartbeat.py`, `UMBRAL_LATIDO_VENCIDO_MINUTOS`): si se cambia
+uno, cambiar el otro.
+
+Para dejarlo corriendo cada 5 minutos con el Programador de tareas de Windows
+**sin que se vea ninguna ventana**, usa el instalador (una sola vez, en una consola
+PowerShell en la carpeta del proyecto; si Windows pide permisos, ábrela como
+administrador):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\instalar_vigia.ps1
+```
+
+Es idempotente: si la tarea `VigiaScheduler` ya existía (por ejemplo una creada
+antes con ventana visible) la reemplaza. Dos cosas la hacen invisible:
+`-WindowStyle Hidden` y, sobre todo, registrar la tarea con `-LogonType S4U`
+("ejecutar tanto si el usuario inició sesión como si no"), con lo que Windows la
+corre en segundo plano, sin consola y sin guardar tu contraseña. Una tarea normal
+que lanza `powershell.exe` parpadea una consola cada vez aunque se use
+`-WindowStyle Hidden`, porque la ventana se crea antes de poder ocultarla. Para
+quitarla: `powershell -ExecutionPolicy Bypass -File scripts\instalar_vigia.ps1 -Quitar`.
+Si Windows responde «Acceso denegado» al registrar con S4U (pide administrador), el
+instalador lo detecta y registra la tarea con `scripts\vigia_oculto.vbs`: `wscript.exe`
+no crea consola y arranca PowerShell oculto, así que tampoco hay parpadeo y no hace
+falta ser administrador; solo corre mientras tu sesión de Windows esté abierta. Con
+`-SinAdmin` se salta directamente al lanzador. Para comprobar que corre: `Get-ScheduledTask -TaskName VigiaScheduler | Get-ScheduledTaskInfo`
+(`LastTaskResult` debe ser 0).
+
+Para probarlo de inmediato sin esperar: `powershell -ExecutionPolicy Bypass -File scripts\scheduler_watchdog.ps1`
+con el scheduler apagado debe mandarte el aviso; con el scheduler encendido y un
+latido fresco, no manda nada.
+
+**2. Dead-man's-switch externo — `SCHEDULER_DEADMAN_URL` en `.env`.**
+El scheduler hace un GET a esa URL en cada latido (cada 5 min). Si los pings
+paran, el servicio externo avisa POR SU CUENTA; como vive fuera de tu máquina,
+cubre el caso que el vigía local no puede: equipo apagado o sin energía. Avisa
+con el retraso de su cuenta regresiva (p. ej. 15 min), por eso complementa al
+vigía local, que avisa más rápido. El ping es best-effort (nunca tumba el
+scheduler) y la URL nunca se registra (puede llevar un identificador secreto).
+
+Para configurarlo con healthchecks.io (gratis): crea un check, pon su periodo en
+5 min y su gracia en 10-15 min, copia la "ping URL" y ponla en
+`SCHEDULER_DEADMAN_URL`. Sirve cualquier servicio equivalente, o un endpoint
+propio en Railway, sin cambiar código. Reinicia el scheduler para que lea la
+variable: `docker compose up -d --force-recreate scheduler`.
+
+La decisión de montar ambos niveles está en `claude/decisiones-vigilancia-scheduler.md`.
+Tests: `tests/unit/test_heartbeat_rule.py`, `tests/unit/test_deadman.py`, y los
+casos de latido/ping en `tests/unit/test_scheduler.py`. El vigía de PowerShell no
+tiene test automático (corre en otro entorno); su lógica es corta y refleja la
+regla de dominio ya probada.
+
+## Cálculo incremental de indicadores en el ciclo horario (2026-10-12)
+
+El ciclo horario recalculaba **toda** la historia de indicadores cada hora: por
+cada símbolo cargaba sus ~39.000 velas 1 h, recomputaba los seis indicadores
+sobre todas (~236.000 valores) y mandaba a Postgres un `INSERT ... ON CONFLICT DO
+NOTHING` con todas esas filas, de las que casi todas ya existían. Por 20 símbolos
+eran millones de filas por hora para, en la práctica, una vela nueva por símbolo.
+
+Ahora el ciclo horario calcula solo sobre una **cola** de las últimas 1.000 velas
+(`VELAS_DE_COLA_INCREMENTAL` en `app/data/indicator_pipeline.py`). Medido: el
+cómputo por símbolo pasa de ~390 ms a ~7 ms (unas 55×), y se generan ~42× menos
+filas. El ciclo diario (00:05) sigue recalculando toda la historia, porque es
+quien mantiene la distancia-ATH (máximo expansivo sobre toda la serie).
+
+Lo importante es que **los valores no cambian**: los indicadores de las velas
+nuevas salen idénticos a los de historia completa, a la escala con que se guardan
+(`NUMERIC(30,12)`). Los de ventana fija (SMA, volumen, distancia 90 d) son exactos
+por construcción; los recursivos de Wilder (RSI, ATR) convergen al mismo valor
+porque la cola trae ~928 velas de calentamiento para la vela nueva y bastan ~382
+para los 12 decimales. La zona "fría" del inicio de la cola corresponde a velas ya
+guardadas, que `ON CONFLICT DO NOTHING` nunca sobrescribe. Un test comprueba la
+igualdad exacta (`tests/unit/test_indicator_incremental.py`); hay tests del
+parámetro `tail` en `tests/unit/test_indicator_pipeline.py`, de `get_candles(tail=)`
+en `tests/integration/test_candles_repository.py` y del camino incremental de punta
+a punta en `tests/integration/test_indicator_pipeline_bulk.py`. Decisión en
+`claude/decisiones-indicadores-incremental.md`.
+
+## Apertura automática de posiciones paper y operaciones de observación (2026-10-12)
+
+**Por qué.** Hasta el 2026-10-12 nada abría posiciones por sí solo: el scheduler
+corría el ciclo y guardaba propuestas, y abrir una entrada exigía lanzar a mano
+`scripts.entries open --ciclo-id`. Además la estrategia casi nunca produce una
+entrada (exige puntaje ponderado ≥ 55 y el Consolidador suele recomendar no
+invertir). Resultado: semanas de corridas, costo de API, **cero operaciones** y
+ninguna información sobre si el score predice (que es el objetivo de la v1).
+
+**Qué hace ahora.** Al terminar cada ciclo de análisis (el diario de las 00:05 y el
+disparado por candidatos nuevos), el scheduler ejecuta una fase nueva,
+`app/orchestration/entry_opening.py::abrir_entradas_del_ciclo`, siempre con las
+mismas reglas de riesgo del código (`app/domain/rules/risk.py`):
+
+1. **Estrategia** (sin cambios de regla): las propuestas del ciclo que calificaron.
+   `NORMAL` (≥ 55) entra sola con 100 USD; `MAYOR_RIESGO` (50–55) queda pendiente
+   de tu aprobación. Esto solo *conecta* lo decidido en el Paso 8.
+2. **Observación** (nuevo): cada candidato del pre-filtro (estado `CANDIDATO`,
+   puntaje ≥ 45, máximo 5 por ciclo) que la estrategia no abrió abre una posición
+   paper de **100 USD**, **sin IA**, con stop −8 %, objetivo +12 % y trailing 6 %
+   como cualquier otra. Su "score" es el del **pre-filtro**.
+
+**Cómo se mantienen separadas (decisión del usuario):**
+
+- **Cupos propios**: 4 observaciones abiertas y 3 por día, aparte de los de la
+  estrategia (4 abiertas, 3 por día). Un símbolo abierto en cualquier serie bloquea
+  otra entrada en ese símbolo (índice único de la base).
+- **Fuera del equity**: no cuentan para el equity, el pico ni la pausa por drawdown
+  de −15 %, ni generan avisos de Telegram de escalamiento. El monitor sí las vigila
+  y cierra (stop, objetivo, trailing).
+- **Serie aparte al medir**: `scripts.results validate` imprime la validación de la
+  estrategia, luego la de observación y luego una comparación conjunta (marcada
+  como no válida porque mezcla dos escalas de puntaje). `trades` etiqueta cada
+  operación; `performance --serie estrategia|observacion|todas` (solo la de
+  estrategia se guarda en `performance_metrics`, que no tiene columna de serie). La
+  interfaz muestra la serie en Operaciones, Posiciones, Decisiones, Performance y
+  Validación.
+- **La serie se deriva, no se duplica**: una operación es de observación si la
+  propuesta que la originó tiene `tier_entrada = 'OBSERVACION'`
+  (`app/repositories/series.py`). No hay columna nueva en posiciones ni órdenes.
+
+**Trazabilidad (P3).** La fila de `propuestas` de una observación no inventa
+análisis: tesis e invalidación son textos fijos que dicen que no hubo IA, no tiene
+factores ni fuentes y `calidad_datos` queda en `NULL` (una restricción de la base
+solo lo permite para el tier `OBSERVACION`). Su `decision_snapshot` congela lo que
+el pre-filtro sabía ese ciclo (componentes del puntaje, versión de la fórmula, vela
+base). Solo se guarda la propuesta de una observación que de verdad se abre (la
+selección se hace primero en seco con la misma función pura que `open_entries`).
+
+**Idempotencia (P5).** El id de la propuesta de observación es determinista (uuid5
+de ciclo + símbolo) y el `client_order_id` de la orden sale de él: reintentar la
+fase tras un reinicio no duplica propuesta, orden ni posición. Si la reconciliación
+encuentra discrepancias, no se abre nada. Si la fase falla, el análisis ya quedó
+guardado: el ciclo **no** se marca como fallido, el error se registra y el resumen
+de Telegram lo dice.
+
+**Resumen de Telegram.** Ahora incluye una sección "Posiciones paper" con cada
+candidato: abierta, pendiente de tu aprobación, o no abierta con su motivo.
+
+**Comandos.** `python -m scripts.entries open --ciclo-id <UUID>` usa la misma
+función (estrategia + observación) y `list` etiqueta la serie de cada posición.
+Aplica la migración nueva a las dos bases: `python -m scripts.migrate_all`
+(`a7c2e5d1f9b3`: `propuestas.calidad_datos` admite `NULL` solo en observaciones).
+
+**Limitaciones conocidas.**
+
+- No hay salida por tiempo: una observación se queda abierta hasta que toca stop,
+  objetivo o trailing; puede tardar y ocupar un cupo.
+- Una observación abierta en el símbolo X impide una entrada de estrategia en X
+  mientras siga abierta (se informa como `SIMBOLO_YA_ABIERTO`).
+- Si el tope diario de IA o la guardia de saldo impiden iniciar el ciclo, no hay
+  pre-filtro nuevo y por tanto tampoco observaciones ese día.
+- El puntaje de observación y el de la estrategia son escalas distintas: no se
+  comparan salvo en la vista conjunta, que es solo orientativa.
+- Las observaciones sesgan la muestra hacia candidatos con tendencia y volumen
+  (el pre-filtro). Medir si el score predice *dentro* de ese universo es válido;
+  extrapolarlo a todo el mercado no.
+
+Pruebas: `tests/unit/test_observation_rules.py`, `tests/integration/test_entry_opening.py`,
+`tests/unit/test_cycle_summary_rules.py` y `tests/unit/test_scheduler.py`.
+
+
+### Aviso de Telegram al abrir una posición (2026-10-12)
+
+Cada vez que se abre una posición paper —estrategia automática, observación o
+aprobación manual (UI o `scripts.entries approve`)— se deja una alerta
+`POSICION_ABIERTA` en `alertas` y el despachador la envía a Telegram: símbolo,
+origen, unidades, precio, total de compra, comisión, stop, objetivo y puntaje.
+Es solo un aviso (P2): se escribe en un SAVEPOINT dentro de la misma transacción
+de la entrada, tiene `dedup_key = posicion-abierta:<id>` (reintentar no lo
+duplica) y si falla se registra y la entrada sigue. Se envía en cuanto el
+monitor despacha pendientes (≤ 1 minuto). No requiere migración; las posiciones
+abiertas antes de este cambio no reciben aviso retroactivo.
+
+## Recuperación al arrancar: morir y revivir (Paso 11c, 2026-10-10)
+
+El principio P5 pide que un reinicio, un corte de luz o de internet no deje
+posiciones fantasma, órdenes duplicadas ni resultados inconsistentes. Casi todo
+eso ya lo garantizaban las transacciones atómicas y los `client_order_id`
+deterministas (Pasos 8 y 9); 11c cierra lo que faltaba al **arrancar el
+scheduler** (`app/orchestration/lifecycle.py`):
+
+1. **Un solo scheduler a la vez.** Antes de nada toma un candado de Postgres
+   (`pg_try_advisory_lock`, `app/repositories/process_lock.py`) en una conexión
+   propia. Si otro scheduler ya vive, sale con código 1 en lugar de duplicar
+   ciclos y gasto de IA. Si el proceso muere (hasta con `kill -9`), la conexión
+   se cae y Postgres libera el candado solo: no hay archivos que limpiar. Si ni
+   siquiera puede consultar la base, también sale; Docker lo reintenta
+   (`restart: unless-stopped`).
+2. **Ciclos a medias.** Un ciclo de análisis sin `finished_at` es de un proceso
+   que murió. Se marca como **interrumpido** (conserva su última etapa, se le
+   pone fin y un mensaje, y su costo pasa a ser lo que realmente se gastó en
+   IA según `llamadas_ia`). No se relanza ni se borra.
+3. **Reconciliación.** Se reconcilia `posiciones` contra `ordenes`; si no
+   cuadra queda un aviso `DISCREPANCIA_RECONCILIACION`. No corrige nada: el
+   monitor y la apertura de entradas se quedan bloqueados (cada uno reconcilia
+   antes de actuar) hasta que lo resuelvas a mano.
+4. **Ciclo diario perdido.** Si ya pasaron las 00:05 UTC y hoy no hay un ciclo
+   completo, avisa (`CICLO_DIARIO_PERDIDO`, una vez por día aunque se reinicie
+   varias veces). **No lo relanza solo** (decisión del 2026-10-10): gastaría
+   IA sin que lo pidas. Lánzalo a mano con `scripts/run_daily_cycle.py` si lo
+   quieres.
+
+Los pasos 2-4 corren cada uno en su transacción; si uno falla se registra y el
+arranque sigue (nunca se deja de vigilar las posiciones abiertas). Los avisos se
+envían a Telegram justo después.
+
+**Qué se prueba** (`tests/integration/test_recovery.py`, contra Postgres real,
+con sesiones nuevas por "proceso"): muerte antes de confirmar un stop (la
+posición sigue entera, el reinicio vende **una** vez y al precio actual, un solo
+`trade_result`), reintento tras TP parcial (no vende otra vez), entrada que
+muere antes del commit (no deja posición fantasma), reintento de la misma
+entrada tras reinicio (sin duplicados), ciclos huérfanos, aviso único del ciclo
+perdido, bloqueo por discrepancia (monitor, abrir y aprobar) y el candado con un
+`SIGKILL` real. Reglas puras: `tests/unit/test_recovery_rules.py`.
+
 ## Estudio offline de la hipótesis H1: soporte + RSI bajo (2026-10-08, protocolo v2)
 
 Pregunta del usuario: ¿"precio cerca de un soporte + RSI de 4h en sobreventa" anticipa una recuperación? **No toca el score vivo, ningún prompt ni ninguna regla**: es un estudio **exploratorio** de solo lectura con protocolo pre-registrado en el repositorio (`docs/protocolo-h1-soporte.md`, v2), fijado antes de ver resultados. El script imprime la huella SHA-256 del protocolo para poder verificar que no cambió entre el commit y la corrida.
@@ -1582,7 +2071,178 @@ python -m scripts.study_support_h1                     # ~1-2 min con los 20 sí
 
 Código: `app/domain/rules/support.py` (definiciones), `app/data/support_study.py` (estudio puro), `app/data/exit_simulation.py`, `scripts/study_support_h1.py`. Pruebas: `tests/unit/test_support_rules.py` (incluye la prueba de ausencia de look-ahead), `tests/unit/test_support_study.py` (incluye una prueba que ata los parámetros del código al texto del protocolo) y `tests/unit/test_exit_simulation.py`. Los parámetros no tienen opciones de línea de comandos a propósito: cambiarlos tras ver resultados invalida el estudio.
 
+## Backtest walk-forward del score cuantitativo (Fase C, 2026-10-11)
+
+Responde la pregunta central de la Fase 5 del plan con datos históricos y **costo cero**: ¿las entradas con score alto rinden mejor que las de score bajo, y se mantiene **fuera de la muestra**? Solo lectura: no escribe en la base, no llama a la IA y no cambia el score ni ninguna regla.
+
+```bash
+python -m scripts.backtest_walk_forward                                  # ventanas 12/3/3 meses, los 20 símbolos
+python -m scripts.backtest_walk_forward --entrenamiento 9 --prueba 3 --paso 3
+```
+
+Requiere el backfill de ~2 años en 1h y 1d y el historial reparado (igual que el estudio H1).
+
+**Decisiones del usuario (2026-10-11):** ventanas por defecto entrenamiento 12 m / prueba 3 m / paso 3 m (parámetros de análisis, no reglas de riesgo; si los cambias tras ver resultados es otra evaluación); solo el score **determinista** (la IA queda fuera: sin costo, sin look-ahead, reproducible; el resultado valida esa parte del score y nada más).
+
+**Cómo funciona:** cada día elegible y cada moneda es una entrada hipotética a las 00:00 UTC con el score cuantitativo de producción (`calculate_quantitative_score`, mismos indicadores). El desenlace se simula con las reglas de salida del motor paper (stop -8 %, cierre 50 % en +12 %, trailing 6 %, comisión 0,1 % por lado). La medición es la del plan (8.7): tercio superior vs. inferior por score, IC 95 % por bootstrap (núcleo único `bootstrap_diferencia_de_terciles`, compartido con la validación de operaciones reales). El veredicto sale de la prueba **agregada** fuera de muestra: `DISCRIMINA` solo con ≥ 30 observaciones y límite inferior del IC > 0.
+
+**Limitaciones que el informe imprime siempre:** (1) la fórmula tiene constantes fijas, así que el entrenamiento no calibra nada: se muestra como referencia dentro de la muestra para compararla con la de fuera; (2) los 180 días de calentada de la SMA 180 recortan el historial elegible (con 2 años caben ~2 pliegues de 12+3, no 4; con `--entrenamiento 9` caben ~3); (3) las observaciones de monedas distintas el mismo día y las de días seguidos se solapan, por lo que el IC es optimista; (4) las observaciones sin desenlace conocido se excluyen y se cuentan, nunca se rellenan; (5) no incluye IA ni eventos.
+
+Sin look-ahead: el score del día D usa solo velas diarias cerradas antes de D (hay un test que recalcula con la serie recortada y exige el mismo score), el desenlace mira solo velas de 1h posteriores, y los datos de entrenamiento cuyo desenlace cae dentro de la ventana de prueba se **purgan**.
+
+Código: `app/domain/rules/walk_forward.py` (reglas y veredicto), `app/data/backtest_study.py` (observaciones), `scripts/backtest_walk_forward.py`. Pruebas: `tests/unit/test_walk_forward_rules.py`, `tests/unit/test_backtest_study.py`, `tests/unit/test_backtest_walk_forward_script.py`.
+
+### Diagnósticos exploratorios del backtest (2026-10-12)
+
+El primer informe real dio `NO_DISCRIMINA` y, fuera de muestra, con la relación invertida (tercio alto peor que el bajo). Para entender por qué, sin tocar el score:
+
+```bash
+python -m scripts.backtest_diagnosticos        # varios minutos con los 20 símbolos
+```
+
+Cuatro diagnósticos, solo fuera de muestra: (1) **sesgo de censura**: cuántas posiciones sin cerrar hay por tercil y la medición repetida valorándolas al último precio; (2) **por factor**: el tercil con el sub-score de tendencia, volumen, distancia al máximo de 90 d y RSI por separado; (3) **rango dentro del día**: el score reemplazado por su percentil entre las monedas del mismo día (cada día aporta por igual a cada tercil, lo que separa el efecto del régimen de mercado; mínimo 10 monedas por día, parámetro de análisis declarado); (4) **ventanas 9/3/3**. Los intervalos son del 95 % sin corrección por comparaciones múltiples. **Son exploratorios: no se reajusta la fórmula con ellos** (plan 8.7); un cambio sería una estrategia nueva, a validar con datos no vistos.
+
+Código: `app/domain/rules/walk_forward_diagnostics.py`, `scripts/backtest_diagnosticos.py`; `exit_simulation.retorno_marcado_a_mercado` comparte el recorrido con `simular_salida`. Pruebas: `tests/unit/test_walk_forward_diagnostics.py` y ampliaciones de `test_exit_simulation.py`, `test_backtest_study.py` y `test_backtest_walk_forward_script.py`.
+
+### Ampliar el historial hacia atrás y repetir el backtest (protocolo pre-registrado, 2026-10-12)
+
+Tras el resultado negativo, la decisión fue comprobar si es propio de 2025-2026 usando datos que no se han visto. El protocolo completo (qué no cambia, cómo se leerá cada resultado) quedó escrito **antes** de bajar los datos en `claude/decisiones-walk-forward.md` del proyecto.
+
+```bash
+# 1) Descargar solo el tramo viejo (de hace ~5 años a hace ~2 años); 1h y 1d bastan para el backtest
+python -m scripts.backfill_candles --days 1825 --hasta-dias 740 --timeframes 1h,1d
+# 2) Evaluación PRIMARIA: solo decisiones anteriores a 2025-03-19 (época no vista)
+python -m scripts.backtest_walk_forward --hasta-fecha 2025-03-19
+python -m scripts.backtest_walk_forward --hasta-fecha 2025-03-19 --entrenamiento 9
+python -m scripts.backtest_diagnosticos --hasta-fecha 2025-03-19
+# 3) Evaluación SECUNDARIA: toda la muestra
+python -m scripts.backtest_walk_forward
+```
+
+`--days` es hasta dónde retroceder y `--hasta-dias` dónde parar, ambos desde hoy (`--hasta-dias` debe ser menor que `--days`); las monedas listadas después de 2021 simplemente tendrán menos historia. Efecto secundario: `DISTANCIA_ATH` (máximo sobre todo lo almacenado) sube para monedas cuyo máximo de 2021 fue mayor; no entra al score ni al pre-filtro, pero los agentes la ven como contexto. La fórmula **no se modifica** con estos datos.
+
+## Experimento Kronos: señal competidora (enmienda E6, 2026-10-15)
+
+**Qué es.** [Kronos](https://github.com/shiyu-coder/Kronos) es un modelo de
+fundación para velas (MIT). Se prueba como *otra señal* contra la que contrastar
+el score determinista. **No entra en compras, score, riesgo ni ejecución** y no
+modifica el plan: vive aislado en `app/experiments/` y en su propia imagen Docker.
+El plan completo y las decisiones aprobadas están en el documento del proyecto
+`plan-kronos-senal-competidora.md`.
+
+**Decisiones aprobadas (2026-10-15).** Modelo `Kronos-small` (24,7 M) · fecha de
+corte **2024-07-01** (Kronos se preentrenó con datos de Binance hasta junio de
+2024: nada anterior mide predicción) · lookback 400 velas de 1 h, horizonte 24
+velas · solo OHLC (el preentrenamiento de cripto no tuvo volumen) · CPU (las GPU
+AMD del equipo no tienen soporte ROCm en Docker/WSL2).
+
+**Fases.** K0 viabilidad (hecho) → K1 backtest pre-registrado (en curso) → K2 sombra hacia
+adelante → K3 lectura. Pasar de una a otra exige fijar antes los parámetros y los
+criterios; usarlo en producción exigiría una enmienda nueva.
+
+**K0 — qué hace y qué NO hace.** Mide, en este equipo, cuánto tarda un pronóstico,
+si es reproducible con semilla y qué fracción de contextos se descarta por falta
+de velas. Añade un chequeo de cordura contra "no cambia". **No saca conclusiones
+de rendimiento** (pocas fechas, monedas correlacionadas).
+
+**Seguridad (P2/P4).** Código de terceros: se fija por *commit* en el `Dockerfile`;
+los pesos se fijan por revisión + SHA-256 en `data/kronos/pesos.lock.json` (se
+versiona) y después se usan **sin red** (`HF_HUB_OFFLINE=1`). El contenedor no
+recibe claves de Binance, Anthropic ni Telegram; la herramienta abre la base en
+transacción `READ ONLY` y no escribe nada. Una prueba de arquitectura impide que
+cualquier capa de `app/` importe `app.experiments`.
+
+**Cómo ejecutarlo** (PowerShell, en la carpeta del proyecto):
+
+```powershell
+docker compose up -d                                   # la base debe estar arriba
+docker compose --profile kronos build kronos           # una vez (descarga PyTorch CPU)
+docker compose --profile kronos run --rm kronos python -m scripts.kronos_k0 --descargar
+docker compose --profile kronos run --rm kronos python -m scripts.kronos_k0 --fechas 12 --trayectorias 8
+```
+
+El segundo paso fija los pesos (único con red) y escribe `data/kronos/pesos.lock.json`;
+el tercero mide y guarda `data/kronos/k0-<fecha>.json`. Comprobación del cableado
+con un modelo diminuto de pesos aleatorios (sin red ni pesos reales):
+
+```powershell
+docker compose --profile kronos run --rm kronos python -m pytest tests/integration/test_kronos_adapter.py
+```
+
+Los parámetros de K0 por defecto (8 trayectorias, T 1.0, top_p 0.9) son los mismos
+que luego se congelaron para K1.
+
+**K0 — resultado (2026-10-15).** Viable: carga sin red desde pesos fijados, es
+reproducible con la semilla, tarda ~16 s por pronóstico de 8 trayectorias en CPU y
+el ranking de monedas es estable entre muestreos (correlación de rangos 0,94). Un
+hallazgo corregido: con un lote compartido el pronóstico de una moneda cambiaba
+según sus acompañantes; ahora cada pronóstico usa una semilla derivada de
+(semilla base, símbolo, fecha) y se calcula solo.
+
+### K1 — backtest histórico pre-registrado
+
+Protocolo congelado: `docs/protocolo-k1-kronos.md` (v1, aprobado 2026-10-15).
+Parámetros fijos en el código (no son argumentos): 8 trayectorias, lookback 400,
+horizonte 24, T 1.0, top_p 0.9, semilla 20261015; fechas de decisión desde 2024-07-01
+cada 3 días (~279 fechas × 20 monedas ≈ 5.600 pronósticos ≈ 25 h de CPU) más un
+diagnóstico pre-corte (cada 15 días entre 2023-07 y 2024-06).
+
+```powershell
+# 1) Una vez: crear la tabla (en tu base real)
+docker compose run --rm app alembic upgrade head
+
+# 2) Generar (reanudable; repite el MISMO comando hasta que diga «Generación completa»)
+docker compose --profile kronos run --rm kronos python -m scripts.kronos_k1_generar --max-minutos 480
+
+# 3) Evaluar (solo lee; se puede lanzar en cualquier momento, pero con la generación
+#    incompleta el resultado es PARCIAL y no es el veredicto del protocolo)
+docker compose --profile kronos run --rm kronos python -m scripts.kronos_k1_evaluar
+```
+
+- La primera vez, `kronos_k1_generar` fija las fechas en `data/kronos/k1_fechas.json`
+  junto con la huella SHA-256 del protocolo. **Versiona ese archivo.** Si el protocolo
+  se modifica después, el generador se niega a continuar (sería otro experimento).
+- Cada pronóstico se guarda al calcularse en `kronos_forecasts` (solo-agregar; sin
+  claves foráneas hacia tablas operativas). Si cortas el proceso, no se pierde lo hecho.
+- `kronos_k1_evaluar` imprime el RankIC diario de Kronos y de las líneas base (score v1,
+  momentum 24 h y 7 d) sobre las mismas fechas y monedas, el IC95 por bloques de fechas,
+  la prueba de permutación, los terciles de §8.7 y la versión E4, y el veredicto del
+  protocolo (`NO_CONCLUYENTE`, `NO_DISCRIMINA`, `DISCRIMINA_NO_AÑADE` o
+  `DISCRIMINA_Y_AÑADE`). Incluso el mejor veredicto solo justifica pasar a K2 (sombra
+  hacia delante): **nada de esto entra en compras, score ni pre-filtro.**
+- Reiniciar el experimento a propósito (por ejemplo, si cambias los pesos): `TRUNCATE
+  kronos_forecasts` (un trigger impide UPDATE y DELETE fila a fila).
+
+**Generar por las noches, sin ventana (opcional).** La generación completa son unas 28 h
+(incluye el diagnóstico pre-corte) y cada tanda manual se detiene a las 8 h. Para que se
+lance sola de lunes a viernes a las 00:00 (hora de Windows), una vez:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\instalar_k1_noche.ps1
+```
+
+Cada tanda (`scripts\k1_generar_noche.ps1`, sin ventana) abre Docker Desktop si hace falta,
+**no arranca si ya hay un contenedor de Kronos corriendo** (p. ej. una tanda manual), pide a
+Windows que no suspenda el equipo mientras corre y guarda su salida en
+`logs\kronos_k1_<fecha>.log`. Si el equipo estaba apagado a las 00:00, esa noche se omite.
+Cuando el generador diga «Generación completa» las tandas siguientes terminan en segundos;
+quita la tarea con `... instalar_k1_noche.ps1 -Quitar`. Comprobar:
+`(Get-ScheduledTaskInfo -TaskName CryptoTradingPlatform_K1_Noche).NextRunTime` y
+`.LastTaskResult` (0 = bien). Opciones: `-Hora HH:mm`, `-MaxMinutos N`.
+
+**Qué no hace todavía:** K2 (sombra hacia delante), K3 (lectura final) ni una página en la
+interfaz.
+
 ## Tarea diaria programada (Windows)
+
+> **Estado (2026-10-15): tarea DESACTIVADA, reemplazada por el scheduler.** Desde el Paso 11b
+> el ciclo diario lo corre el servicio `scheduler` de Docker a las 00:05 UTC (19:05 en
+> Colombia), con tope diario de IA, guardia de saldo, candado y avisos. Esta tarea de Windows
+> (10 AM) es anterior, no respeta esas guardias y, con las dos activas, había dos ciclos al
+> día (≈1 USD/día en lugar de ≈0,5). Se dejó registrada pero desactivada
+> (`Disable-ScheduledTask -TaskName CryptoTradingPlatform_DailyCycle`; reversible con
+> `Enable-ScheduledTask`). Úsala solo si el PC no está encendido a las 19:05; el script
+> `scripts\run_daily_cycle.ps1` sigue sirviendo para correr un ciclo a mano.
 
 El ciclo diario no necesita que ninguna IA lo arranque ni lo supervise —
 es un script determinista (principio P2 del plan). Se registra en el
@@ -1835,6 +2495,8 @@ app/
 ├── main.py              # punto de entrada (comandos healthcheck, fetch-candles, calculate-indicators)
 ├── config.py             # configuración tipada (pydantic-settings)
 ├── logging_config.py     # logging estructurado en JSON
+├── experiments/
+│   └── kronos/            # E6: contexto sin look-ahead, pesos fijados, adaptador y K0 (aislado, ver sección Kronos)
 ├── db/
 │   ├── base.py            # Base declarativa de SQLAlchemy
 │   ├── session.py         # engine y fábrica de sesiones
@@ -1914,6 +2576,8 @@ scripts/
 ├── backfill_candles.py          # CLI: backfill histórico completo (velas en curso vs. cerradas)
 ├── repair_partial_candles.py    # CLI: repara velas congeladas a medias (simulación por defecto)
 ├── study_support_h1.py          # CLI: estudio offline H1 (soporte + RSI 4h), protocolo v2 en docs/
+├── backtest_walk_forward.py     # CLI: backtest walk-forward del score cuantitativo (Fase C)
+├── backtest_diagnosticos.py     # CLI: diagnósticos exploratorios del backtest (censura, factores, rango/día, 9/3/3)
 ├── calculate_indicators.py      # CLI: cálculo masivo de indicadores
 ├── verify_indicators.py         # CLI: verificación de integridad de indicadores
 ├── seed_events.py                # CLI: carga/actualiza el catálogo de eventos
@@ -1922,7 +2586,13 @@ scripts/
 ├── run_agent_demo.py             # CLI: un agente, datos de ejemplo — consume API de pago
 ├── run_agent_demo_full_cycle.py  # CLI: 4 agentes, un símbolo real, sin persistir — consume API de pago
 ├── run_daily_cycle.py            # CLI: ciclo real completo, persiste todo — consume API de pago; explica el "sin propuestas"
-└── run_daily_pipeline.py         # CLI: encadena backfill (--days 5) + indicadores + run_daily_cycle
+├── run_daily_pipeline.py         # CLI: encadena backfill (--days 5) + indicadores + run_daily_cycle
+├── instalar_k1_noche.ps1         # Registra la tarea nocturna (lun-vie 00:00) de la generación de K1, sin ventana
+├── k1_generar_noche.ps1          # Una tanda nocturna de K1 (Docker listo, sin duplicar generador, sin suspender)
+├── k1_noche_oculto.vbs           # Lanzador sin ventana de esa tanda
+├── instalar_vigia.ps1            # Registra la tarea de Windows del vigía, sin ventana (S4U o lanzador .vbs)
+├── vigia_oculto.vbs              # Lanzador sin ventana del vigía (alternativa que no pide administrador)
+└── scheduler_watchdog.ps1        # Vigía local (PowerShell, fuera de Docker): avisa por Telegram si el scheduler no da señales
 data/
 └── events/                # catálogo de eventos (*.json) — ver data/events/README.md
 tests/
@@ -2043,6 +2713,10 @@ puede y no puede hacer cada capa.
 - Interfaz Streamlit (Paso 10a y 10c): `app/ui/` (8 páginas, componentes,
   catálogo de definiciones versionado) sobre `app/services/` (lecturas en
   transacción `READ ONLY`; acciones manuales con confirmación). Ver "Interfaz local".
+- Backtest walk-forward del score cuantitativo determinista (Fase C): `python -m scripts.backtest_walk_forward`. Ver "Backtest walk-forward". Todavía NO valida la parte de IA ni el contexto de eventos.
+- Apertura automática de posiciones paper al terminar cada ciclo de análisis y
+  serie de operaciones de **observación** medida aparte (2026-10-12; ver la
+  sección "Apertura automática de posiciones paper y operaciones de observación").
 
 ## Qué NO está implementado
 

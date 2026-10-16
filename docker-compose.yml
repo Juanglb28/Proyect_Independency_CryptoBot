@@ -56,6 +56,30 @@ services:
     # `docker compose run --rm app <comando>`.
     command: ["tail", "-f", "/dev/null"]
 
+  scheduler:
+    # Proceso scheduler (Paso 11b): monitor (60s), ciclo horario (:05),
+    # ciclo diario (00:05 UTC), heartbeat (5 min). Es un proceso de larga
+    # duración que orquesta todas las tareas periódicas del sistema.
+    # Necesita TODAS las credenciales: Binance (precios en tiempo real),
+    # Anthropic (agentes IA del ciclo diario), Telegram (alertas).
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: crypto-trading-platform:dev
+    container_name: crypto_trading_scheduler
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://crypto:crypto@postgres:5432/crypto_trading
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: ["python", "-m", "app.orchestration.scheduler"]
+    restart: unless-stopped
+
   ui:
     # Interfaz Streamlit (Paso 10): lecturas en transacción READ ONLY; las únicas
     # escrituras son las acciones manuales de `app/services/commands.py`. Misma imagen que `app`.
@@ -98,6 +122,36 @@ services:
       - "127.0.0.1:8501:8501"
     command: ["streamlit", "run", "app/ui/app.py"]
     restart: unless-stopped
+
+  kronos:
+    # Experimento Kronos (enmienda E6): señal competidora EN SOMBRA. No arranca con
+    # `docker compose up`; solo se usa con el perfil:
+    #   docker compose --profile kronos build kronos
+    #   docker compose --profile kronos run --rm kronos python -m scripts.kronos_k0 --descargar
+    #   docker compose --profile kronos run --rm kronos python -m scripts.kronos_k0
+    #   K1 (protocolo docs/protocolo-k1-kronos.md): scripts.kronos_k1_generar / kronos_k1_evaluar
+    # SEGURIDAD (P2/P4): sin `env_file`, sin claves de Binance/Anthropic/Telegram, `.env`
+    # tapado con un archivo sin secretos, sin puertos publicados. Solo recibe DATABASE_URL.
+    # K0 y la evaluación de K1 abren la base en transacción READ ONLY; la ÚNICA escritura es
+    # `scripts.kronos_k1_generar`, y solo en la tabla `kronos_forecasts` (sin claves foráneas
+    # hacia tablas operativas). Imagen aparte (PyTorch + código de terceros fijado por commit):
+    # las imágenes operativas no cambian.
+    profiles: ["kronos"]
+    build:
+      context: .
+      dockerfile: Dockerfile.kronos
+    image: crypto-trading-platform-kronos:dev
+    container_name: crypto_trading_kronos
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://crypto:crypto@postgres:5432/crypto_trading
+    volumes:
+      - .:/app
+      - ./docker/ui-sin-secretos.env:/app/.env:ro
+    working_dir: /app
+    command: ["python", "-m", "scripts.kronos_k0", "--help"]
 
   ui-railway:
     # Misma interfaz, pero conectada a la base de RAILWAY con el rol de SOLO

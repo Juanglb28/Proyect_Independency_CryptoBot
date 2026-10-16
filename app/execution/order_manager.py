@@ -41,6 +41,12 @@ Garantías (P5):
   2026-10-04), no sobre el precio del análisis. El `decision_snapshot` de la
   propuesta no se toca nunca.
 
+Reconciliación (Paso 11c; sección 9 del plan: "discrepancia en la reconciliación:
+bloquear operación hasta resolver"): `open_entries` y `approve_pending_entry`
+reconcilian el estado ANTES de hacer nada. Si algo no cuadra no se abre ninguna
+entrada (ni se expira nada: se devuelve sin escribir). Rechazar sigue
+permitido: solo libera cupos y no abre nada.
+
 Aprobar una entrada mientras el sistema está pausado por drawdown se BLOQUEA
 (confirmado por el usuario el 2026-10-05). La pausa significa "no se abren
 entradas nuevas"; aprobar es abrir una, aunque su cupo se reservara antes de
@@ -59,26 +65,28 @@ from enum import Enum
 
 from sqlalchemy.orm import Session
 
-from app.domain.enums import EstadoOrden, IntencionOrden, LadoOrden, TierEntrada, TipoAlerta
+from app.domain.enums import EstadoOrden, IntencionOrden, LadoOrden, SerieOperacion, TierEntrada, TipoAlerta
 from app.domain.rules.execution import (
     CandidatoEntrada,
     EntradaDescartada,
     select_entries,
 )
-from app.domain.rules.escalation import binance_figura_caido
+from app.domain.rules.escalation import binance_figura_caido, mensaje_posicion_abierta
 from app.domain.rules.results import serialize_prices
 from app.domain.rules.risk import (
     SituacionDeCupos,
     calculate_entry_quantity,
     calculate_fee,
     calculate_initial_levels,
+    calculate_position_value,
     sistema_pausado,
 )
 from app.execution.emergency_stop import EmergencyStop, FileEmergencyStop
 from app.execution.price_source import PriceSource, PriceUnavailable
+from app.execution.reconciliation import Discrepancia, reconcile
 from app.execution.reference_prices import fetch_reference_prices
 from app.execution.results_recorder import record_entry
-from app.repositories.alertas import get_ultima_alerta_de_tipos
+from app.repositories.alertas import AlertaRow, append_alerta, get_ultima_alerta_de_tipos
 from app.repositories.analysis import get_propuesta, get_propuestas_de_ciclo
 from app.repositories.orders import (
     OrdenRow,
@@ -114,6 +122,7 @@ class ResultadoAprobacion(str, Enum):
     NO_PENDIENTE = "NO_PENDIENTE"
     BLOQUEADA_POR_PAUSA = "BLOQUEADA_POR_PAUSA"
     BLOQUEADA_POR_PARADA = "BLOQUEADA_POR_PARADA"
+    BLOQUEADA_POR_RECONCILIACION = "BLOQUEADA_POR_RECONCILIACION"
     SIN_PRECIO = "SIN_PRECIO"
 
 
@@ -132,6 +141,13 @@ class ResultadoAperturaEntradas:
     descartadas: tuple[EntradaDescartada, ...]
     expiradas: int
     """Cuántas aprobaciones vencidas se liberaron antes de calcular cupos."""
+    discrepancias: tuple[Discrepancia, ...] = ()
+    """Si no está vacía, la reconciliación encontró algo que no cuadra y NO se
+    procesó ninguna entrada (ni se expiró nada)."""
+
+    @property
+    def bloqueada_por_reconciliacion(self) -> bool:
+        return bool(self.discrepancias)
 
 
 def entry_client_order_id(proposal_id: uuid.UUID) -> str:
@@ -153,7 +169,10 @@ def build_cupos(
     session: Session, now: datetime, *, emergency_stop: EmergencyStop | None = None
 ) -> SituacionDeCupos:
     """Foto de cupos para `select_entries`, con las entradas pendientes
-    RESERVANDO cupo (decisión del 2026-10-04):
+    RESERVANDO cupo (decisión del 2026-10-04). Los contadores de posiciones,
+    entradas del día y mayor riesgo cuentan SOLO la estrategia; las operaciones
+    de observación tienen los suyos (decisión del 2026-10-12) y los símbolos
+    abiertos son los de ambas series:
 
     - posiciones = abiertas + entradas pendientes;
     - entradas de hoy = órdenes `ENTRY` pendientes o ejecutadas creadas en el
@@ -166,7 +185,8 @@ def build_cupos(
       BINANCE_CAIDO (Paso 11a-2, decisión D5): bloquea entradas nuevas.
     """
     _exigir_utc(now)
-    abiertas = list_open_posiciones(session)
+    abiertas = list_open_posiciones(session, serie=SerieOperacion.ESTRATEGIA)
+    abiertas_observacion = list_open_posiciones(session, serie=SerieOperacion.OBSERVACION)
     pendientes = list_orders(
         session, estados=[EstadoOrden.PENDING_APPROVAL], intencion=IntencionOrden.ENTRY
     )
@@ -183,6 +203,14 @@ def build_cupos(
         estados=_ESTADOS_QUE_OCUPAN_ENTRADA_DEL_DIA,
         created_from=desde,
         created_before=hasta,
+        serie=SerieOperacion.ESTRATEGIA,
+    )
+    observacion_entradas_hoy = count_entry_orders(
+        session,
+        estados=_ESTADOS_QUE_OCUPAN_ENTRADA_DEL_DIA,
+        created_from=desde,
+        created_before=hasta,
+        serie=SerieOperacion.OBSERVACION,
     )
     ultimo_evento = get_ultimo_evento_sistema(session)
     ultimo_aviso_binance = get_ultima_alerta_de_tipos(
@@ -193,10 +221,14 @@ def build_cupos(
         posiciones_abiertas=len(abiertas) + len(pendientes),
         entradas_hoy=entradas_hoy,
         mayor_riesgo_abiertas=mayor_riesgo,
-        simbolos_abiertos=frozenset([p.symbol for p in abiertas] + [o.symbol for o in pendientes]),
+        simbolos_abiertos=frozenset(
+            [p.symbol for p in abiertas] + [p.symbol for p in abiertas_observacion] + [o.symbol for o in pendientes]
+        ),
         sistema_pausado=sistema_pausado(ultimo_evento.event_type if ultimo_evento else None),
         parada_emergencia=(emergency_stop or FileEmergencyStop()).is_active(),
         binance_caido=binance_figura_caido(ultimo_aviso_binance.tipo if ultimo_aviso_binance else None),
+        observacion_abiertas=len(abiertas_observacion),
+        observacion_entradas_hoy=observacion_entradas_hoy,
     )
 
 
@@ -259,6 +291,62 @@ def _abrir_posicion(
     return posicion_id
 
 
+def _avisar_posicion_abierta(
+    session: Session,
+    *,
+    posicion_id: uuid.UUID,
+    orden_id: uuid.UUID,
+    quantity: Decimal,
+    price: Decimal,
+    fee: Decimal,
+    now: datetime,
+    aprobada_por_el_usuario: bool,
+) -> None:
+    """Deja el aviso de Telegram de una posición recién abierta (decisión del
+    2026-10-12). Es solo un aviso (P2): corre en un SAVEPOINT y cualquier fallo se
+    registra y se ignora; nunca puede impedir ni revertir la entrada."""
+    try:
+        with session.begin_nested():
+            posicion = get_posicion(session, posicion_id)
+            propuesta = get_propuesta(session, posicion.proposal_id)
+            if propuesta is not None and propuesta.tier_entrada == TierEntrada.OBSERVACION:
+                origen, etiqueta = "observación, sin IA", "Puntaje del pre-filtro"
+            else:
+                origen, etiqueta = "estrategia", "Puntaje ponderado"
+            if aprobada_por_el_usuario:
+                origen += ", aprobada por ti"
+            append_alerta(
+                session,
+                AlertaRow(
+                    tipo=TipoAlerta.POSICION_ABIERTA,
+                    subject=posicion.symbol,
+                    dedup_key=f"posicion-abierta:{posicion_id}",
+                    occurred_at=now,
+                    message=mensaje_posicion_abierta(
+                        posicion.symbol,
+                        origen=origen,
+                        cantidad=quantity,
+                        precio=price,
+                        valor_usd=calculate_position_value(quantity, price),
+                        comision_usd=fee,
+                        stop=posicion.initial_stop_price,
+                        objetivo=posicion.initial_target_price,
+                        puntaje=propuesta.puntaje_ponderado if propuesta is not None else Decimal(0),
+                        etiqueta_puntaje=etiqueta,
+                    ),
+                    observed_value=calculate_position_value(quantity, price),
+                    position_id=posicion_id,
+                    order_id=orden_id,
+                ),
+            )
+    except Exception:  # noqa: BLE001 - un aviso nunca bloquea una entrada
+        logger.error(
+            "no se pudo guardar el aviso de posición abierta",
+            exc_info=True,
+            extra={"component": _COMPONENT, "position_id": str(posicion_id)},
+        )
+
+
 def _ejecutar_entrada_automatica(
     session: Session, *, candidato: CandidatoEntrada, requested_usd: Decimal, now: datetime, price_source: PriceSource
 ) -> EntradaProcesada:
@@ -304,6 +392,10 @@ def _ejecutar_entrada_automatica(
     if not creada:  # pragma: no cover - descartado arriba; solo una carrera
         raise RuntimeError(f"client_order_id {client_order_id!r} apareció durante la ejecución")
     record_entry(session, get_posicion(session, posicion_id), now=now)
+    _avisar_posicion_abierta(
+        session, posicion_id=posicion_id, orden_id=orden_id, quantity=quantity, price=price, fee=fee,
+        now=now, aprobada_por_el_usuario=False,
+    )
     return EntradaProcesada(
         candidato.proposal_id, candidato.symbol, ResultadoEntrada.ABIERTA, orden_id=orden_id, posicion_id=posicion_id
     )
@@ -359,6 +451,10 @@ def open_entries(
 ) -> ResultadoAperturaEntradas:
     """Procesa los candidatos de un ciclo (ver el docstring del módulo)."""
     _exigir_utc(now)
+    discrepancias = reconcile(session)
+    if discrepancias:
+        _log_bloqueo_por_reconciliacion(discrepancias)
+        return ResultadoAperturaEntradas(procesadas=(), descartadas=(), expiradas=0, discrepancias=tuple(discrepancias))
     expiradas = expire_pending_entries(session, now)
 
     cupos = build_cupos(session, now, emergency_stop=emergency_stop)
@@ -418,6 +514,11 @@ def approve_pending_entry(
     if orden.intencion != IntencionOrden.ENTRY or orden.estado != EstadoOrden.PENDING_APPROVAL:
         return ResultadoAprobacion.NO_PENDIENTE
 
+    discrepancias = reconcile(session)
+    if discrepancias:
+        _log_bloqueo_por_reconciliacion(discrepancias, orden_id=orden.id)
+        return ResultadoAprobacion.BLOQUEADA_POR_RECONCILIACION
+
     if orden.expires_at is not None and now >= orden.expires_at:
         resolve_pending_order(
             session,
@@ -467,6 +568,10 @@ def approve_pending_entry(
         raise RuntimeError(f"La orden {orden.id} dejó de estar pendiente durante la aprobación")
 
     record_entry(session, get_posicion(session, posicion_id), now=now)
+    _avisar_posicion_abierta(
+        session, posicion_id=posicion_id, orden_id=orden.id, quantity=quantity, price=price, fee=fee,
+        now=now, aprobada_por_el_usuario=True,
+    )
     _log("entrada aprobada", orden_id=orden.id, symbol=orden.symbol, posicion_id=posicion_id)
     return ResultadoAprobacion.APROBADA
 
@@ -492,6 +597,17 @@ def reject_pending_entry(
     if rechazada:
         _log("entrada rechazada", orden_id=orden_id, symbol=orden.symbol)
     return rechazada
+
+
+def _log_bloqueo_por_reconciliacion(discrepancias: list[Discrepancia], **context) -> None:
+    logger.error(
+        "order-manager: entrada bloqueada por discrepancias en la reconciliación",
+        extra={
+            "component": _COMPONENT,
+            "discrepancias": [f"{d.codigo.value}: {d.detalle}" for d in discrepancias],
+            **{k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in context.items()},
+        },
+    )
 
 
 def _log(message: str, **context) -> None:

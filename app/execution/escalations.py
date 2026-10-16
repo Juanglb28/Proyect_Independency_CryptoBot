@@ -43,6 +43,7 @@ from app.domain.rules.escalation import (
     mensaje_orden_pendiente,
     mensaje_pausa_drawdown,
     mensaje_volumen_atipico,
+    promedio_volumen,
     ultima_vela_1h_cerrada,
 )
 from app.execution.reconciliation import Discrepancia
@@ -161,7 +162,8 @@ def _volumenes(
         )
         if objetivo not in volumenes or any(h not in volumenes for h in previas):
             continue  # faltan velas: se declara dato faltante, no se estima (P3)
-        zscore = calcular_zscore_volumen(volumenes[objetivo], [volumenes[h] for h in previas])
+        referencia = [volumenes[h] for h in previas]
+        zscore = calcular_zscore_volumen(volumenes[objetivo], referencia)
         if not es_volumen_atipico(zscore):
             continue
         nueva = append_alerta(
@@ -172,7 +174,12 @@ def _volumenes(
                 dedup_key=f"volumen:{posicion.id}:{objetivo.isoformat()}",
                 occurred_at=now,
                 message=mensaje_volumen_atipico(
-                    posicion.symbol, vela=objetivo, zscore=zscore, volumen=volumenes[objetivo]
+                    posicion.symbol,
+                    vela=objetivo,
+                    zscore=zscore,
+                    volumen=volumenes[objetivo],
+                    volumen_vela_anterior=referencia[-1],
+                    volumen_promedio=promedio_volumen(referencia),
                 ),
                 observed_value=zscore,
                 threshold=Decimal("3"),
@@ -191,11 +198,9 @@ def _volumenes(
 def _ordenes_pendientes(session: Session, now: datetime) -> list[TipoAlerta]:
     """Un aviso por cada entrada que espera aprobación manual.
 
-    Derivado (el usuario puede corregirlo): el plan dice "orden >200 USD", pero
-    en v1 todas las entradas miden 100 USD y la aprobación manual se exige
-    además para las de mayor riesgo; avisar solo ">200 USD" no avisaría nunca.
-    Por eso se avisa de TODA entrada `PENDING_APPROVAL` (la que más necesita el
-    aviso: si no la apruebas, vence a las 00:00 UTC)."""
+    Decisión D4 (confirmada 2026-10-09): avisar de TODA entrada
+    ``PENDING_APPROVAL``, no solo las de >200 USD. Si no la apruebas,
+    vence a las 00:00 UTC."""
     creadas: list[TipoAlerta] = []
     pendientes = list_orders(session, estados=[EstadoOrden.PENDING_APPROVAL], intencion=IntencionOrden.ENTRY)
     for orden in pendientes:

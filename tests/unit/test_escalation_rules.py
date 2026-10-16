@@ -174,7 +174,10 @@ def test_binance_caido_bloquea_la_entrada_nueva():
 def test_los_mensajes_son_texto_corto_con_el_simbolo_y_las_cifras():
     caida = _caida("93.5")
     assert "ETHUSDT" in e.mensaje_caida_1h("ETHUSDT", caida) and "6.50" in e.mensaje_caida_1h("ETHUSDT", caida)
-    msg = e.mensaje_volumen_atipico("ETHUSDT", vela=HACE_1H, zscore=D("4.2"), volumen=D("1500"))
+    msg = e.mensaje_volumen_atipico(
+        "ETHUSDT", vela=HACE_1H, zscore=D("4.2"), volumen=D("1500"),
+        volumen_vela_anterior=D("100"), volumen_promedio=D("100"),
+    )
     assert "ETHUSDT" in msg and "4.20" in msg
     assert "100.00 USD" in e.mensaje_orden_pendiente("SOLUSDT", monto_usd=D(100), vence=NOW)
     assert "-15 %" in e.mensaje_pausa_drawdown(equity=D(850), peak=D(1000), drawdown_pct=D("-15"))
@@ -186,3 +189,50 @@ def test_el_mensaje_de_discrepancia_recorta_la_lista():
     msg = e.mensaje_discrepancia([f"d{i}" for i in range(8)])
     assert "8 hallazgo" in msg and "d4" in msg and "d5" not in msg and "y 3 más" in msg
     assert len(msg) < 4096
+
+
+def test_mensaje_posicion_abierta_lleva_unidades_total_stop_y_objetivo():
+    texto = e.mensaje_posicion_abierta(
+        "NEARUSDT",
+        origen="observación, sin IA",
+        cantidad=D("18.608113137327"),
+        precio=D("5.374"),
+        valor_usd=D("100.00000000"),
+        comision_usd=D("0.1"),
+        stop=D("4.94408"),
+        objetivo=D("6.01888"),
+        puntaje=D("47.5"),
+        etiqueta_puntaje="Puntaje del pre-filtro",
+    )
+    assert "POSICIÓN PAPER ABIERTA NEARUSDT (observación, sin IA)" in texto
+    assert "18.608113 NEAR a 5.374" in texto
+    assert "Total de compra: 100.00 USD" in texto
+    assert "Stop 4.94408" in texto and "objetivo 6.01888" in texto
+    assert "Puntaje del pre-filtro: 47.50" in texto and "Simulado" in texto
+
+
+def test_mensaje_de_volumen_atipico_muestra_unidad_vela_anterior_y_promedio():
+    vela = datetime(2026, 10, 13, 0, 0, tzinfo=timezone.utc)
+    msg = e.mensaje_volumen_atipico(
+        "ADAUSDT", vela=vela, zscore=D("7.3"), volumen=D("25748796.5"),
+        volumen_vela_anterior=D("3100000"), volumen_promedio=D("2900000"),
+    )
+    assert "2026-10-13 00:00 UTC tuvo un volumen de 25,748,796.50 ADA" in msg
+    assert "7.30 desviaciones estándar" in msg
+    assert "Vela anterior (2026-10-12 23:00 UTC): 3,100,000.00 ADA" in msg
+    assert "Promedio de las 30 velas previas: 2,900,000.00 ADA" in msg
+    assert "8.9 veces ese promedio" in msg
+    assert "no en dólares" in msg
+
+
+def test_mensaje_de_volumen_atipico_sin_promedio_positivo_no_divide():
+    vela = datetime(2026, 10, 13, 0, 0, tzinfo=timezone.utc)
+    msg = e.mensaje_volumen_atipico(
+        "ADAUSDT", vela=vela, zscore=D("7.3"), volumen=D("10"),
+        volumen_vela_anterior=D("0"), volumen_promedio=D("0"),
+    )
+    assert "veces ese promedio" not in msg
+
+
+def test_promedio_volumen_es_el_promedio_simple():
+    assert e.promedio_volumen([D(1), D(2), D(6)]) == D(3)

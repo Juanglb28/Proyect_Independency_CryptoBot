@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
@@ -128,3 +127,86 @@ def test_indices_del_intervalo_son_los_percentiles_2_5_y_97_5(monkeypatch):
 def test_nota_cuando_n_no_es_multiplo_de_3():
     r = validate_score_discrimination(_muestra(7))
     assert r.tercil_size == 2 and any("rango medio" in nota for nota in r.notas)
+
+
+# --- Enmienda E4: medición estratificada por mes -----------------------------
+from app.domain.rules.results import (  # noqa: E402
+    MUESTRA_MINIMA_POR_ESTRATO,
+    validate_score_discrimination_stratified,
+)
+
+
+def _mes(trades_por_mes):
+    """Construye trades: lista de meses, cada uno con (pnl, score)."""
+    salida = []
+    for m, filas in enumerate(trades_por_mes):
+        for i, (pnl, score) in enumerate(filas):
+            t = _trade(pnl, score=score, dia=m * 31 + i)
+            salida.append(t)
+    return salida
+
+
+def test_estratificado_elimina_el_efecto_de_regimen():
+    # Mes alcista: todo gana ~+20 con score alto; mes bajista: todo pierde ~-20 con score bajo.
+    # Dentro de cada mes el score NO ordena nada (mismos pnl en alto y bajo).
+    alcista = [("20", str(90 - i)) for i in range(15)]
+    bajista = [("-20", str(40 - i)) for i in range(15)]
+    trades = _mes([alcista, bajista])
+    principal = validate_score_discrimination(trades)
+    assert principal.discriminates is True  # el método agrupado se deja engañar
+    est = validate_score_discrimination_stratified(trades)
+    assert est.informe.score_discrimination == 0
+    assert est.informe.discriminates is False
+    assert est.alerta_de_regimen is True
+    assert est.estratos_usados == 2 and est.estratos_excluidos == 0
+
+
+def test_estratificado_detecta_discriminacion_real_dentro_de_cada_mes():
+    def mes(base):
+        return [(str(base + 20 - i * 40 / 14), str(90 - i)) for i in range(15)]
+
+    est = validate_score_discrimination_stratified(_mes([mes(20), mes(-20)]))
+    assert est.informe.discriminates is True and est.alerta_de_regimen is False
+    assert est.informe.score_discrimination > 0
+
+
+def test_estratificado_excluye_meses_con_una_sola_operacion():
+    assert MUESTRA_MINIMA_POR_ESTRATO == 2
+    trades = _mes([[("5", "80"), ("-5", "70"), ("1", "60")], [("100", "99")]])
+    est = validate_score_discrimination_stratified(trades)
+    assert (est.estratos_usados, est.estratos_excluidos, est.operaciones_excluidas) == (1, 1, 1)
+    assert est.informe.n_trades == 4 and est.informe.n_trades_con_score == 3
+    assert any("una sola operación" in n for n in est.informe.notas)
+
+
+def test_estratificado_usa_el_mes_utc_de_la_entrada():
+    # Dos trades al borde del mes UTC caen en meses distintos -> ambos excluidos.
+    a = _trade("5", score="80")
+    b = _trade("-5", score="70")
+    from dataclasses import replace
+
+    a = replace(a, entry_time=datetime(2026, 10, 31, 23, 59, tzinfo=timezone.utc))
+    b = replace(b, entry_time=datetime(2026, 11, 1, 0, 1, tzinfo=timezone.utc))
+    est = validate_score_discrimination_stratified([a, b])
+    assert est.estratos_excluidos == 2 and est.informe.status == EstadoValidacion.MUESTRA_INSUFICIENTE
+    assert est.alerta_de_regimen is None
+
+
+def test_estratificado_es_determinista_y_no_depende_del_orden_de_entrada():
+    trades = _mes([[(str(i - 7), str(90 - i)) for i in range(15)], [(str(9 - i), str(80 - i)) for i in range(15)]])
+    r1 = validate_score_discrimination_stratified(trades)
+    r2 = validate_score_discrimination_stratified(list(reversed(trades)))
+    assert r1.informe == r2.informe
+    assert r1.informe.seed == BOOTSTRAP_SEMILLA and r1.informe.iterations == BOOTSTRAP_ITERACIONES
+
+
+def test_estratificado_exige_las_mil_iteraciones():
+    with pytest.raises(ValueError):
+        validate_score_discrimination_stratified(_muestra(6), iterations=10)
+
+
+def test_alerta_de_regimen_es_falsa_si_ninguna_medicion_discrimina():
+    plano = _mes([[("1", str(90 - i)) for i in range(15)], [("1", str(40 - i)) for i in range(15)]])
+    est = validate_score_discrimination_stratified(plano)
+    assert validate_score_discrimination(plano).discriminates is False
+    assert est.informe.discriminates is False and est.alerta_de_regimen is False

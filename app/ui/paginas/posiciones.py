@@ -16,8 +16,11 @@ def render() -> None:
     show_last_action_result()
     v = views.posiciones()
     st.title("Posiciones")
-    st.caption(f"{len(v.posiciones)} abiertas de un máximo de {v.maximo_posiciones} · "
-               f"cupos libres: {v.cupos_libres} · última observación: {f.fecha(v.ultima_observacion_en)}")
+    n_estrategia = sum(1 for p in v.posiciones if p.serie.value == "ESTRATEGIA")
+    n_observacion = len(v.posiciones) - n_estrategia
+    st.caption(f"Estrategia: {n_estrategia} abiertas de un máximo de {v.maximo_posiciones} · "
+               f"cupos libres: {v.cupos_libres} · observación: {n_observacion} abiertas (cupos propios, fuera del equity) · "
+               f"última observación: {f.fecha(v.ultima_observacion_en)}")
     if v.parada_emergencia:
         st.error("PARADA DE EMERGENCIA activa.")
     elif v.sistema_pausado:
@@ -26,12 +29,19 @@ def render() -> None:
     if not v.posiciones:
         st.info("No hay posiciones abiertas.")
     for p in v.posiciones:
-        with st.expander(f"{p.symbol} · abierta {f.fecha(p.opened_at)}", expanded=True):
+        serie = "estrategia" if p.serie.value == "ESTRATEGIA" else "observación (sin IA)"
+        with st.expander(f"{p.symbol} · {serie} · abierta {f.fecha(p.opened_at)}", expanded=True):
             a, b, c, d = st.columns(4)
-            a.metric("Precio de entrada", f.precio(p.entry_price))
-            b.metric("Último precio", f.precio(p.ultimo_precio))
-            c.metric("P&L no realizado", f.usd(p.pnl_no_realizado), help=f"Retorno {f.pct(p.retorno_no_realizado_pct)}")
-            d.metric("Cantidad restante", f.precio(p.remaining_quantity), help=f"Inicial {f.precio(p.initial_quantity)}")
+            a.metric("Unidades compradas", f"{f.precio(p.initial_quantity)} {p.unidad}",
+                     help="Cantidad de la orden de entrada ejecutada.")
+            b.metric("Precio total de compra", f.usd(p.valor_de_compra_usd),
+                     help=f"Unidades × precio de ejecución, sin comisión. Comisión de entrada: {f.usd(p.comision_entrada_usd, 4)}.")
+            c.metric("Precio de entrada", f.precio(p.entry_price), help="Precio de ejecución por unidad.")
+            d.metric("Unidades restantes", f"{f.precio(p.remaining_quantity)} {p.unidad}",
+                     help="Menor que las compradas si ya se vendió una parte (take profit parcial).")
+            a, b, c, d = st.columns(4)
+            a.metric("Último precio", f.precio(p.ultimo_precio))
+            b.metric("P&L no realizado", f.usd(p.pnl_no_realizado), help=f"Retorno {f.pct(p.retorno_no_realizado_pct)}")
             e, g, h, i = st.columns(4)
             e.metric("Stop vigente", f.precio(p.stop_vigente), help=f"Distancia: {f.pct(p.distancia_stop_pct)}")
             g.metric("Objetivo vigente", f.precio(p.objetivo_vigente), help=f"Distancia: {f.pct(p.distancia_objetivo_pct)}")
@@ -65,6 +75,9 @@ def render() -> None:
                     "No hay dinero real.",
                     lambda _motivo, oid=e.order_id: commands.aprobar_entrada(oid),
                     disabled_reason=bloqueo,
+                    confirm_label="Desliza hasta el final para abrir la posición",
+                    irreversible="Abrir esta posición es irreversible: una vez abierta no se puede deshacer.",
+                    slide_to_confirm=True,
                 )
             with b:
                 confirm_action(

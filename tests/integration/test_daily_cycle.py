@@ -25,6 +25,11 @@ from app.data.indicator_calculator import IndicatorRow, sma_indicator_name
 from app.data.prefilter import PrefilterScore
 from app.data.prefilter_pipeline import PrefilterRunResult
 from app.domain.enums import EstadoCiclo, TierEntrada
+from app.domain.rules.data_quality import (
+    DATA_QUALITY_FORMULA_VERSION,
+    DataQualityResult,
+)
+from app.domain.rules.quantitative_score import QUANTITATIVE_FORMULA_VERSION
 from app.orchestration.daily_cycle import run_daily_cycle
 from app.repositories.analysis import (
     PropuestaRow,
@@ -74,6 +79,43 @@ def _indicators(symbol: str) -> list[IndicatorRow]:
 def _seed_symbol(session, symbol: str) -> None:
     save_candles(session, [_candle(symbol)])
     save_indicators(session, _indicators(symbol))
+
+
+def _perfect_data_quality(**kwargs) -> DataQualityResult:
+    """DataQualityResult con calidad = 100 (sin penalizaciones, sin bloqueantes).
+
+    Los tests de integración parchean `calculate_data_quality` con esta
+    función para aislar la orquestación de la fórmula de calidad — los
+    tests unitarios de `test_data_quality.py` ya cubren la fórmula en sí.
+    """
+    return DataQualityResult(
+        calidad_datos=Decimal(100),
+        penalizacion_campos=Decimal(0),
+        penalizacion_antiguedad=Decimal(0),
+        penalizacion_huecos=Decimal(0),
+        anomalias=(),
+        presenta_anomalias=False,
+        bloqueantes=(),
+        formula_version=DATA_QUALITY_FORMULA_VERSION,
+    )
+
+
+def _blocked_data_quality(**kwargs) -> DataQualityResult:
+    """DataQualityResult con calidad = 0 y un bloqueante (para tests de
+    exclusión por calidad)."""
+    return DataQualityResult(
+        calidad_datos=Decimal(0),
+        penalizacion_campos=Decimal(0),
+        penalizacion_antiguedad=Decimal(0),
+        penalizacion_huecos=Decimal(0),
+        anomalias=(),
+        presenta_anomalias=False,
+        bloqueantes=("sin_velas_diarias: bloqueante de test",),
+        formula_version=DATA_QUALITY_FORMULA_VERSION,
+    )
+
+
+_DQ_PATCH_TARGET = "app.orchestration.daily_cycle.calculate_data_quality"
 
 
 def _fake_prefilter(symbols: list[str]):
@@ -203,6 +245,7 @@ def test_ciclo_completo_con_dos_candidatos_persiste_propuestas_y_factores(monkey
         "app.ai.agents._runner.call_agent",
         _make_fake_call_agent({"BTCUSDT": "suficiente", "ETHUSDT": "suficiente"}),
     )
+    monkeypatch.setattr(_DQ_PATCH_TARGET, _perfect_data_quality)
 
     result = run_daily_cycle(db_session, _settings(), now=_OPEN_TIME)
 
@@ -245,8 +288,19 @@ def test_candidato_con_calidad_insuficiente_se_excluye_del_consolidador(monkeypa
     monkeypatch.setattr("app.orchestration.daily_cycle.run_prefilter", _fake_prefilter(["BTCUSDT", "ETHUSDT"]))
     monkeypatch.setattr(
         "app.ai.agents._runner.call_agent",
-        _make_fake_call_agent({"BTCUSDT": "insuficiente", "ETHUSDT": "suficiente"}),
+        _make_fake_call_agent({"BTCUSDT": "suficiente", "ETHUSDT": "suficiente"}),
     )
+
+    # BTCUSDT bloqueado por calidad determinista; ETHUSDT perfecto.
+    _call_count = {"n": 0}
+
+    def _dq_btc_bloqueado(**kwargs):
+        _call_count["n"] += 1
+        if _call_count["n"] == 1:  # primer candidato: BTCUSDT
+            return _blocked_data_quality(**kwargs)
+        return _perfect_data_quality(**kwargs)
+
+    monkeypatch.setattr(_DQ_PATCH_TARGET, _dq_btc_bloqueado)
 
     result = run_daily_cycle(db_session, _settings(), now=_OPEN_TIME)
 
@@ -264,11 +318,13 @@ def test_todos_los_candidatos_insuficientes_termina_sin_llamar_al_consolidador(m
     def fake_call_agent(settings, *, model, system_prompt, user_content, max_tokens=4096):
         if "consolidador de análisis" in system_prompt:
             llamadas_consolidador.append(system_prompt)
-        return _make_fake_call_agent({"BTCUSDT": "insuficiente"})(
+        return _make_fake_call_agent({"BTCUSDT": "suficiente"})(
             settings, model=model, system_prompt=system_prompt, user_content=user_content, max_tokens=max_tokens
         )
 
     monkeypatch.setattr("app.ai.agents._runner.call_agent", fake_call_agent)
+    # El bloqueo ahora viene de la fórmula determinista, no del auditor.
+    monkeypatch.setattr(_DQ_PATCH_TARGET, _blocked_data_quality)
 
     result = run_daily_cycle(db_session, _settings(), now=_OPEN_TIME)
 
@@ -284,6 +340,7 @@ def test_todos_los_candidatos_insuficientes_termina_sin_llamar_al_consolidador(m
 def test_consolidador_no_invertir_queda_expuesto_en_el_resultado(monkeypatch, db_session):
     _seed_symbol(db_session, "BTCUSDT")
     monkeypatch.setattr("app.orchestration.daily_cycle.run_prefilter", _fake_prefilter(["BTCUSDT"]))
+    monkeypatch.setattr(_DQ_PATCH_TARGET, _perfect_data_quality)
     base = _make_fake_call_agent({"BTCUSDT": "suficiente"})
 
     def fake_call_agent(settings, *, model, system_prompt, user_content, max_tokens=4096):
@@ -312,6 +369,132 @@ def test_ciclo_sin_llamar_al_consolidador_deja_su_recomendacion_en_none(monkeypa
     result = run_daily_cycle(db_session, _settings(), now=_OPEN_TIME)
     assert result.consolidador_recomendacion is None
     assert result.consolidador_razon_no_invertir is None
+
+
+def test_snapshot_contiene_calidad_datos_determinista(monkeypatch, db_session):
+    """El decision_snapshot de cada propuesta debe incluir la sección
+    `calidad_datos_determinista` con los valores de la fórmula (decisión
+    del usuario, 2026-10-08) y `auditoria_datos_ia` como observador."""
+    _seed_symbol(db_session, "BTCUSDT")
+    monkeypatch.setattr("app.orchestration.daily_cycle.run_prefilter", _fake_prefilter(["BTCUSDT"]))
+    monkeypatch.setattr(
+        "app.ai.agents._runner.call_agent",
+        _make_fake_call_agent({"BTCUSDT": "suficiente"}),
+    )
+    monkeypatch.setattr(_DQ_PATCH_TARGET, _perfect_data_quality)
+
+    result = run_daily_cycle(db_session, _settings(), now=_OPEN_TIME)
+    (propuesta,) = get_propuestas_de_ciclo(db_session, result.ciclo_id)
+    snap = propuesta.decision_snapshot
+
+    # Sección de calidad determinista
+    assert "calidad_datos_determinista" in snap
+    cdd = snap["calidad_datos_determinista"]
+    assert cdd["calidad_datos"] == "100"
+    assert cdd["penalizacion_campos"] == "0"
+    assert cdd["penalizacion_antiguedad"] == "0"
+    assert cdd["penalizacion_huecos"] == "0"
+    assert cdd["presenta_anomalias"] is False
+    assert cdd["anomalias"] == []
+    assert cdd["formula_version"] == DATA_QUALITY_FORMULA_VERSION
+
+    # Auditor IA como observador (output guardado pero sin efecto en score)
+    assert "auditoria_datos_ia" in snap
+
+
+def test_snapshot_contiene_score_cuantitativo_paralelo(monkeypatch, db_session):
+    """El decision_snapshot debe incluir `score_cuantitativo_paralelo` con
+    los sub-scores calculados a partir de los indicadores diarios del
+    candidato (Fase B — shadow scoring, decisión del usuario 2026-10-08).
+
+    Con los fixtures estándar (_candle close=105, SMA=100, VOLUMEN_RELATIVO=1.5,
+    DISTANCIA_MAX_90D=-3, RSI=55):
+    - tendencia_pct = 5.0 (promedio de distancia_pct_sma: 5% para cada SMA)
+    - score_tendencia = 60.0  (5 en [-25,+25] → (5+25)/50*100)
+    - score_volumen = 91.66... (1.5 en [0.4,1.6] → (1.5-0.4)/1.2*100)
+    - score_distancia = 85.0  (-3 en [-20,0] → (-3+20)/20*100)
+    - score_rsi = 62.5        (55 en [30,70] → (55-30)/40*100)
+    - score_final = promedio de los 4
+    """
+    _seed_symbol(db_session, "BTCUSDT")
+    monkeypatch.setattr("app.orchestration.daily_cycle.run_prefilter", _fake_prefilter(["BTCUSDT"]))
+    monkeypatch.setattr(
+        "app.ai.agents._runner.call_agent",
+        _make_fake_call_agent({"BTCUSDT": "suficiente"}),
+    )
+    monkeypatch.setattr(_DQ_PATCH_TARGET, _perfect_data_quality)
+
+    result = run_daily_cycle(db_session, _settings(), now=_OPEN_TIME)
+    (propuesta,) = get_propuestas_de_ciclo(db_session, result.ciclo_id)
+    snap = propuesta.decision_snapshot
+
+    assert "score_cuantitativo_paralelo" in snap
+    sqp = snap["score_cuantitativo_paralelo"]
+
+    # Todos los campos deben estar presentes (no None — datos completos)
+    assert sqp["score_final"] is not None
+    assert sqp["score_tendencia"] is not None
+    assert sqp["score_volumen"] is not None
+    assert sqp["score_distancia"] is not None
+    assert sqp["score_rsi"] is not None
+
+    # Valores crudos
+    assert sqp["tendencia_pct"] is not None
+    assert sqp["volumen_relativo"] is not None
+    assert sqp["distancia_max_90d_pct"] is not None
+    assert sqp["rsi"] is not None
+    assert sqp["formula_version"] == QUANTITATIVE_FORMULA_VERSION
+
+    # Verificar valores exactos (serializados como str de Decimal)
+    assert sqp["score_tendencia"] == "60.0"
+    assert sqp["score_distancia"] == "85.00"
+    assert sqp["score_rsi"] == "62.500"
+    assert sqp["tendencia_pct"] == "5.0"
+
+    # score_volumen y score_final tienen decimales largos por la división —
+    # verificamos con startswith para no anclar una representación exacta
+    # de Decimal periódico.
+    assert sqp["score_volumen"].startswith("91.6666")
+    assert sqp["score_final"].startswith("74.791")
+
+
+def test_snapshot_con_anomalias_informativas_sin_penalizacion(monkeypatch, db_session):
+    """Un candidato con anomalías pero sin bloqueantes debe generar propuesta
+    con calidad < 100, y el snapshot debe reflejar las anomalías."""
+    _seed_symbol(db_session, "BTCUSDT")
+    monkeypatch.setattr("app.orchestration.daily_cycle.run_prefilter", _fake_prefilter(["BTCUSDT"]))
+    monkeypatch.setattr(
+        "app.ai.agents._runner.call_agent",
+        _make_fake_call_agent({"BTCUSDT": "suficiente"}),
+    )
+
+    def _dq_con_anomalias(**kwargs):
+        return DataQualityResult(
+            calidad_datos=Decimal(91),
+            penalizacion_campos=Decimal(9),
+            penalizacion_antiguedad=Decimal(0),
+            penalizacion_huecos=Decimal(0),
+            anomalias=("campos_faltantes (3): rsi_14_4h, atr_14_4h, volumen_relativo_30_4h",),
+            presenta_anomalias=True,
+            bloqueantes=(),
+            formula_version=DATA_QUALITY_FORMULA_VERSION,
+        )
+
+    monkeypatch.setattr(_DQ_PATCH_TARGET, _dq_con_anomalias)
+
+    result = run_daily_cycle(db_session, _settings(), now=_OPEN_TIME)
+    (propuesta,) = get_propuestas_de_ciclo(db_session, result.ciclo_id)
+
+    # La propuesta se generó (no bloqueada)
+    assert propuesta.symbol == "BTCUSDT"
+    # calidad_datos = 91 → el puntaje ponderado se multiplica por 0.91
+    assert propuesta.calidad_datos == Decimal(91)
+
+    snap = propuesta.decision_snapshot
+    cdd = snap["calidad_datos_determinista"]
+    assert cdd["presenta_anomalias"] is True
+    assert len(cdd["anomalias"]) == 1
+    assert "campos_faltantes" in cdd["anomalias"][0]
 
 
 def test_error_en_un_agente_marca_el_ciclo_como_fallido_y_relanza(monkeypatch, db_session):
@@ -402,6 +585,7 @@ def _correr_ciclo(monkeypatch, db_session, puntajes):
         "app.ai.agents._runner.call_agent",
         _make_fake_call_agent({"ETHUSDT": "suficiente"}, puntajes=puntajes),
     )
+    monkeypatch.setattr(_DQ_PATCH_TARGET, _perfect_data_quality)
     result = run_daily_cycle(db_session, _settings(), now=_OPEN_TIME)
     (propuesta,) = get_propuestas_de_ciclo(db_session, result.ciclo_id)
     return propuesta

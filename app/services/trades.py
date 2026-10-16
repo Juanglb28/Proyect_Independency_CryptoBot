@@ -17,7 +17,7 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from app.domain.enums import EstadoTesis, IntencionOrden, ResultadoOperacion
+from app.domain.enums import EstadoTesis, IntencionOrden, ResultadoOperacion, SerieOperacion, TierEntrada
 from app.domain.rules.results import TradeResult, classify_outcome
 from app.repositories.analysis import get_factores_de_propuesta, get_propuesta
 from app.repositories.snapshots import list_snapshots_for_position
@@ -37,6 +37,8 @@ class FiltroOperaciones:
     score_max: Decimal | None = None
     exit_reason: IntencionOrden | None = None
     thesis_status: EstadoTesis | None = None
+    serie: SerieOperacion | None = None
+    """`None` = ambas series (decisión del 2026-10-12: estrategia y observación se distinguen)."""
 
 
 @dataclass(frozen=True)
@@ -56,6 +58,7 @@ class OperacionFila:
     thesis_status: EstadoTesis
     exit_reason: IntencionOrden
     resultado: ResultadoOperacion
+    serie: SerieOperacion = SerieOperacion.ESTRATEGIA
 
 
 @dataclass(frozen=True)
@@ -76,7 +79,8 @@ class DecisionView:
     horizonte: str
     nivel_riesgo: str
     puntaje_base: Decimal
-    calidad_datos: Decimal
+    calidad_datos: Decimal | None
+    """`None` en las observaciones (sin Auditor; no se inventa)."""
     puntaje_ponderado: Decimal
     confianza_global: str
     tesis: str
@@ -108,7 +112,7 @@ class OperacionDetalle:
     trayectoria: tuple[PuntoTrayectoria, ...]
 
 
-def _fila(r: TradeResult) -> OperacionFila:
+def _fila(r: TradeResult, serie: SerieOperacion = SerieOperacion.ESTRATEGIA) -> OperacionFila:
     return OperacionFila(
         position_id=r.position_id,
         symbol=r.symbol,
@@ -125,6 +129,7 @@ def _fila(r: TradeResult) -> OperacionFila:
         thesis_status=r.thesis_status,
         exit_reason=r.exit_reason,
         resultado=classify_outcome(r.net_pnl),
+        serie=serie,
     )
 
 
@@ -145,10 +150,16 @@ def _cumple(f: OperacionFila, filtro: FiltroOperaciones) -> bool:
 def list_operaciones(session: Session, filtro: FiltroOperaciones | None = None) -> tuple[OperacionFila, ...]:
     """Operaciones cerradas que cumplen el filtro, la más reciente primero."""
     filtro = filtro or FiltroOperaciones()
+    series = [filtro.serie] if filtro.serie is not None else [SerieOperacion.ESTRATEGIA, SerieOperacion.OBSERVACION]
     filas = [
-        _fila(to_domain(r))
+        _fila(to_domain(r), serie)
+        for serie in series
         for r in list_trade_results(
-            session, exit_desde=filtro.exit_desde, exit_hasta=filtro.exit_hasta, symbol=filtro.symbol
+            session,
+            exit_desde=filtro.exit_desde,
+            exit_hasta=filtro.exit_hasta,
+            symbol=filtro.symbol,
+            serie=serie,
         )
     ]
     return tuple(sorted((f for f in filas if _cumple(f, filtro)), key=lambda f: (f.exit_time, str(f.position_id)), reverse=True))
@@ -215,8 +226,15 @@ def get_operacion_detalle(
     if row is None:
         return None
     resultado = to_domain(row)
+    # La serie se deriva del tier de la propuesta (ver `app.repositories.series`).
+    propuesta = None if resultado.proposal_id is None else get_propuesta(session, resultado.proposal_id)
+    serie = (
+        SerieOperacion.OBSERVACION
+        if propuesta is not None and propuesta.tier_entrada == TierEntrada.OBSERVACION
+        else SerieOperacion.ESTRATEGIA
+    )
     return OperacionDetalle(
-        fila=_fila(resultado),
+        fila=_fila(resultado, serie),
         resultado=resultado,
         decision=_decision(session, resultado.proposal_id),
         trayectoria=_trayectoria(session, position_id, max_puntos),

@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from app.data.exchange_client import Candle
+from app.data.indicator_calculator import calculate_indicators
 from app.data.indicator_pipeline import calculate_indicators_for_all
 from app.repositories.candles import save_candles
 
@@ -60,3 +61,60 @@ def test_bulk_pipeline_rerun_does_not_duplicate(db_session):
     assert first[0].inserted == first[0].calculated
     assert first[0].inserted > 0
     assert second[0].inserted == 0
+
+
+def test_incremental_con_cola_inserta_solo_la_vela_nueva_y_coincide_con_completo(db_session):
+    """El camino incremental (tail) del ciclo horario: tras calcular toda la
+    historia, agregar UNA vela y recalcular con cola debe (a) insertar solo los
+    indicadores de la vela nueva y (b) darles el mismo valor que un recálculo
+    completo. Las filas viejas no se tocan (ON CONFLICT DO NOTHING)."""
+    from decimal import ROUND_HALF_EVEN
+
+    from app.data.indicator_pipeline import (
+        VELAS_DE_COLA_INCREMENTAL,
+        calculate_indicators_for_symbol_timeframe,
+    )
+    from app.repositories.indicators import get_indicators
+
+    velas = _candles("BTCUSDT", "1h", n=VELAS_DE_COLA_INCREMENTAL + 60)
+    save_candles(db_session, velas[:-1])  # toda la historia menos la última
+    db_session.flush()
+
+    # Cálculo completo inicial (historia sin la última vela).
+    calculate_indicators_for_symbol_timeframe(db_session, "BTCUSDT", "1h")
+    db_session.commit()
+    antes = len(get_indicators(db_session, "BTCUSDT", "1h"))
+
+    # Llega la vela nueva; el ciclo horario calcula SOLO con la cola.
+    save_candles(db_session, [velas[-1]])
+    db_session.flush()
+    res = calculate_indicators_for_symbol_timeframe(
+        db_session, "BTCUSDT", "1h", tail=VELAS_DE_COLA_INCREMENTAL
+    )
+    db_session.commit()
+
+    # (a) Cargó solo la cola, no toda la historia.
+    assert res.candles_used == VELAS_DE_COLA_INCREMENTAL
+
+    # (b) Se insertaron pocas filas (solo las de la vela nueva), no toda la historia.
+    despues = get_indicators(db_session, "BTCUSDT", "1h")
+    nuevas = len(despues) - antes
+    assert 0 < nuevas <= 6  # RSI, ATR y 3 SMA (y volumen) para una sola vela
+
+    # (c) Los valores de la vela nueva coinciden con un recálculo COMPLETO.
+    def _q(v):
+        return v.quantize(Decimal("1E-12"), rounding=ROUND_HALF_EVEN)
+
+    completo = {
+        (r.indicator_name, r.calculated_at): _q(r.value)
+        for r in calculate_indicators("BTCUSDT", "1h", velas)
+    }
+    ultimo = velas[-1]["open_time"]
+    guardado_nuevo = {
+        (r.indicator_name, r.calculated_at): _q(r.value)
+        for r in despues
+        if r.calculated_at == ultimo
+    }
+    assert guardado_nuevo, "no se guardó ningún indicador de la vela nueva"
+    for clave, valor in guardado_nuevo.items():
+        assert valor == completo[clave], f"difiere en {clave}: {valor} vs {completo[clave]}"

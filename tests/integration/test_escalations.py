@@ -132,6 +132,8 @@ def test_volumen_a_mas_de_3_desviaciones_avisa_y_deja_snapshot(db_session):
 
     (alerta,) = list_alertas(db_session)
     assert alerta.tipo == TipoAlerta.VOLUMEN_ATIPICO and alerta.observed_value > 3
+    assert "500.00 BTC" in alerta.message  # volumen de la vela, con su unidad
+    assert "Vela anterior" in alerta.message and "Promedio de las 30 velas previas" in alerta.message
     # Un aviso por vela: el siguiente chequeo (misma vela) no repite.
     assert _tick(db_session, {"BTCUSDT": "100"}, 62).alertas_creadas == ()
     snaps = list_snapshots_for_position(db_session, list_open_posiciones(db_session)[0].id)

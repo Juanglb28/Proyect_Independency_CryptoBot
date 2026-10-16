@@ -14,6 +14,7 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from app.domain.enums import SerieOperacion
 from app.domain.rules.factors import FactorAnalysisReport, FactorDeOperacion, analyze_factors
 from app.repositories.analysis import list_factores_de_propuestas
 from app.results.performance_service import load_trades
@@ -22,7 +23,10 @@ from app.results.performance_service import load_trades
 def analyze_factors_for_period(
     session: Session, *, period_start: datetime | None = None, period_end: datetime | None = None
 ) -> FactorAnalysisReport:
-    trades = load_trades(session, period_start=period_start, period_end=period_end)
+    # Solo la estrategia: una observación no tiene factores (no pasó por la IA).
+    trades = load_trades(
+        session, period_start=period_start, period_end=period_end, serie=SerieOperacion.ESTRATEGIA
+    )
     posiciones_de_propuesta: dict[uuid.UUID, list[uuid.UUID]] = {}
     for t in trades:
         if t.proposal_id is not None:

@@ -103,6 +103,24 @@ def test_aprobar_con_el_sistema_pausado_se_bloquea(db_session, acciones):
     assert get_orden(db_session, oid).estado == EstadoOrden.PENDING_APPROVAL
 
 
+def test_aprobar_con_una_discrepancia_en_la_reconciliacion_se_bloquea(db_session, acciones):
+    from sqlalchemy import text
+
+    from app.repositories.positions import list_open_posiciones
+
+    oid = _pendiente(db_session)
+    monitor_helpers._abrir(db_session, symbol="BTCUSDT", precio="100")
+    pos = list_open_posiciones(db_session)[0]
+    db_session.execute(text("UPDATE posiciones SET remaining_quantity = 0.5 WHERE id = :id"), {"id": pos.id})
+    db_session.expire_all()
+
+    r = commands.aprobar_entrada(oid)
+    assert (r.ok, r.codigo) == (False, "BLOQUEADA_POR_RECONCILIACION")
+    assert "no cuadra" in r.mensaje and "puedes rechazarla" in r.mensaje
+    assert get_orden(db_session, oid).estado == EstadoOrden.PENDING_APPROVAL
+    assert get_open_posicion_by_symbol(db_session, "ETHUSDT") is None
+
+
 def test_aprobar_una_entrada_vencida_la_expira(db_session, acciones):
     oid = _pendiente(db_session)
     acciones["ahora"] = _t(0, 2)  # dos días después: ya venció (vence al terminar el día UTC)

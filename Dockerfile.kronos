@@ -1,0 +1,47 @@
+# Imagen AISLADA del experimento Kronos (enmienda E6, 2026-10-15).
+#
+# Por qué una imagen aparte: PyTorch pesa cientos de MB y Kronos es código de
+# terceros. Ninguna de las imágenes operativas (scheduler, ui, monitor) lo
+# necesita ni debe cargarlo (P2/P4). Este contenedor no recibe claves de Binance,
+# Anthropic ni Telegram: solo DATABASE_URL, y la herramienta abre la base en
+# transacción READ ONLY.
+#
+# Reproducibilidad de la cadena de suministro: el código de Kronos se fija por
+# COMMIT (build arg) y se comprueba que el checkout coincide; los pesos se fijan
+# aparte por revisión + SHA-256 (data/kronos/pesos.lock.json). PyTorch se instala
+# en su variante CPU (el equipo del usuario tiene GPU AMD, sin soporte ROCm en
+# Docker/WSL2: ver docs de E6).
+#
+#   docker compose --profile kronos build kronos
+FROM python:3.12-slim
+
+ARG KRONOS_COMMIT=67b630e67f6a18c9e9be918d9b4337c960db1e9a
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Código de Kronos (MIT) en un commit exacto. Se verifica y se deja el hash en
+# /opt/kronos/.commit; luego se borra .git (no hace falta en tiempo de ejecución).
+RUN git clone https://github.com/shiyu-coder/Kronos.git /opt/kronos \
+    && cd /opt/kronos \
+    && git checkout "${KRONOS_COMMIT}" \
+    && test "$(git rev-parse HEAD)" = "${KRONOS_COMMIT}" \
+    && git rev-parse HEAD > .commit \
+    && rm -rf .git
+
+# PyTorch solo CPU, ANTES del requirements de Kronos para que no arrastre la variante CUDA.
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+    && pip install --no-cache-dir -r /opt/kronos/requirements.txt
+
+# Lo mínimo del proyecto para LEER velas de la base (sin streamlit, anthropic ni apscheduler).
+# ccxt es necesario solo porque `app.repositories.candles` importa el tipo `Candle`; el
+# contenedor no tiene credenciales de exchange.
+RUN pip install --no-cache-dir "sqlalchemy>=2.0,<3.0" "psycopg[binary]>=3.1,<4.0" \
+    "pydantic>=2.6,<3.0" "pydantic-settings>=2.2,<3.0" "ccxt>=4.5,<5.0" "pytest>=8.0,<9.0"
+
+ENV KRONOS_SRC=/opt/kronos \
+    PYTHONUNBUFFERED=1 \
+    TOKENIZERS_PARALLELISM=false
+
+WORKDIR /app
