@@ -2203,6 +2203,74 @@ Cuatro diagnósticos, solo fuera de muestra: (1) **sesgo de censura**: cuántas 
 
 Código: `app/domain/rules/walk_forward_diagnostics.py`, `scripts/backtest_diagnosticos.py`; `exit_simulation.retorno_marcado_a_mercado` comparte el recorrido con `simular_salida`. Pruebas: `tests/unit/test_walk_forward_diagnostics.py` y ampliaciones de `test_exit_simulation.py`, `test_backtest_study.py` y `test_backtest_walk_forward_script.py`.
 
+### Sensibilidad al orden intravela (análisis nuevo, 2026-10-17)
+
+La simulación de salida usa velas de 1 h y no sabe si, dentro de una vela, el máximo
+o el mínimo ocurrió primero. Los resultados publicados suponen «máximo primero»
+(el trailing sube con el `high` y luego se compara el `low`). La lectura inversa
+(«mínimo primero») compara el `low` con el trailing del máximo anterior y solo
+después sube el máximo. **Ninguna es siempre la pesimista**: si el `low` toca el
+trailing viejo, la inversa sale más bajo; si solo toca el trailing nuevo, la
+inversa no sale en esa vela y la posición sigue. Solo difieren las velas en las
+que, tras el cierre parcial, el `high` supera el máximo previo **y** el `low`
+cae por debajo del trailing nuevo (rango de la vela mayor que ~6 %).
+
+```bash
+python -m scripts.estudio_orden_intravela                    # los 20 símbolos, toda la muestra
+python -m scripts.estudio_orden_intravela --desde 2025-03-19  # solo la época no vista
+```
+
+Solo lectura. Imprime cuántas entradas cambian, el efecto medio sobre el retorno
+neto y si cambian la discriminación del score y el veredicto. El parámetro
+`orden_intravela` de `simular_salida` / `observaciones_de_simbolo` vale por defecto
+«máximo primero»: **ningún resultado previo ni regla viva cambia**. Código:
+`app/data/exit_simulation.py`, `app/domain/rules/intravela.py`,
+`scripts/estudio_orden_intravela.py`. Pruebas: `tests/unit/test_exit_intravela.py`,
+`tests/unit/test_intravela_rules.py`, `tests/unit/test_estudio_orden_intravela_script.py`.
+
+### Resolver las velas ambiguas con velas de 1 minuto (análisis nuevo, 2026-10-17)
+
+Continuación del estudio anterior: en vez de acotar la realidad entre dos lecturas, se
+**elimina la suposición solo donde importa**. `clase_ambiguedad` (en
+`app/data/exit_simulation.py`) decide, con una condición exacta y no aproximada, qué velas
+de 1 h tienen un desenlace que depende del orden dentro de la hora:
+
+- `stop_y_objetivo` — antes del cierre parcial, la vela toca el stop **y** el objetivo (la
+  regla de 1 h cuenta STOP). Esta clase no la cubría el estudio anterior: las dos lecturas
+  daban lo mismo.
+- `parcial_y_trailing` — la vela toca el objetivo y su rango bastaría para tocar también el
+  trailing (la regla de 1 h no evalúa el resto de esa vela).
+- `orden_trailing` — tras el cierre parcial, el máximo sube y el mínimo toca el trailing
+  nuevo (el caso medido en el estudio anterior).
+
+Para esas velas se descargan sus **60 velas de 1 minuto** (datos públicos de Binance,
+solo lectura) y se recorren con exactamente las mismas reglas. Cada descarga se **valida**:
+las 60 velas deben ser consecutivas y agregar exactamente la vela de 1 h (misma apertura,
+máximo, mínimo y cierre). Si no, la vela se declara **sin resolver**, usa la regla de 1 h y
+se cuenta en el informe: nada se inventa ni se rellena. No se guarda nada en la base de
+datos ni se crea una temporalidad nueva: las velas de 1 minuto viven en una caché de
+archivos (`data/cache_velas_1m/`, fuera de Git) que evita volver a descargar.
+
+```bash
+python -m scripts.estudio_velas_1m --solo-contar   # cuántas velas habría que bajar; no usa la red
+python -m scripts.estudio_velas_1m                 # descarga (con caché) e informe completo
+python -m scripts.estudio_velas_1m --desde 2025-03-19
+```
+
+El informe muestra la cobertura (cuántas velas ambiguas, de qué clase, cuántas resueltas y
+cuántas no y por qué), **dónde cae el desenlace real** respecto de las dos lecturas de 1 h
+(igual a una, intermedio, o fuera de ambas), el efecto sobre el retorno medio y la
+discriminación del score con el veredicto walk-forward de las tres lecturas. Si algo quedó
+sin resolver (p. ej. un corte de red) el código de salida es 2: se vuelve a correr y la
+caché conserva lo ya descargado. Limitación declarada: dentro de un solo minuto se sigue
+suponiendo «máximo primero»; el informe imprime el mayor rango de un minuto para que se vea
+que es irrelevante. Sin `resolvedor` (el valor por defecto) **ningún resultado previo ni
+regla viva cambia**. Código: `app/data/exit_simulation.py`, `app/data/minute_candles.py`,
+`app/data/exchange_client.py` (`fetch_minute_candles_of_hour`), `app/domain/rules/intravela.py`
+(`ubicar_resuelta`), `scripts/estudio_velas_1m.py`. Pruebas:
+`tests/unit/test_resolucion_1m.py`, `tests/unit/test_minute_candles.py`,
+`tests/unit/test_estudio_velas_1m_script.py`.
+
 ### Ampliar el historial hacia atrás y repetir el backtest (protocolo pre-registrado, 2026-10-12)
 
 Tras el resultado negativo, la decisión fue comprobar si es propio de 2025-2026 usando datos que no se han visto. El protocolo completo (qué no cambia, cómo se leerá cada resultado) quedó escrito **antes** de bajar los datos en `claude/decisiones-walk-forward.md` del proyecto.
