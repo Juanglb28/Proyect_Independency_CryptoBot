@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.config import get_settings
-from app.data.candle_ingestion import velas_vencidas_sin_cerrar
+from app.data.candle_ingestion import velas_vencidas_que_invalidan_un_estudio
 from app.data.support_study import (
     BASE,
     DEFINICIONES,
@@ -93,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
     observaciones: list[Observacion] = []
     sin_datos: list[str] = []
     with session_scope(session_factory) as session:
-        vencidas = velas_vencidas_sin_cerrar(session, ahora=datetime.now(timezone.utc), symbols=symbols)
+        vencidas = velas_vencidas_que_invalidan_un_estudio(session, ahora=datetime.now(timezone.utc), symbols=symbols)
         if vencidas:
             print(
                 f"ERROR: hay {len(vencidas)} vela(s) vencidas sin cerrar (datos parciales antiguos). "

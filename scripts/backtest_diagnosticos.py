@@ -21,7 +21,7 @@ from datetime import date, datetime, timezone
 
 from app.config import get_settings
 from app.data.backtest_study import observaciones_de_simbolo
-from app.data.candle_ingestion import velas_vencidas_sin_cerrar
+from app.data.candle_ingestion import velas_vencidas_que_invalidan_un_estudio
 from app.db.session import get_engine, get_sessionmaker, session_scope
 from app.domain.rules.walk_forward import InformeWalkForward, ObservacionBacktest, VentanasWalkForward, hasta_fecha
 from app.domain.rules.walk_forward_diagnostics import InformeDiagnosticos, diagnosticos
@@ -94,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
     session_factory = get_sessionmaker(get_engine(get_settings()))
     observaciones: list[ObservacionBacktest] = []
     with session_scope(session_factory) as session:
-        vencidas = velas_vencidas_sin_cerrar(session, ahora=datetime.now(timezone.utc), symbols=symbols)
+        vencidas = velas_vencidas_que_invalidan_un_estudio(session, ahora=datetime.now(timezone.utc), symbols=symbols)
         if vencidas:
             print(
                 f"ERROR: hay {len(vencidas)} vela(s) vencidas sin cerrar. "

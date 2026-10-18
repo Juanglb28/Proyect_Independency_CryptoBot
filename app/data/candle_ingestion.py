@@ -209,16 +209,57 @@ def backfill_all(
     return results
 
 
+# --- Guardia de los estudios (2026-10-17) ------------------------------------
+# Los estudios/backtests leen SOLO velas cerradas (`get_candles`); una vela en
+# curso expirada hace minutos simplemente no está en la serie (queda en la
+# cola, nunca como hueco intermedio) y no contamina nada. Por eso su guardia
+# ignora lo recién vencido y mira solo las temporalidades que usa. Estos dos
+# valores NO afectan a la reparación ni al ciclo horario, que usan la
+# definición estricta. TODO — DECISIÓN HUMANA si se quiere otro margen.
+TEMPORALIDADES_DE_ESTUDIO: tuple[str, ...] = ("1d", "1h")
+GRACIA_DE_ESTUDIO: timedelta = timedelta(minutes=10)
+
+
 def velas_vencidas_sin_cerrar(
-    session: Session, *, ahora: datetime, symbols: Iterable[str] | None = None
+    session: Session,
+    *,
+    ahora: datetime,
+    symbols: Iterable[str] | None = None,
+    timeframes: Iterable[str] | None = None,
+    gracia: timedelta = timedelta(0),
 ) -> list[tuple[str, str, datetime]]:
     """Velas guardadas como NO cerradas cuya hora de cierre ya pasó: datos
     parciales que nadie refrescó (el caso típico son las velas congeladas antes
     de la corrección del 2026-10-08, ver `scripts/repair_partial_candles.py`).
-    La vela en curso de ahora NO cuenta."""
+    La vela en curso de ahora NO cuenta.
+
+    Por defecto la definición es ESTRICTA (sin gracia, todas las temporalidades):
+    la usan la reparación, la recuperación al arrancar y el ciclo horario.
+    `timeframes` restringe a esas temporalidades y `gracia` ignora las velas
+    cuyo cierre ocurrió hace menos de ese tiempo (`ahora - gracia`)."""
     permitidos = None if symbols is None else set(symbols)
+    temporalidades = None if timeframes is None else set(timeframes)
+    if gracia < timedelta(0):
+        raise ValueError("gracia no puede ser negativa")
+    referencia = ahora - gracia
     return [
         (symbol, timeframe, open_time)
         for symbol, timeframe, open_time in list_velas_sin_cerrar(session)
-        if (permitidos is None or symbol in permitidos) and esta_cerrada(open_time, timeframe, ahora=ahora)
+        if (permitidos is None or symbol in permitidos)
+        and (temporalidades is None or timeframe in temporalidades)
+        and esta_cerrada(open_time, timeframe, ahora=referencia)
     ]
+
+
+def velas_vencidas_que_invalidan_un_estudio(
+    session: Session, *, ahora: datetime, symbols: Iterable[str] | None = None
+) -> list[tuple[str, str, datetime]]:
+    """Guardia de los scripts de estudio/backtest: solo 1d y 1h (las que
+    leen) y sin contar lo vencido hace menos de `GRACIA_DE_ESTUDIO`."""
+    return velas_vencidas_sin_cerrar(
+        session,
+        ahora=ahora,
+        symbols=symbols,
+        timeframes=TEMPORALIDADES_DE_ESTUDIO,
+        gracia=GRACIA_DE_ESTUDIO,
+    )
