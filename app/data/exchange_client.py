@@ -181,3 +181,46 @@ def fetch_candles(
             )
         )
     return candles
+
+
+MINUTOS_POR_HORA = 60
+
+
+def fetch_minute_candles_of_hour(
+    symbol: str,
+    hour_open: datetime,
+    exchange: ccxt.binance | None = None,
+) -> list[Candle]:
+    """Velas de 1 minuto de UNA hora (hasta 60), desde Binance mainnet, solo lectura.
+
+    Existe solo para el estudio de resolución intravela (2026-10-17): `1m` NO es una
+    temporalidad del sistema (`SUPPORTED_TIMEFRAMES`) y estas velas no se guardan en
+    la base de datos ni alimentan indicadores. `hour_open` debe ser el inicio exacto
+    de una hora UTC, con tzinfo. Devuelve las velas tal cual las entrega Binance
+    (puede haber menos de 60 si faltan minutos; quien llama valida)."""
+    _validate_symbol(symbol)
+    if hour_open.tzinfo is None:
+        raise ValueError("`hour_open` debe ser un datetime con tzinfo (UTC), no naive")
+    if (hour_open.minute, hour_open.second, hour_open.microsecond) != (0, 0, 0):
+        raise ValueError(f"`hour_open` debe ser el inicio exacto de una hora (recibido {hour_open.isoformat()})")
+
+    exchange = exchange if exchange is not None else get_exchange()
+    raw = exchange.fetch_ohlcv(
+        _to_ccxt_symbol(symbol),
+        timeframe="1m",
+        limit=MINUTOS_POR_HORA,
+        since=int(hour_open.timestamp() * 1000),
+    )
+    return [
+        Candle(
+            symbol=symbol,
+            timeframe="1m",
+            open_time=datetime.fromtimestamp(open_time_ms / 1000, tz=timezone.utc),
+            open=Decimal(str(open_)),
+            high=Decimal(str(high)),
+            low=Decimal(str(low)),
+            close=Decimal(str(close)),
+            volume=Decimal(str(volume)),
+        )
+        for open_time_ms, open_, high, low, close, volume in raw
+    ]

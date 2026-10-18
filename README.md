@@ -2745,6 +2745,8 @@ scripts/
 ├── study_support_h1.py          # CLI: estudio offline H1 (soporte + RSI 4h), protocolo v2 en docs/
 ├── backtest_walk_forward.py     # CLI: backtest walk-forward del score cuantitativo (Fase C)
 ├── backtest_diagnosticos.py     # CLI: diagnósticos exploratorios del backtest (censura, factores, rango/día, 9/3/3)
+├── estudio_orden_intravela.py   # CLI: sensibilidad del backtest al orden máximo/mínimo dentro de la vela de 1 h
+├── estudio_velas_1m.py          # CLI: resuelve las velas ambiguas de 1 h con velas de 1 minuto (caché de archivos)
 ├── calculate_indicators.py      # CLI: cálculo masivo de indicadores
 ├── verify_indicators.py         # CLI: verificación de integridad de indicadores
 ├── seed_events.py                # CLI: carga/actualiza el catálogo de eventos

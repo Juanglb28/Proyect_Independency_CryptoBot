@@ -46,6 +46,5 @@ data/kronos/k0-*.json
 logs/
 .scheduler_watchdog_state.json
 
-# Registros y estado local de los scripts de Windows
-logs/
-.scheduler_watchdog_state.json
+# Caché del estudio de velas de 1 minuto (datos públicos re-descargables)
+data/cache_velas_1m/
