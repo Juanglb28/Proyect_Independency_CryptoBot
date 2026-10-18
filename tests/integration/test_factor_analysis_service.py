@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 
 from app.db.models.analysis import Factor
 from app.repositories.analysis import list_factores_de_propuestas
@@ -39,7 +39,9 @@ def test_factores_constantes_no_inventan_contribucion(db_session, seis_operacion
 
 def test_puntaje_de_factor_alineado_con_el_resultado_da_contribucion_positiva(db_session, seis_operaciones):  # noqa: F811
     trades = load_trades(db_session, period_start=None, period_end=None)
-    # el puntaje de "tendencia_momentum" sigue al score global (ganan los altos)
+    # el puntaje de "tendencia_momentum" sigue al score global (ganan los altos). `factores` es de
+    # decisión congelada (trigger); solo este test de preparación lo desactiva, dentro de su transacción
+    db_session.execute(text("ALTER TABLE factores DISABLE TRIGGER trg_factores_inmutable"))
     for t in trades:
         db_session.execute(
             update(Factor)
@@ -47,6 +49,7 @@ def test_puntaje_de_factor_alineado_con_el_resultado_da_contribucion_positiva(db
             .values(puntaje=t.initial_opportunity_score)
         )
     db_session.flush()
+    db_session.execute(text("ALTER TABLE factores ENABLE TRIGGER trg_factores_inmutable"))
     r = analyze_factors_for_period(db_session)
     tm = next(a for a in r.factores if a.factor == "tendencia_momentum")
     assert tm.contribucion_usd == D("20.3796") and tm.tercil_alto.n == 2 and tm.tercil_bajo.n == 2

@@ -348,6 +348,31 @@ faltante no recibe un puntaje inventado (sección P3): se reporta aparte.
 diario (`app/orchestration/daily_cycle.py`) sí guarda, por cada ciclo, una fila
 por símbolo del universo en `prefiltro_resultados` (ver abajo).
 
+### Decisión congelada en la base de datos (`propuestas`, `factores`; migración `c9d3f7a1e5b2`, 2026-10-17)
+
+La regla de la sección 14 del master prompt («una vez creada la propuesta, su
+`decision_snapshot` no se modifica») se cumplía solo por convención: ningún código
+actualiza esas filas. Ahora la impone la base de datos con un trigger
+`BEFORE UPDATE` en cada tabla:
+
+- `propuestas` rechaza el `UPDATE` si cambia el snapshot o cualquier dato que
+  describe la decisión (puntajes, tesis, invalidación, símbolo, ciclo, tier,
+  fuentes, segunda ronda...). Cambiar solo `created_at` u otra columna ajena a la
+  decisión sigue permitido, y reescribir el mismo valor no cuenta como cambio.
+- `factores` rechaza cambiar el factor, su peso, su puntaje o su confianza.
+- **No se bloquea `DELETE` ni `TRUNCATE`** (a propósito, hasta revisar la limpieza
+  de las pruebas y la copia a Railway). Esta migración cierra la modificación
+  retroactiva, no el borrado.
+- La copia a Railway ve el trigger y trata estas tablas como inmutables
+  (`ON CONFLICT DO NOTHING`). **Aplicar la migración también en Railway** antes de
+  la siguiente copia (`scripts\sync_railway.ps1 -MigrarRailway`), porque la copia
+  exige la misma versión de esquema en origen y destino.
+
+Código: `migrations/versions/c9d3f7a1e5b2_propuestas_y_factores_inmutables.py`.
+Pruebas: `tests/integration/test_decision_congelada.py`. Un test que necesita
+alterar un puntaje de factor para preparar datos desactiva el trigger solo dentro
+de su transacción (mismo patrón que los tests de `trade_results`).
+
 ### Resultado del pre-filtro por ciclo (`prefiltro_resultados`)
 
 Tabla nueva (aprobada por el usuario, 2026-10-07; migración `a3c2e5195411`),
@@ -1629,8 +1654,8 @@ Estrategia por tabla (se decide sola):
 
 - **Tablas inmutables** (las que tienen un trigger que rechaza cambios: velas
   cerradas, `trade_results`, `trade_snapshots`, `alertas`, `equity_observaciones`,
-  `eventos_sistema`, `perfil_usuario`, `prefiltro_resultados`): solo se agregan las
-  filas nuevas (`ON CONFLICT DO NOTHING`).
+  `eventos_sistema`, `perfil_usuario`, `prefiltro_resultados`, `kronos_forecasts`,
+  `propuestas`, `factores`): solo se agregan las filas nuevas (`ON CONFLICT DO NOTHING`).
 - **Tablas mutables** (`posiciones`, `ordenes`, `performance_metrics`): se
   actualizan (`UPSERT`), para reflejar los cambios de estado.
 - **`velas`**: solo las **cerradas**; la vela en curso entra cuando cierra.
