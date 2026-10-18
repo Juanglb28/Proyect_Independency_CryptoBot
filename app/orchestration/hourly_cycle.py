@@ -28,6 +28,24 @@ acaban de cerrar a esa hora — no tiene sentido descargar velas 4h cuando
 estamos en la hora 3 (la vela no cambió desde la hora 0). Los indicadores
 se recalculan para esas mismas temporalidades.
 
+Refresco de velas de las 9:30 (Colombia) — 2026-10-17
+------------------------------------------------------
+El ciclo horario solo descarga las temporalidades que cierran a esa hora. Si el
+equipo está apagado a las 12:05 UTC (7:05 a. m. en Colombia), la vela de 12 h (y
+la de 4 h de las 12:00) queda guardada a medias hasta el ciclo diario de las
+00:05 UTC. ``run_candle_refresh`` es un job aparte, a las 14:30 UTC (9:30 a. m.),
+que solo repasa 1h/4h/12h: ingesta + indicadores. NO corre el pre-filtro ni
+detecta candidatos ni dispara IA: no altera la enmienda E3.
+
+Recuperación de velas vencidas al arrancar — 2026-10-17
+--------------------------------------------------------
+Si el scheduler se (re)inicia con velas guardadas a medias cuya hora de cierre ya
+pasó, ``run_stale_candle_catchup`` las vuelve a descargar y recalcula los
+indicadores de esas series (mismo camino de código que
+``scripts/repair_partial_candles.py --ejecutar``). Solo velas e indicadores: sin
+pre-filtro, sin candidatos, sin IA. Cada serie va en su propia transacción: un
+fallo de red en una no pierde lo ya reparado.
+
 Decisiones que implementa
 --------------------------
 - E3 (aprobada 2026-10-09): ingesta horaria + pre-filtro determinista,
@@ -44,13 +62,15 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings
-from app.data.candle_ingestion import BackfillResult, backfill_all
+from app.data.candle_ingestion import BackfillResult, backfill_all, velas_vencidas_sin_cerrar
+from app.data.candle_repair import reparar_serie
+from app.data.exchange_client import get_exchange
 from app.data.indicator_pipeline import (
     VELAS_DE_COLA_INCREMENTAL,
     IndicatorCalculationResult,
@@ -58,6 +78,7 @@ from app.data.indicator_pipeline import (
 )
 from app.data.prefilter_pipeline import PrefilterRunResult, run_prefilter
 from app.domain.rules.scoring import SCORE_MINIMO_PREFILTRO
+from app.db.session import session_scope
 from app.domain.symbols import ALLOWED_SYMBOLS
 from app.repositories.analysis import list_ciclos_recientes, list_prefiltro_de_ciclo
 
@@ -67,6 +88,14 @@ logger = logging.getLogger(__name__)
 # para cubrir huecos por caídas breves sin repetir el backfill completo de
 # 2 años. La ingesta es idempotente: velas ya guardadas se ignoran.
 _BACKFILL_WINDOW_DAYS = 3
+
+REFRESCO_VELAS_HORA_UTC = time(14, 30)
+"""Hora (UTC) del refresco de velas: 9:30 a. m. en Colombia (UTC-5, sin horario de
+verano). Es la ÚNICA definición: el scheduler la usa para su disparador."""
+
+REFRESCO_VELAS_TEMPORALIDADES: tuple[str, ...] = ("1h", "4h", "12h")
+"""Temporalidades que repasa el refresco. La diaria no: solo cambia a las 00:00 UTC
+y la refresca el ciclo diario de las 00:05."""
 
 
 # ---------------------------------------------------------------------------
@@ -352,4 +381,127 @@ def run_hourly_cycle(
         new_candidates=tuple(new_candidates),
         ultimo_ciclo_id=ultimo_id,
         elapsed_seconds=elapsed,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Refresco de velas (job aparte, 14:30 UTC = 9:30 a. m. Colombia)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CandleRefreshResult:
+    """Resumen de un refresco de velas."""
+
+    timeframes: tuple[str, ...]
+    velas_nuevas: int
+    velas_actualizadas: int
+    indicadores_nuevos: int
+    elapsed_seconds: float
+
+
+def run_candle_refresh(
+    session: Session,
+    *,
+    now: datetime | None = None,
+    timeframes: tuple[str, ...] = REFRESCO_VELAS_TEMPORALIDADES,
+) -> CandleRefreshResult:
+    """Repasa las velas de ``timeframes`` (ventana de 3 días, idempotente) y
+    recalcula sus indicadores de forma incremental.
+
+    Cierra las velas que quedaron guardadas a medias porque un ciclo horario no
+    corrió a su hora. No corre el pre-filtro, no detecta candidatos, no llama a
+    la IA y no escribe en tablas operativas: solo velas e indicadores derivados.
+    """
+    inicio = datetime.now(timezone.utc)
+    ahora = now if now is not None else inicio
+
+    backfill_results = backfill_all(
+        session, ALLOWED_SYMBOLS, timeframes, ahora - timedelta(days=_BACKFILL_WINDOW_DAYS), until=ahora, now=ahora
+    )
+    indicator_results = calculate_indicators_for_all(
+        session, ALLOWED_SYMBOLS, timeframes, tail=VELAS_DE_COLA_INCREMENTAL
+    )
+    return CandleRefreshResult(
+        timeframes=tuple(timeframes),
+        velas_nuevas=sum(r.inserted for r in backfill_results),
+        velas_actualizadas=sum(r.updated for r in backfill_results),
+        indicadores_nuevos=sum(r.inserted for r in indicator_results),
+        elapsed_seconds=(datetime.now(timezone.utc) - inicio).total_seconds(),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Recuperación de velas vencidas (al arrancar el scheduler)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class StaleCandleCatchupResult:
+    """Resumen de la recuperación de velas vencidas sin cerrar."""
+
+    series_con_velas_vencidas: int
+    velas_reparadas: int
+    series_fallidas: int
+    velas_sin_reparar: int
+    elapsed_seconds: float
+
+
+def run_stale_candle_catchup(
+    session_factory: sessionmaker[Session],
+    *,
+    now: datetime | None = None,
+    exchange: object | None = None,
+) -> StaleCandleCatchupResult:
+    """Repara las velas guardadas a medias cuya hora de cierre ya pasó.
+
+    Para cada serie (símbolo + temporalidad) con velas vencidas sin cerrar, vuelve
+    a descargarlas desde la más antigua y recalcula los indicadores de esa serie
+    (``reparar_serie``). Una transacción por serie: si Binance falla en una, se
+    registra, se sigue con las demás y lo ya confirmado queda (P5).
+
+    No corre el pre-filtro, no detecta candidatos, no llama a la IA y no escribe en
+    tablas operativas. Solo atiende símbolos de la lista autorizada.
+    """
+    inicio = datetime.now(timezone.utc)
+    ahora = now if now is not None else inicio
+
+    with session_scope(session_factory) as session:
+        pendientes = sorted(
+            {(s, tf) for s, tf, _ in velas_vencidas_sin_cerrar(session, ahora=ahora) if s in ALLOWED_SYMBOLS}
+        )
+    if not pendientes:
+        return StaleCandleCatchupResult(0, 0, 0, 0, (datetime.now(timezone.utc) - inicio).total_seconds())
+
+    if exchange is None:
+        exchange = get_exchange()
+
+    reparadas = 0
+    fallidas = 0
+    sin_reparar = 0
+    for symbol, timeframe in pendientes:
+        try:
+            with session_scope(session_factory) as session:
+                resultado = reparar_serie(session, symbol, timeframe, ahora=ahora, exchange=exchange)
+        except Exception:
+            fallidas += 1
+            logger.error(
+                "Recuperación de velas: falló %s %s; se sigue con las demás series",
+                symbol,
+                timeframe,
+                exc_info=True,
+                extra={"component": "orchestration.hourly_cycle", "symbol": symbol, "timeframe": timeframe},
+            )
+            continue
+        if resultado is None:
+            continue
+        reparadas += len(resultado.velas)
+        sin_reparar += resultado.restantes
+
+    return StaleCandleCatchupResult(
+        series_con_velas_vencidas=len(pendientes),
+        velas_reparadas=reparadas,
+        series_fallidas=fallidas,
+        velas_sin_reparar=sin_reparar,
+        elapsed_seconds=(datetime.now(timezone.utc) - inicio).total_seconds(),
     )

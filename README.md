@@ -1913,6 +1913,80 @@ casos de latido/ping en `tests/unit/test_scheduler.py`. El vigía de PowerShell 
 tiene test automático (corre en otro entorno); su lógica es corta y refleja la
 regla de dominio ya probada.
 
+## Refresco de velas a las 9:30 a. m. de Colombia (2026-10-17)
+
+**Problema.** El ciclo horario solo descarga las temporalidades que cierran a esa hora.
+La vela de 12 h cierra a las 12:00 UTC (7:00 a. m. en Colombia); si el equipo está
+apagado a las 12:05 UTC esa vela queda guardada **a medias** hasta el ciclo diario de
+las 00:05 UTC. No dañaba el análisis (el ciclo diario la refresca antes de analizar),
+pero sí disparaba la protección de los backtests («velas vencidas sin cerrar»).
+
+**Solución (decisión del usuario).** Un quinto job del scheduler, `candle_refresh`, a las
+**14:30 UTC = 9:30 a. m. de Colombia** (UTC-5, sin horario de verano): repasa las velas
+de `1h`, `4h` y `12h` (ventana de 3 días, idempotente) y recalcula sus indicadores de
+forma incremental. **Solo velas e indicadores**: no corre el pre-filtro, no detecta
+candidatos nuevos, no dispara IA y no escribe en tablas operativas, así que la enmienda
+E3 no cambia. Si el equipo duerme a esa hora y despierta hasta 3 h después, el job corre
+una vez al despertar (`misfire_grace_time`); si el equipo está apagado (no dormido) a
+las 9:30, no corre y el ciclo diario de las 00:05 UTC vuelve a cubrirlo. El ciclo horario
+de las 12:05 UTC sigue existiendo y no cambia.
+
+Para aplicar el cambio hay que **recrear el scheduler**:
+`docker compose up -d --force-recreate scheduler`.
+
+Código: `app/orchestration/hourly_cycle.py` (`run_candle_refresh`,
+`REFRESCO_VELAS_HORA_UTC`), `app/orchestration/scheduler.py` (`_job_refresco_velas`).
+Pruebas: `tests/unit/test_candle_refresh.py`.
+
+### Recuperación de velas vencidas al arrancar (2026-10-17)
+
+**Qué hace.** Unos 10 segundos después de que el scheduler arranca (o se recrea), un job
+de **una sola ejecución** (`stale_candle_catchup`) busca velas guardadas a medias cuya hora
+de cierre ya pasó y las repara: las vuelve a descargar de Binance desde la más antigua y
+recalcula los indicadores de esa serie. Es el mismo camino de código que
+`scripts/repair_partial_candles.py --ejecutar`, pero automático. Así, si el equipo estuvo
+apagado en un cierre (p. ej. el de 12 h), la vela queda corregida en cuanto el equipo vuelve
+a encenderse, sin esperar a las 9:30 ni al ciclo diario.
+
+**Qué NO hace.** Solo velas e indicadores: no corre el pre-filtro, no detecta candidatos, no
+llama a la IA y no escribe en tablas operativas. Solo atiende símbolos de la lista
+autorizada. Corre en un hilo aparte: no retrasa al monitor de 60 s.
+
+**Robustez.** Una transacción por serie: si Binance falla en una, se registra el error y se
+sigue con las demás (lo ya reparado queda). Un fallo total se registra y no mata al
+scheduler; el refresco de las 14:30 UTC y el ciclo diario vuelven a cubrirlo.
+
+**Qué ve el usuario.** En el log del scheduler: `Recuperación de velas vencidas: series=…,
+velas reparadas=…` (o «no hay velas vencidas sin cerrar»). Si hubo series fallidas o velas
+sin reparar, el mensaje sale como aviso.
+
+**Límite conocido.** Solo corre al *arrancar*. Si el equipo se duerme con el scheduler vivo y
+despierta, la recuperación no se repite sola: lo cubre el refresco de las 9:30 (con 3 h de
+gracia) y, si no, el ciclo diario.
+
+Código: `app/orchestration/hourly_cycle.py` (`run_stale_candle_catchup`),
+`app/orchestration/scheduler.py` (`_job_recuperar_velas_vencidas`). Pruebas:
+`tests/unit/test_candle_refresh.py` y `tests/integration/test_stale_candle_catchup.py`.
+
+### Guardia de velas vencidas de los estudios (ajuste 2026-10-17)
+
+**Problema.** Cada hora entre :00 y :05 los scripts de estudio/backtest se negaban a correr
+(«hay N vela(s) vencidas sin cerrar»): la vela de 1 h guardada a medias por el ciclo anterior
+ya expiró y el ciclo de :05 aún no la refresca. También bloqueaban velas de 4 h/12 h que los
+estudios no leen.
+
+**Cambio.** Los scripts `backtest_walk_forward`, `backtest_diagnosticos`, `study_support_h1`,
+`estudio_orden_intravela` y `estudio_velas_1m` usan ahora
+`velas_vencidas_que_invalidan_un_estudio`: solo mira **1d y 1h** (lo que leen) e ignora lo
+vencido hace **menos de 10 minutos**. Un estudio lee solo velas cerradas, así que una vela
+recién expirada queda fuera de la serie como cola, nunca como hueco intermedio; un parcial
+antiguo en el medio de la serie sigue bloqueando.
+
+**Lo que NO cambia.** `velas_vencidas_sin_cerrar` conserva por defecto la definición estricta
+(sin gracia, todas las temporalidades); la usan la reparación, la recuperación al arrancar y el
+ciclo horario. Los valores (`TEMPORALIDADES_DE_ESTUDIO`, `GRACIA_DE_ESTUDIO`) están en
+`app/data/candle_ingestion.py`. Pruebas: `tests/integration/test_guardia_de_estudio.py`.
+
 ## Cálculo incremental de indicadores en el ciclo horario (2026-10-12)
 
 El ciclo horario recalculaba **toda** la historia de indicadores cada hora: por

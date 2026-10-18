@@ -1,6 +1,7 @@
 """Proceso scheduler: APScheduler 3.x con BlockingScheduler (Paso 11b).
 
-Orquesta los cuatro jobs periódicos del sistema:
+Orquesta los cinco jobs periódicos del sistema (más una recuperación única de
+velas vencidas al arrancar, ver abajo):
 
 1. **Monitor** — cada 60 s: reconcilia estado, vigila posiciones abiertas,
    ejecuta stop / TP / trailing, calcula equity, registra drawdown. Python
@@ -19,9 +20,19 @@ Orquesta los cuatro jobs periódicos del sistema:
    (pipeline IA completo). A las 00:00 UTC cierra la vela diaria; 5 min de
    margen es suficiente para que Binance publique la vela definitiva.
 
-4. **Heartbeat** — cada 5 min: escribe un JSON en ``/app/`` (la raíz del
+4. **Refresco de velas** — a las 14:30 UTC (9:30 a. m. en Colombia): repasa las
+   velas de 1h/4h/12h e indicadores, por si el equipo estaba apagado a las 12:05
+   UTC y la vela de 12 h quedó a medias. Solo velas e indicadores: sin pre-filtro,
+   sin candidatos nuevos, sin IA (2026-10-17).
+
+5. **Heartbeat** — cada 5 min: escribe un JSON en ``/app/`` (la raíz del
    contenedor Docker) con ``status``, ``timestamp`` y ``pid``. La UI lee
    este archivo para mostrar si el scheduler está vivo.
+
+Recuperación de velas vencidas (2026-10-17): unos segundos después de arrancar, un
+job de una sola ejecución (``stale_candle_catchup``) repara las velas guardadas a
+medias cuya hora de cierre ya pasó (equipo apagado o dormido en un cierre). Solo
+velas e indicadores; corre en un hilo aparte y no retrasa al monitor.
 
 Arranque y recuperación (Paso 11c)
 ----------------------------------
@@ -81,6 +92,7 @@ from typing import Any
 from apscheduler.events import EVENT_JOB_ERROR, JobExecutionEvent
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -104,7 +116,10 @@ from app.orchestration.cycle_summary import registrar_ciclo_fallido, registrar_r
 from app.orchestration.daily_cycle import run_daily_cycle
 from app.orchestration.entry_opening import abrir_entradas_del_ciclo
 from app.orchestration.hourly_cycle import (
+    REFRESCO_VELAS_HORA_UTC,
+    run_candle_refresh,
     run_hourly_cycle,
+    run_stale_candle_catchup,
     timeframes_que_cierran_a_esta_hora,
 )
 from app.orchestration.lifecycle import run_startup_recovery
@@ -119,6 +134,13 @@ _COMPONENT = "orchestration.scheduler"
 MONITOR_INTERVAL_SECONDS = 60
 HEARTBEAT_INTERVAL_MINUTES = 5
 DAILY_BACKFILL_WINDOW_DAYS = 7
+REFRESCO_VELAS_GRACIA_SEGUNDOS = 3 * 3600
+"""Si el equipo estaba dormido a las 14:30 UTC y despierta hasta 3 h después, el
+refresco corre una vez al despertar en vez de perderse hasta mañana (es idempotente)."""
+RECUPERACION_VELAS_RETRASO_SEGUNDOS = 10
+RECUPERACION_VELAS_GRACIA_SEGUNDOS = 600
+"""La recuperación de velas vencidas corre una vez, unos segundos después de arrancar
+(en un hilo aparte del scheduler: no retrasa al monitor)."""
 
 # Ruta del heartbeat: dentro de /app/ (raíz del contenedor Docker, donde
 # el volumen .:/app monta el proyecto). En desarrollo local, queda en la
@@ -291,6 +313,83 @@ def _job_hourly(state: _SharedState) -> None:
             extra={"component": _COMPONENT},
         )
         _ejecutar_ciclo_diario(state, trigger="hourly_new_candidates")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Job 4: Refresco de velas (14:30 UTC = 9:30 a. m. Colombia)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _trigger_refresco_velas() -> CronTrigger:
+    """Disparador diario del refresco: ``REFRESCO_VELAS_HORA_UTC`` (UTC)."""
+    return CronTrigger(hour=REFRESCO_VELAS_HORA_UTC.hour, minute=REFRESCO_VELAS_HORA_UTC.minute, timezone="UTC")
+
+
+def _job_refresco_velas(state: _SharedState) -> None:
+    """Repasa las velas 1h/4h/12h y sus indicadores (solo datos derivados).
+
+    Existe porque el ciclo horario de las 12:05 UTC (7:05 a. m. en Colombia) se
+    pierde si el equipo está apagado y la vela de 12 h queda a medias. No corre el
+    pre-filtro ni dispara IA. Un fallo se registra y no mata al scheduler.
+    """
+    now = datetime.now(timezone.utc)
+    try:
+        with session_scope(state.session_factory) as session:
+            result = run_candle_refresh(session, now=now)
+    except Exception:
+        logger.error(
+            "Refresco de velas: falló; el ciclo diario de las 00:05 UTC vuelve a cubrirlo",
+            exc_info=True,
+            extra={"component": _COMPONENT},
+        )
+        return
+
+    logger.info(
+        "Refresco de velas completado: temporalidades=%s, nuevas=%d, actualizadas=%d, indicadores=%d, elapsed=%.1fs",
+        result.timeframes,
+        result.velas_nuevas,
+        result.velas_actualizadas,
+        result.indicadores_nuevos,
+        result.elapsed_seconds,
+        extra={"component": _COMPONENT},
+    )
+
+
+def _job_recuperar_velas_vencidas(state: _SharedState) -> None:
+    """Al arrancar: repara las velas guardadas a medias cuya hora de cierre ya pasó.
+
+    Cubre el caso de un equipo que estuvo apagado o dormido y se perdió el cierre de
+    una vela (p. ej. la de 12 h a las 12:00 UTC). Se ejecuta una sola vez, unos
+    segundos después de arrancar; solo velas e indicadores (sin pre-filtro ni IA).
+    Un fallo se registra y no mata al scheduler.
+    """
+    try:
+        result = run_stale_candle_catchup(state.session_factory, now=datetime.now(timezone.utc))
+    except Exception:
+        logger.error(
+            "Recuperación de velas vencidas: falló; el refresco de las 14:30 UTC y el ciclo diario vuelven a cubrirlo",
+            exc_info=True,
+            extra={"component": _COMPONENT},
+        )
+        return
+
+    if result.series_con_velas_vencidas == 0:
+        logger.info(
+            "Recuperación de velas vencidas: no hay velas vencidas sin cerrar",
+            extra={"component": _COMPONENT},
+        )
+        return
+    log = logger.warning if (result.series_fallidas or result.velas_sin_reparar) else logger.info
+    log(
+        "Recuperación de velas vencidas: series=%d, velas reparadas=%d, series fallidas=%d, "
+        "velas sin reparar=%d, elapsed=%.1fs",
+        result.series_con_velas_vencidas,
+        result.velas_reparadas,
+        result.series_fallidas,
+        result.velas_sin_reparar,
+        result.elapsed_seconds,
+        extra={"component": _COMPONENT},
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -703,6 +802,29 @@ def start_scheduler() -> None:
         name="Ciclo diario (backfill + IA, 00:05 UTC)",
     )
 
+    # Job 6: Recuperación de velas vencidas — una sola vez, poco después de arrancar
+    scheduler.add_job(
+        _job_recuperar_velas_vencidas,
+        trigger=DateTrigger(
+            run_date=datetime.now(timezone.utc) + timedelta(seconds=RECUPERACION_VELAS_RETRASO_SEGUNDOS),
+            timezone="UTC",
+        ),
+        args=[state],
+        id="stale_candle_catchup",
+        name="Recuperación de velas vencidas (una vez al arrancar)",
+        misfire_grace_time=RECUPERACION_VELAS_GRACIA_SEGUNDOS,
+    )
+
+    # Job 5: Refresco de velas — 14:30 UTC (9:30 a. m. Colombia). Solo velas e indicadores.
+    scheduler.add_job(
+        _job_refresco_velas,
+        trigger=_trigger_refresco_velas(),
+        args=[state],
+        id="candle_refresh",
+        name="Refresco de velas (1h/4h/12h, 14:30 UTC = 9:30 Colombia)",
+        misfire_grace_time=REFRESCO_VELAS_GRACIA_SEGUNDOS,
+    )
+
     # Job 4: Heartbeat — cada 5 min (y ping al dead-man's-switch si se configuró)
     scheduler.add_job(
         _job_heartbeat,
@@ -730,8 +852,9 @@ def start_scheduler() -> None:
 
     # ── Arrancar ──
     logger.info(
-        "Scheduler: arrancando 4 jobs — monitor(60s), horario(:05), "
-        "diario(00:05), heartbeat(5min)",
+        "Scheduler: arrancando 5 jobs periódicos — monitor(60s), horario(:05), "
+        "diario(00:05), refresco de velas(14:30 UTC), heartbeat(5min) — "
+        "más la recuperación única de velas vencidas",
         extra={"component": _COMPONENT},
     )
 
