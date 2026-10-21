@@ -75,7 +75,7 @@
     "external_id": "dogecoin-musk-snl",
     "event_date": "2021-05-08",
     "event_type": "OTRO",
-    "description": "Elon Musk presenta Saturday Night Live y bromea sobre Dogecoin; el precio de DOGE cae con fuerza tras la emisión.",
+    "description": "Elon Musk presenta Saturday Night Live y bromea sobre Dogecoin durante la emisión.",
     "severity": "media",
     "source": "https://www.cnbc.com/2021/05/08/dogecoin-price-plummets-as-elon-musk-hosts-saturday-night-live-.html",
     "scope": "DOGEUSDT"
@@ -84,7 +84,7 @@
     "external_id": "poly-network-hack",
     "event_date": "2021-08-10",
     "event_type": "HACKEO_EXCHANGE",
-    "description": "Poly Network sufre un exploit de aproximadamente 600 millones de dólares, uno de los mayores hackeos DeFi hasta la fecha (la mayor parte de los fondos fue devuelta por el atacante).",
+    "description": "Poly Network sufre un exploit de aproximadamente 600 millones de dólares, uno de los mayores hackeos DeFi hasta la fecha.",
     "severity": "alta",
     "source": "https://www.coindesk.com/markets/2021/08/10/cross-chain-defi-site-poly-network-hacked-hundreds-of-millions-potentially-lost",
     "scope": "GLOBAL"
@@ -111,7 +111,7 @@
     "external_id": "bitcoin-ath-nov-2021",
     "event_date": "2021-11-10",
     "event_type": "OTRO",
-    "description": "Bitcoin alcanza un máximo histórico cercano a 69,000 USD (no superado hasta marzo de 2024).",
+    "description": "Bitcoin alcanza un máximo histórico cercano a 69,000 USD.",
     "severity": "media",
     "source": "https://www.aljazeera.com/economy/2021/11/10/bitcoin-flirts-with-69000-on-heels-of-surging-inflation-news",
     "scope": "BTCUSDT"
@@ -138,7 +138,7 @@
     "external_id": "celsius-pauses-withdrawals",
     "event_date": "2022-06-12",
     "event_type": "QUIEBRA_EXCHANGE",
-    "description": "La plataforma de préstamos cripto Celsius Network pausa todos los retiros citando \"condiciones extremas de mercado\"; se declararía en quiebra el mes siguiente.",
+    "description": "La plataforma de préstamos cripto Celsius Network pausa todos los retiros y transferencias citando \"condiciones extremas de mercado\".",
     "severity": "alta",
     "source": "https://techcrunch.com/2022/06/12/crypto-lender-celsius-pauses-withdrawals-transfers-citing-extreme-market-conditions/",
     "scope": "GLOBAL"
@@ -363,7 +363,7 @@
     "external_id": "grayscale-withdraws-cardano-etf",
     "event_date": "2026-08-07",
     "event_type": "REGULACION",
-    "description": "Grayscale retira ante la SEC (Form RW) sus solicitudes de ETF spot para Cardano, Hedera y Polkadot, apenas dos días antes de que ADA alcanzara el umbral de elegibilidad regulatoria. No implica un rechazo de la SEC: es una decisión propia de Grayscale de no continuar con esos productos.",
+    "description": "Grayscale retira ante la SEC (Form RW) sus solicitudes de ETF spot para Cardano, Hedera y Polkadot. No implica un rechazo de la SEC: es una decisión propia de Grayscale de no continuar con esos productos.",
     "severity": "media",
     "source": "https://en.cryptonomist.ch/2026/08/10/cardano-etf-withdrawal/",
     "scope": "ADAUSDT"
@@ -372,7 +372,7 @@
     "external_id": "cardano-ada-etf-eligibility",
     "event_date": "2026-08-09",
     "event_type": "APROBACION_ETF",
-    "description": "ADA completa el período de seis meses de negociación de futuros regulados en CME y pasa a ser elegible para el mecanismo de listado genérico de ETPs, sin necesidad de una aprobación individual 19b-4 de la SEC por producto. A la fecha de este catálogo (sept. 2026) siguen activas solicitudes de Bitwise, Canary Capital, VanEck y 21Shares para un ETF spot de ADA, pero no existe una fecha límite legal de aprobación/rechazo bajo este mecanismo ni un ETF spot de ADA lanzado todavía.",
+    "description": "ADA completa el período de seis meses de negociación de futuros regulados en CME y pasa a ser elegible para el mecanismo de listado genérico de ETPs, sin necesidad de una aprobación individual 19b-4 de la SEC por producto.",
     "severity": "alta",
     "source": "https://crypto.news/grayscale-killed-three-altcoin-etfs-cardano-eligible/",
     "scope": "ADAUSDT"
@@ -381,7 +381,7 @@
     "external_id": "clarity-act-senate-cloture-fails",
     "event_date": "2026-09-15",
     "event_type": "REGULACION",
-    "description": "La moción de cloture del CLARITY Act fracasa en el Senado de EE. UU. por 49 a 50 votos, estancando la ley de estructura de mercado cripto; el mercado cripto cae durante la sesión.",
+    "description": "La moción de cloture del CLARITY Act fracasa en el Senado de EE. UU. por 49 a 50 votos, estancando la ley de estructura de mercado cripto.",
     "severity": "alta",
     "source": "https://www.coindesk.com/policy/2026/09/15/crypto-clarity-act-flames-out-in-failed-u-s-senate-vote",
     "scope": "GLOBAL"
