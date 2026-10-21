@@ -608,6 +608,16 @@ regla de riesgo de trading: no toca capital, stops ni posiciones.
 - **El ciclo manual no se bloquea.** `python -m scripts.run_daily_cycle` sigue
   funcionando (tú decides gastar) y ahora imprime primero el gasto de hoy frente
   al tope.
+- **Confirmación si ya hay un ciclo reciente** (2026-10-21, tras lanzar por error dos
+  ciclos con 18 min de diferencia): si hay un ciclo terminado sin error, o aún en
+  curso, dentro de las últimas 6 horas, el ciclo manual lo avisa y pide `s` para
+  continuar (cualquier otra respuesta cancela, sin gastar IA y con código de salida 2).
+  Un ciclo fallido no cuenta: reintentar tras un fallo no pide confirmación. Sin terminal
+  interactiva (`docker compose run -T`, tarea programada) cancela en vez de quedarse
+  esperando. `--forzar` salta la pregunta:
+  `docker compose run --rm app python -m scripts.run_daily_cycle --forzar`. No afecta al
+  scheduler. La regla vive en `app/domain/rules/ciclo_manual.py` (ventana en
+  `VENTANA_CICLO_RECIENTE`); la pregunta, en `scripts/run_daily_cycle.py`.
 - La página **Sistema** de la interfaz muestra el gasto de hoy frente al tope y
   avisa si está agotado.
 - Sin migración: `alertas.tipo` es VARCHAR sin restricción.

@@ -6,6 +6,7 @@ ciclo." sin distinguir las causas posibles)."""
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from app.orchestration.daily_cycle import DailyCycleResult
@@ -127,6 +128,7 @@ def test_main_guarda_y_envia_el_resumen_aunque_el_detalle_falle():
         patch.object(mod, "get_engine"),
         patch.object(mod, "get_sessionmaker"),
         patch.object(mod, "session_scope", scope),
+        patch.object(mod, "_confirmar_ciclo_reciente", return_value=True),
         patch.object(mod, "run_daily_cycle", return_value=_result()),
         patch.object(mod, "registrar_resumen_ciclo", side_effect=lambda *a, **k: orden.append("resumen")),
         patch.object(mod, "_enviar_avisos_pendientes", side_effect=lambda *a, **k: orden.append("envio")),
@@ -155,6 +157,7 @@ def test_main_si_el_ciclo_falla_avisa_el_fallo_y_relanza():
         patch.object(mod, "get_engine"),
         patch.object(mod, "get_sessionmaker"),
         patch.object(mod, "session_scope", scope),
+        patch.object(mod, "_confirmar_ciclo_reciente", return_value=True),
         patch.object(mod, "run_daily_cycle", side_effect=error),
         patch.object(mod, "registrar_ciclo_fallido") as fallido,
         patch.object(mod, "registrar_resumen_ciclo") as resumen,
@@ -236,3 +239,163 @@ def test_si_no_se_puede_leer_el_saldo_la_advertencia_no_rompe_la_corrida(capsys)
         mod._advertir_saldo_bajo(object(), _settings_con_saldo())  # no debe lanzar
 
     assert capsys.readouterr().out == ""
+
+
+# ── Confirmación si ya hay un ciclo reciente (2026-10-21) ────────────────────
+
+_AHORA = datetime(2026, 10, 20, 3, 30, tzinfo=timezone.utc)
+
+
+def _fila_ciclo(*, inicio, fin, error=None):
+    from unittest.mock import MagicMock
+
+    fila = MagicMock()
+    fila.id = uuid.uuid4()
+    fila.started_at = inicio
+    fila.finished_at = fin
+    fila.error_message = error
+    return fila
+
+
+def _confirmar(filas, *, forzar=False, es_interactivo=True, respuesta="s", db_falla=False):
+    """Corre `_confirmar_ciclo_reciente` con la base simulada. Devuelve (resultado, preguntas)."""
+    from contextlib import contextmanager
+    from unittest.mock import MagicMock, patch
+
+    import scripts.run_daily_cycle as mod
+
+    preguntas: list[str] = []
+
+    @contextmanager
+    def scope(_fabrica):
+        if db_falla:
+            raise RuntimeError("base caída")
+        yield MagicMock()
+
+    def pedir(texto):
+        preguntas.append(texto)
+        if isinstance(respuesta, BaseException):
+            raise respuesta
+        return respuesta
+
+    with (
+        patch.object(mod, "session_scope", scope),
+        patch.object(mod, "list_ciclos_iniciados_desde", return_value=filas),
+    ):
+        resultado = mod._confirmar_ciclo_reciente(
+            object(), forzar=forzar, ahora=_AHORA, es_interactivo=es_interactivo, pedir=pedir
+        )
+    return resultado, preguntas
+
+
+def _ciclo_de_hace_18_min():
+    return _fila_ciclo(inicio=_AHORA - timedelta(minutes=24), fin=_AHORA - timedelta(minutes=18))
+
+
+def test_sin_ciclos_recientes_no_pregunta_nada():
+    resultado, preguntas = _confirmar([])
+    assert resultado is True and preguntas == []
+
+
+def test_ciclo_reciente_pregunta_y_continua_si_responde_que_si(capsys):
+    resultado, preguntas = _confirmar([_ciclo_de_hace_18_min()], respuesta="s")
+    assert resultado is True and len(preguntas) == 1
+    assert "ciclo completado hace 18 min" in capsys.readouterr().out
+
+
+def test_ciclo_reciente_cancela_con_cualquier_respuesta_que_no_sea_si():
+    for respuesta in ("n", "", "no", "tal vez"):
+        resultado, preguntas = _confirmar([_ciclo_de_hace_18_min()], respuesta=respuesta)
+        assert resultado is False and len(preguntas) == 1
+
+
+def test_acepta_si_con_tilde_y_mayusculas():
+    for respuesta in ("sí", "SI", " Sí ", "y", "YES"):
+        assert _confirmar([_ciclo_de_hace_18_min()], respuesta=respuesta)[0] is True
+
+
+def test_forzar_no_pregunta_ni_consulta_la_base():
+    resultado, preguntas = _confirmar([_ciclo_de_hace_18_min()], forzar=True, db_falla=True)
+    assert resultado is True and preguntas == []
+
+
+def test_sin_terminal_interactiva_cancela_sin_preguntar(capsys):
+    resultado, preguntas = _confirmar([_ciclo_de_hace_18_min()], es_interactivo=False)
+    assert resultado is False and preguntas == []
+    assert "--forzar" in capsys.readouterr().out
+
+
+def test_sin_terminal_interactiva_pero_sin_ciclo_reciente_sigue():
+    resultado, preguntas = _confirmar([], es_interactivo=False)
+    assert resultado is True and preguntas == []
+
+
+def test_entrada_cerrada_eof_cancela():
+    resultado, _ = _confirmar([_ciclo_de_hace_18_min()], respuesta=EOFError())
+    assert resultado is False
+
+
+def test_si_no_se_puede_consultar_la_base_avisa_y_sigue(capsys):
+    resultado, preguntas = _confirmar([], db_falla=True)
+    assert resultado is True and preguntas == []
+    assert "no se pudo comprobar" in capsys.readouterr().out
+
+
+def test_ciclo_fallido_reciente_no_pide_confirmacion():
+    fallido = _fila_ciclo(inicio=_AHORA - timedelta(minutes=30), fin=_AHORA - timedelta(minutes=25), error="boom")
+    resultado, preguntas = _confirmar([fallido])
+    assert resultado is True and preguntas == []
+
+
+def test_main_cancela_sin_gastar_si_no_se_confirma(capsys):
+    from contextlib import contextmanager
+    from unittest.mock import MagicMock, patch
+
+    import scripts.run_daily_cycle as mod
+
+    @contextmanager
+    def scope(_fabrica):
+        yield MagicMock()
+
+    with (
+        patch.object(mod, "configure_logging"),
+        patch.object(mod, "get_settings", return_value=_settings_con_telegram()),
+        patch.object(mod, "get_engine"),
+        patch.object(mod, "get_sessionmaker"),
+        patch.object(mod, "session_scope", scope),
+        patch.object(mod, "_confirmar_ciclo_reciente", return_value=False),
+        patch.object(mod, "run_daily_cycle") as ciclo,
+        patch.object(mod, "registrar_ciclo_fallido") as fallido,
+    ):
+        assert mod.main([]) == 2
+
+    ciclo.assert_not_called()
+    fallido.assert_not_called()
+    assert "no se lanzó ningún ciclo" in capsys.readouterr().out
+
+
+def test_main_pasa_forzar_a_la_confirmacion():
+    from contextlib import contextmanager
+    from unittest.mock import MagicMock, patch
+
+    import scripts.run_daily_cycle as mod
+
+    @contextmanager
+    def scope(_fabrica):
+        yield MagicMock()
+
+    with (
+        patch.object(mod, "configure_logging"),
+        patch.object(mod, "get_settings", return_value=_settings_con_telegram()),
+        patch.object(mod, "get_engine"),
+        patch.object(mod, "get_sessionmaker"),
+        patch.object(mod, "session_scope", scope),
+        patch.object(mod, "_confirmar_ciclo_reciente", return_value=True) as confirmar,
+        patch.object(mod, "run_daily_cycle", return_value=_result()),
+        patch.object(mod, "registrar_resumen_ciclo"),
+        patch.object(mod, "_enviar_avisos_pendientes"),
+        patch.object(mod, "_imprimir_control_de_gastos"),
+    ):
+        assert mod.main(["--forzar"]) == 0
+
+    assert confirmar.call_args.kwargs["forzar"] is True

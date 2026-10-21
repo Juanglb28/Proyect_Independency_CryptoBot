@@ -17,19 +17,24 @@ candidatos"). Si el pre-filtro no encuentra candidatos, el ciclo termina
 sin gastar nada.
 
 Uso:
-    python -m scripts.run_daily_cycle
+    python -m scripts.run_daily_cycle            # pide confirmación si ya hay un ciclo reciente
+    python -m scripts.run_daily_cycle --forzar   # sin preguntar (también sin terminal interactiva)
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import argparse
+import sys
+from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from app.config import get_settings
 from app.db.session import get_engine, get_sessionmaker, session_scope
 from app.logging_config import configure_logging
+from app.domain.rules.ciclo_manual import VENTANA_CICLO_RECIENTE, buscar_ciclo_reciente, mensaje_ciclo_reciente
 from app.domain.rules.cycle_summary import OrigenCiclo
-from app.domain.rules.recovery import inicio_del_dia_utc
+from app.domain.rules.recovery import CicloParaRecuperar, inicio_del_dia_utc
 from app.notifications.dispatcher import dispatch_pending_alerts
 from app.notifications.telegram import build_sender
 from app.domain.rules.ai_budget import saldo_insuficiente
@@ -37,7 +42,11 @@ from app.orchestration.ai_budget import leer_saldo_estimado_ia
 from app.orchestration.cycle_summary import registrar_ciclo_fallido, registrar_resumen_ciclo
 from app.orchestration.daily_cycle import run_daily_cycle
 from app.repositories.ai_calls import get_gasto_acumulado_desde
-from app.repositories.analysis import get_factores_de_propuesta, get_propuestas_de_ciclo
+from app.repositories.analysis import (
+    get_factores_de_propuesta,
+    get_propuestas_de_ciclo,
+    list_ciclos_iniciados_desde,
+)
 
 
 def _imprimir_control_de_gastos(session, settings, costo_de_esta_corrida) -> None:
@@ -142,11 +151,77 @@ def _advertir_saldo_bajo(session_factory, settings) -> None:
         )
 
 
-def main() -> int:
+_RESPUESTAS_AFIRMATIVAS = frozenset({"s", "si", "sí", "y", "yes"})
+
+
+def _confirmar_ciclo_reciente(
+    session_factory,
+    *,
+    forzar: bool,
+    ahora: datetime,
+    es_interactivo: bool,
+    pedir: Callable[[str], str] = input,
+) -> bool:
+    """`True` si se puede lanzar el ciclo; `False` si hay que cancelar.
+
+    Si hay un ciclo reciente (ver `app.domain.rules.ciclo_manual`) avisa y pide
+    confirmación. Sin terminal interactiva (tarea programada, `docker compose run -T`)
+    no puede preguntar: cancela, salvo con `--forzar`. Si la comprobación misma falla
+    (base caída) solo advierte y sigue: el ciclo fallaría por su cuenta y quedaría
+    registrado como fallido. La regla nunca bloquea el scheduler: este script solo
+    lo lanza una persona o la tarea de Windows."""
+    if forzar:
+        return True
+    try:
+        with session_scope(session_factory) as session:
+            filas = list_ciclos_iniciados_desde(session, ahora - VENTANA_CICLO_RECIENTE - timedelta(hours=1))
+            ciclos = [
+                CicloParaRecuperar(
+                    id=f.id, started_at=f.started_at, finished_at=f.finished_at, error_message=f.error_message
+                )
+                for f in filas
+            ]
+    except Exception as exc:  # noqa: BLE001 - es solo una comprobación previa
+        print(f"\nAVISO: no se pudo comprobar si hay un ciclo reciente ({type(exc).__name__}); se continúa sin esa comprobación.")
+        return True
+
+    reciente = buscar_ciclo_reciente(ciclos, now=ahora)
+    if reciente is None:
+        return True
+
+    print("\n" + mensaje_ciclo_reciente(reciente, now=ahora), flush=True)
+    if not es_interactivo:
+        print("No hay terminal interactiva para confirmar: no se lanza el ciclo. Usa --forzar para lanzarlo igual.")
+        return False
+    try:
+        respuesta = pedir("¿Lanzar otro ciclo de todos modos? Escribe 's' para continuar (cualquier otra cosa cancela): ")
+    except EOFError:
+        return False
+    return respuesta.strip().lower() in _RESPUESTAS_AFIRMATIVAS
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Lanza un ciclo de análisis completo (consume IA si hay candidatos).")
+    parser.add_argument(
+        "--forzar",
+        action="store_true",
+        help="no pedir confirmación aunque ya haya un ciclo reciente",
+    )
+    args = parser.parse_args(argv or [])
+
     configure_logging()
     settings = get_settings()
     engine = get_engine(settings)
     session_factory = get_sessionmaker(engine)
+
+    if not _confirmar_ciclo_reciente(
+        session_factory,
+        forzar=args.forzar,
+        ahora=datetime.now(timezone.utc),
+        es_interactivo=sys.stdin.isatty(),
+    ):
+        print("Cancelado: no se lanzó ningún ciclo ni se gastó IA.")
+        return 2
 
     _advertir_saldo_bajo(session_factory, settings)
     try:
@@ -220,4 +295,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))
