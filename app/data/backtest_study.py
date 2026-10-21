@@ -27,7 +27,14 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from app.data.exchange_client import Candle
-from app.data.exit_simulation import MAXIMO_PRIMERO, ResolvedorIntravela, retorno_marcado_a_mercado, simular_salida
+from app.data.exit_simulation import (
+    MAXIMO_PRIMERO,
+    SIN_FRICCION,
+    Friccion,
+    ResolvedorIntravela,
+    retorno_marcado_a_mercado,
+    simular_salida,
+)
 from app.data.indicator_calculator import (
     INDICATOR_NAME_DISTANCIA_MAX_90D,
     INDICATOR_NAME_RSI,
@@ -51,6 +58,7 @@ def observaciones_de_simbolo(
     *,
     orden_intravela: str = MAXIMO_PRIMERO,
     resolvedor: ResolvedorIntravela | None = None,
+    friccion: Friccion = SIN_FRICCION,
 ) -> list[ObservacionBacktest]:
     """Una observación por día con score calculable y entrada simulable. Ambas
     listas deben venir ordenadas por `open_time` y contener solo velas CERRADAS.
@@ -58,7 +66,9 @@ def observaciones_de_simbolo(
     `orden_intravela`: ver `app.data.exit_simulation`. El valor por defecto es el de
     todos los resultados publicados; otro valor solo se usa en el estudio de sensibilidad.
     `resolvedor`: ver `app.data.exit_simulation` (velas de 1 minuto en las velas ambiguas);
-    por defecto `None` = resultados publicados."""
+    por defecto `None` = resultados publicados.
+    `friccion`: slippage y huecos de la prueba de estrés (`claude/protocolo-friccion.md`);
+    por defecto `SIN_FRICCION` = resultados publicados."""
     if not diarias or not velas_1h:
         return []
 
@@ -89,8 +99,12 @@ def observaciones_de_simbolo(
         i_entrada = indice_1h.get(decision - _UNA_HORA)
         if i_entrada is None or i_entrada + 1 >= len(velas_1h):
             continue
-        salida = simular_salida(velas_1h, i_entrada, orden_intravela=orden_intravela, resolvedor=resolvedor)
-        marcado = retorno_marcado_a_mercado(velas_1h, i_entrada, orden_intravela=orden_intravela, resolvedor=resolvedor)
+        salida = simular_salida(
+            velas_1h, i_entrada, orden_intravela=orden_intravela, resolvedor=resolvedor, friccion=friccion
+        )
+        marcado = retorno_marcado_a_mercado(
+            velas_1h, i_entrada, orden_intravela=orden_intravela, resolvedor=resolvedor, friccion=friccion
+        )
         observaciones.append(
             ObservacionBacktest(
                 symbol=symbol,

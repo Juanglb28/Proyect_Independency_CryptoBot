@@ -114,3 +114,38 @@ def test_cada_observacion_lleva_sus_subscores_y_el_retorno_marcado():
         assert o.retorno_marcado is not None and o.marcado_en is not None
         if o.retorno_neto is not None:
             assert o.retorno_marcado == o.retorno_neto  # cerrada: marcado = resultado real
+
+
+# --------------------------------------- fricción de ejecución (prueba de estrés, 2026-10-21)
+def test_sin_friccion_explicita_las_observaciones_son_identicas_a_las_publicadas():
+    from app.data.exit_simulation import SIN_FRICCION
+
+    diarias, horarias = _diarias(), _horarias()
+    assert observaciones_de_simbolo("X", diarias, horarias, friccion=SIN_FRICCION) == observaciones_de_simbolo(
+        "X", diarias, horarias
+    )
+
+
+def test_la_friccion_no_cambia_el_score_ni_los_dias_solo_el_desenlace():
+    from app.data.exit_simulation import Friccion
+
+    diarias, horarias = _diarias(), _horarias()
+    base = observaciones_de_simbolo("X", diarias, horarias)
+    con = observaciones_de_simbolo("X", diarias, horarias, friccion=Friccion(slippage_por_lado=Decimal("0.005"), huecos=True))
+    assert [(o.symbol, o.dia, o.score) for o in con] == [(o.symbol, o.dia, o.score) for o in base]
+
+
+def test_la_friccion_se_pasa_a_la_simulacion_de_salida():
+    from app.data.exit_simulation import Friccion
+
+    diarias, horarias = _diarias(), _horarias()
+    friccion = Friccion(slippage_por_lado=Decimal("0.01"))
+    dia = (T0 + timedelta(days=200)).date()
+    decision = datetime(dia.year, dia.month, dia.day, tzinfo=timezone.utc)
+    indice = next(i for i, c in enumerate(horarias) if c["open_time"] == decision - timedelta(hours=1))
+    esperado = simular_salida(horarias, indice, friccion=friccion)
+    o = {x.dia: x for x in observaciones_de_simbolo("X", diarias, horarias, friccion=friccion)}[dia]
+    if esperado is None:
+        assert o.retorno_neto is None
+    else:
+        assert o.retorno_neto == esperado.retorno_neto

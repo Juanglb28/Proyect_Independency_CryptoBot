@@ -42,6 +42,15 @@ objetivo). Si el resolvedor no devuelve datos válidos, se usa la regla de 1h de
 siempre. Sin resolvedor (el valor por defecto) NADA cambia: es la lectura de todos
 los resultados publicados. Dentro de un minuto se sigue usando `orden_intravela`.
 
+Fricción de ejecución (parámetro `friccion`, estudio 2026-10-21, protocolo
+`claude/protocolo-friccion.md`): por defecto `SIN_FRICCION` y NADA cambia — es la lectura de
+todos los resultados publicados (slippage = 0, sin huecos). Con fricción: la entrada se paga
+`cierre × (1 + s)` y los niveles se calculan sobre ese precio efectivo; cada salida recibe
+`nivel × (1 − s)` (el stop, además, `− extra_stop`); y, si `huecos` está activo, una vela que
+abre en o por debajo del stop (o del trailing vigente antes de esa vela) ejecuta a su
+APERTURA. Los huecos son solo adversos: el objetivo se mantiene en su nivel. Es una prueba de
+sensibilidad con supuestos del usuario, no una medición de ejecución real.
+
 Un retorno es una fracción del valor de entrada (0,05 = +5 % neto). Si los
 datos terminan antes de cerrar toda la posición, devuelve `None` (censurada):
 no se cuenta ni a favor ni en contra.
@@ -106,6 +115,34 @@ def _validar_orden(orden_intravela: str) -> None:
 
 
 @dataclass(frozen=True)
+class Friccion:
+    """Supuestos de ejecución peor que la ideal (todos adversos). Fracciones del precio:
+    `slippage_por_lado=Decimal("0.001")` = 0,10 %."""
+
+    slippage_por_lado: Decimal = Decimal(0)
+    """Se aplica a la entrada y a cada salida."""
+    extra_slippage_stop: Decimal = Decimal(0)
+    """Castigo adicional solo para la salida por stop."""
+    huecos: bool = False
+    """Si una vela abre más allá del stop (o del trailing vigente) se ejecuta a la apertura."""
+
+    def __post_init__(self) -> None:
+        for nombre in ("slippage_por_lado", "extra_slippage_stop"):
+            valor = getattr(self, nombre)
+            if not isinstance(valor, Decimal) or valor < 0:
+                raise ValueError(f"{nombre} debe ser un Decimal >= 0 (recibido {valor!r}).")
+        if self.slippage_por_lado + self.extra_slippage_stop >= _UNO:
+            raise ValueError("slippage_por_lado + extra_slippage_stop debe ser < 1.")
+
+    @property
+    def es_nula(self) -> bool:
+        return self.slippage_por_lado == 0 and self.extra_slippage_stop == 0 and not self.huecos
+
+
+SIN_FRICCION = Friccion()
+
+
+@dataclass(frozen=True)
 class SalidaSimulada:
     retorno_neto: Decimal
     """Fracción del valor de entrada, ya con comisiones de entrada y salidas."""
@@ -136,35 +173,44 @@ class _Estado:
         self.pico: Decimal | None = None
 
 
-def _paso(e: _Estado, vela: Candle, orden_intravela: str) -> str | None:
+def _paso(e: _Estado, vela: Candle, orden_intravela: str, friccion: Friccion = SIN_FRICCION) -> str | None:
     """Aplica UNA vela (de 1h o de 1 minuto) a la posición. Devuelve el motivo de
     cierre total (`STOP_LOSS` / `TRAILING_STOP`) o `None` si la posición sigue."""
     niveles = e.niveles
+    descuento_salida = _UNO - friccion.slippage_por_lado
     if e.pico is None:  # todavía sin cierre parcial
         if vela["low"] <= niveles.stop_price:
-            e.cobrado += e.restante * niveles.stop_price * (_UNO - COMISION_POR_LADO)
+            precio = min(niveles.stop_price, vela["open"]) if friccion.huecos else niveles.stop_price
+            descuento_stop = _UNO - friccion.slippage_por_lado - friccion.extra_slippage_stop
+            e.cobrado += e.restante * precio * descuento_stop * (_UNO - COMISION_POR_LADO)
             e.restante = Decimal(0)
             return "STOP_LOSS"
         if vela["high"] >= niveles.target_price:
             vendida = e.restante * TAKE_PROFIT_FRACCION_A_CERRAR
-            e.cobrado += vendida * niveles.target_price * (_UNO - COMISION_POR_LADO)
+            e.cobrado += vendida * niveles.target_price * descuento_salida * (_UNO - COMISION_POR_LADO)
             e.restante -= vendida
             e.pico = niveles.target_price
         return None
 
+    trailing_previo = calculate_trailing_stop(e.pico)
     if orden_intravela == MINIMO_PRIMERO:
-        trailing_previo = calculate_trailing_stop(e.pico)
         if vela["low"] <= trailing_previo:
-            e.cobrado += e.restante * trailing_previo * (_UNO - COMISION_POR_LADO)
+            precio = min(trailing_previo, vela["open"]) if friccion.huecos else trailing_previo
+            e.cobrado += e.restante * precio * descuento_salida * (_UNO - COMISION_POR_LADO)
             e.restante = Decimal(0)
             return "TRAILING_STOP"
         e.pico = max(e.pico, vela["high"])
         return None
 
+    if friccion.huecos and vela["open"] <= trailing_previo:
+        # La vela ya abre en o bajo el trailing vigente: sale a la apertura, antes de cualquier máximo nuevo.
+        e.cobrado += e.restante * vela["open"] * descuento_salida * (_UNO - COMISION_POR_LADO)
+        e.restante = Decimal(0)
+        return "TRAILING_STOP"
     e.pico = max(e.pico, vela["high"])
     trailing = calculate_trailing_stop(e.pico)
     if vela["low"] <= trailing:
-        e.cobrado += e.restante * trailing * (_UNO - COMISION_POR_LADO)
+        e.cobrado += e.restante * trailing * descuento_salida * (_UNO - COMISION_POR_LADO)
         e.restante = Decimal(0)
         return "TRAILING_STOP"
     return None
@@ -175,11 +221,12 @@ def _recorrer(
     indice_entrada: int,
     orden_intravela: str = MAXIMO_PRIMERO,
     resolvedor: ResolvedorIntravela | None = None,
+    friccion: Friccion = SIN_FRICCION,
 ) -> _Recorrido:
     """Camino ÚNICO de la simulación: lo usan `simular_salida` y
     `retorno_marcado_a_mercado`, así no hay dos copias de las reglas."""
     _validar_orden(orden_intravela)
-    entrada = velas[indice_entrada]["close"]
+    entrada = velas[indice_entrada]["close"] * (_UNO + friccion.slippage_por_lado)  # precio efectivamente pagado
     estado = _Estado(calculate_initial_levels(entrada), _UNO / entrada)  # valor de entrada normalizado a 1
     comision_entrada = COMISION_POR_LADO
 
@@ -192,11 +239,11 @@ def _recorrer(
                 minutos = resolvedor(vela, clase)
         if minutos:
             for minuto in minutos:
-                motivo = _paso(estado, minuto, orden_intravela)
+                motivo = _paso(estado, minuto, orden_intravela, friccion)
                 if motivo is not None:
                     break
         else:
-            motivo = _paso(estado, vela, orden_intravela)
+            motivo = _paso(estado, vela, orden_intravela, friccion)
         if motivo is not None:
             return _Recorrido(
                 SalidaSimulada(estado.cobrado - _UNO - comision_entrada, offset, motivo),
@@ -211,10 +258,11 @@ def simular_salida(
     *,
     orden_intravela: str = MAXIMO_PRIMERO,
     resolvedor: ResolvedorIntravela | None = None,
+    friccion: Friccion = SIN_FRICCION,
 ) -> SalidaSimulada | None:
     """Entra al cierre de `velas[indice_entrada]` y aplica las reglas de salida
     del motor paper sobre las velas siguientes."""
-    return _recorrer(velas, indice_entrada, orden_intravela, resolvedor).salida
+    return _recorrer(velas, indice_entrada, orden_intravela, resolvedor, friccion).salida
 
 
 def retorno_marcado_a_mercado(
@@ -223,6 +271,7 @@ def retorno_marcado_a_mercado(
     *,
     orden_intravela: str = MAXIMO_PRIMERO,
     resolvedor: ResolvedorIntravela | None = None,
+    friccion: Friccion = SIN_FRICCION,
 ) -> Decimal | None:
     """Retorno neto si la posición se VALORARA al cierre de la última vela
     disponible (lo ya cobrado + lo que queda, con la comisión de una venta).
@@ -234,8 +283,8 @@ def retorno_marcado_a_mercado(
     hay ninguna vela posterior a la de entrada."""
     if indice_entrada + 1 >= len(velas):
         return None
-    r = _recorrer(velas, indice_entrada, orden_intravela, resolvedor)
+    r = _recorrer(velas, indice_entrada, orden_intravela, resolvedor, friccion)
     if r.salida is not None:
         return r.salida.retorno_neto
     ultimo = velas[-1]["close"]
-    return r.cobrado + r.restante * ultimo * (_UNO - COMISION_POR_LADO) - _UNO - r.comision_entrada
+    return r.cobrado + r.restante * ultimo * (_UNO - friccion.slippage_por_lado) * (_UNO - COMISION_POR_LADO) - _UNO - r.comision_entrada
