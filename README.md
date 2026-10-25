@@ -1713,8 +1713,11 @@ powershell -ExecutionPolicy Bypass -File scripts\instalar_sync_railway.ps1
   tarea ni en ningún registro.
 - Registra la tarea `CryptoTradingPlatform_SyncRailway`: cada día a las 20:00, sin ventana
   (`wscript //B` + `scripts\sync_railway_oculto.vbs` → `scripts\sync_railway.ps1`). Si Docker
-  Desktop está cerrado lo inicia (espera hasta 180 s). Solo corre con tu sesión abierta y no se
-  pone al día si el equipo estaba apagado a esa hora.
+  Desktop está cerrado lo inicia (espera hasta 180 s). Solo corre con tu sesión abierta. Si el
+  equipo estaba apagado a las 20:00, **se pone al día** en cuanto Windows pueda (al encender e iniciar
+  sesión; opción `StartWhenAvailable`, desde 2026-10-25) y lanza una sola copia aunque hayan sido
+  varias las noches perdidas. Para aplicarlo a una tarea ya instalada, vuelve a correr el instalador
+  (conserva la contraseña guardada).
 - Al terminar hace una **simulación** (no escribe en Railway) para comprobar la conexión. Si dice
   que las migraciones son distintas, migra Railway una vez:
   `powershell -ExecutionPolicy Bypass -File scripts\sync_railway.ps1 -MigrarRailway`.

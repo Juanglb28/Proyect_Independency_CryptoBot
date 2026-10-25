@@ -205,6 +205,7 @@ def test_el_instalador_de_la_sincronizacion_programa_cada_dia_a_las_20_sin_venta
     assert "New-ScheduledTaskTrigger -Daily -At $Hora" in codigo
     assert "wscript.exe" in codigo and "sync_railway_oculto.vbs" in codigo
     assert "-MultipleInstances IgnoreNew" in codigo
-    assert "StartWhenAvailable" not in codigo
+    # si el equipo estaba apagado a las 20:00, se pone al dia al encender (2026-10-25; antes: sin ponerse al dia)
+    assert "-StartWhenAvailable" in codigo
     # la comprobacion final es una simulacion: no escribe en Railway
     assert "-Simulacion" in codigo and "--ejecutar" not in codigo

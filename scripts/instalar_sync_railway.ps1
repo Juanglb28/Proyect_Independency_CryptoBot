@@ -7,6 +7,7 @@
 #      puede descifrarlo. La contrasena no se escribe en la tarea ni en ningun registro.
 #   2. Registra la tarea "CryptoTradingPlatform_SyncRailway": cada dia a las 20:00 (hora de
 #      Windows), sin ventana, ejecutando scripts\sync_railway.ps1 (via sync_railway_oculto.vbs).
+#      Si el equipo estaba apagado a esa hora, se pone al dia en cuanto Windows pueda (StartWhenAvailable).
 #
 # Uso (en una consola PowerShell, en la carpeta del proyecto):
 #     powershell -ExecutionPolicy Bypass -File scripts\instalar_sync_railway.ps1
@@ -61,7 +62,10 @@ if ($existente) {
 }
 $accion = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B //Nologo `"$lanzador`"" -WorkingDirectory $proj
 $disparador = New-ScheduledTaskTrigger -Daily -At $Hora
-$ajustes = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -AllowStartIfOnBatteries `
+# -StartWhenAvailable (2026-10-25): si el equipo estaba apagado a la hora, la tarea corre en cuanto Windows
+# pueda (al encender / iniciar sesion). Antes una noche apagada dejaba la copia un dia atras (24/10). Correr tarde
+# no dana nada: la copia es idempotente (solo trae lo nuevo) y una sola instancia a la vez.
+$ajustes = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 2)
 $usuario = "$env:USERDOMAIN\$env:USERNAME"
 $principal = New-ScheduledTaskPrincipal -UserId $usuario -LogonType Interactive -RunLevel Limited
