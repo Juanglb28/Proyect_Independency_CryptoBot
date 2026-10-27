@@ -54,6 +54,13 @@ def test_las_reglas_fijas_coinciden_con_la_seccion_9_del_plan():
     assert risk.COMISION_POR_LADO == D("0.001")
 
 
+def test_los_cupos_de_observacion_del_2026_10_26():
+    """Decisión del usuario: 20 abiertas y 5 por día (antes 4 y 3). No tocan los cupos de la estrategia."""
+    assert risk.MAX_OBSERVACIONES_ABIERTAS == 20
+    assert risk.MAX_OBSERVACIONES_POR_DIA == 5
+    assert risk.MAX_POSICIONES_ABIERTAS == 4 and risk.MAX_ENTRADAS_POR_DIA == 3  # la estrategia sigue igual
+
+
 def test_decisiones_del_2026_10_04():
     assert risk.TAMANO_POSICION_USD == 100  # tamaño fijo en el mínimo
     assert risk.MAX_MAYOR_RIESGO_ABIERTAS == 1  # tope propio de mayor riesgo

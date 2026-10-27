@@ -150,17 +150,22 @@ def test_la_estrategia_tiene_prioridad_y_la_observacion_del_mismo_simbolo_no_dej
 
 
 def test_cupo_diario_propio_de_observacion_y_sin_filas_huerfanas(db_session):
-    simbolos = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "ADAUSDT"]
+    from app.domain.rules.risk import MAX_OBSERVACIONES_POR_DIA
+
+    # Un candidato más que el tope diario de observación.
+    simbolos = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "ADAUSDT", "XRPUSDT", "TRXUSDT", "DOGEUSDT"][: MAX_OBSERVACIONES_POR_DIA + 1]
     ciclo = _ciclo(db_session, *[_prefiltro(s, score="50", ranking=i) for i, s in enumerate(simbolos, 1)])
 
-    apertura = _abrir(db_session, ciclo)
+    # Precio para TODOS: con el desempate alfabético entra cualquiera de los símbolos, y uno sin precio
+    # saldría como SIN_PRECIO en vez de abrirse (no es lo que este test comprueba).
+    apertura = _abrir(db_session, ciclo, precios={s: "10" for s in simbolos})
 
     abiertas = [e for e in apertura.entradas if e.resultado == "ABIERTA"]
     descartadas = [e for e in apertura.entradas if e.resultado == "DESCARTADA"]
-    assert len(abiertas) == 3 and len(descartadas) == 1
+    assert len(abiertas) == MAX_OBSERVACIONES_POR_DIA and len(descartadas) == 1
     assert descartadas[0].motivos == ("MAXIMO_OBSERVACIONES_DIA",)
-    # solo se guardó la propuesta de las 3 que abrieron
-    assert len(get_propuestas_de_ciclo(db_session, ciclo)) == 3
+    # solo se guardó la propuesta de las que abrieron
+    assert len(get_propuestas_de_ciclo(db_session, ciclo)) == MAX_OBSERVACIONES_POR_DIA
     assert descartadas[0].symbol not in {p.symbol for p in get_propuestas_de_ciclo(db_session, ciclo)}
 
 

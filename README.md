@@ -2063,8 +2063,13 @@ mismas reglas de riesgo del código (`app/domain/rules/risk.py`):
 
 **Cómo se mantienen separadas (decisión del usuario):**
 
-- **Cupos propios**: 4 observaciones abiertas y 3 por día, aparte de los de la
-  estrategia (4 abiertas, 3 por día). Un símbolo abierto en cualquier serie bloquea
+- **Cupos propios**: 20 observaciones abiertas y 5 por día (desde el 2026-10-26;
+  antes 4 y 3), aparte de los de la estrategia (4 abiertas, 3 por día; sin cambios).
+  Con 4 abiertas y sin salida por tiempo los cupos se llenaron el 16/10 y la serie
+  dejó de crecer. Con 100 USD fijos, 20 abiertas son 2.000 USD nocionales fuera del
+  equity. Las observaciones anteriores se abrieron con los topes viejos: al analizar
+  la serie conviene separarla por la fecha del cambio. Para aplicarlo hay que
+  **recrear el scheduler**. Un símbolo abierto en cualquier serie bloquea
   otra entrada en ese símbolo (índice único de la base).
 - **Fuera del equity**: no cuentan para el equity, el pico ni la pausa por drawdown
   de −15 %, ni generan avisos de Telegram de escalamiento. El monitor sí las vigila

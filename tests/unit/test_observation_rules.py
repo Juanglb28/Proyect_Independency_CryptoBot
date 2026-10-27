@@ -179,11 +179,15 @@ def test_la_estrategia_entra_antes_que_la_observacion_aunque_tenga_menor_puntaje
 
 
 def test_las_observaciones_consumen_solo_su_propio_cupo():
-    candidatos = [_c(s, "50", TierEntrada.OBSERVACION, i) for i, s in enumerate(
-        ["BTCUSDT", "ETHUSDT", "SOLUSDT", "ADAUSDT"], start=1)]
+    from app.domain.symbols import ALLOWED_SYMBOLS
+
+    # Un símbolo más que el tope diario: entran los primeros (desempate alfabético por símbolo) y el último
+    # se descarta por el tope diario de observación.
+    simbolos = sorted(ALLOWED_SYMBOLS)[: MAX_OBSERVACIONES_POR_DIA + 1]
+    candidatos = [_c(s, "50", TierEntrada.OBSERVACION, i) for i, s in enumerate(reversed(simbolos), start=1)]
     r = select_entries(candidatos, _cupos())
-    # 3 por día: las 3 primeras (desempate alfabético); la cuarta se descarta por el tope diario de observación
-    assert [s.candidato.symbol for s in r.seleccionadas] == ["ADAUSDT", "BTCUSDT", "ETHUSDT"]
+    assert [s.candidato.symbol for s in r.seleccionadas] == simbolos[:MAX_OBSERVACIONES_POR_DIA]
+    assert [d.candidato.symbol for d in r.descartadas] == [simbolos[MAX_OBSERVACIONES_POR_DIA]]
     assert r.descartadas[0].motivos == (MotivoRechazoEntrada.MAXIMO_OBSERVACIONES_DIA,)
 
 

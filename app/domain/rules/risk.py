@@ -71,13 +71,17 @@ MAX_MAYOR_RIESGO_ABIERTAS = 1
 """Tope propio de las entradas de mayor riesgo (decisión del 2026-10-04):
 además de compartir los cupos generales."""
 
-MAX_OBSERVACIONES_ABIERTAS = 4
-MAX_OBSERVACIONES_POR_DIA = 3
-"""Cupos PROPIOS de las operaciones de observación (decisión del usuario,
-2026-10-12): hasta 4 abiertas y 3 nuevas por día UTC, APARTE de los cupos de la
-estrategia. Son los mismos números que los de la estrategia a propósito: no se
-inventa ninguna magnitud nueva. Con el tamaño fijo de 100 USD, la exposición
-máxima de observación es 400 USD, además de los 400 USD posibles de estrategia."""
+MAX_OBSERVACIONES_ABIERTAS = 20
+MAX_OBSERVACIONES_POR_DIA = 5
+"""Cupos PROPIOS de las operaciones de observación, APARTE de los cupos de la
+estrategia (que no cambian). Decisión del usuario del 2026-10-12: 4 abiertas y 3
+por día. Decisión del usuario del 2026-10-26: 20 abiertas y 5 por día, porque con 4
+abiertas y sin salida por tiempo los cupos se llenaron el 16/10 y la serie dejó de
+crecer. Con el tamaño fijo de 100 USD la exposición máxima de observación pasa a
+2.000 USD nocionales (fuera del equity y de la pausa por drawdown), además de los
+400 USD posibles de estrategia. 5 por día = el máximo de candidatos del pre-filtro
+por ciclo. Las observaciones abiertas ANTES de este cambio se hicieron con los
+topes anteriores."""
 
 TAMANO_POSICION_USD = Decimal(100)
 """Tamaño FIJO de cada entrada en v1 (decisión del 2026-10-04): el mínimo del

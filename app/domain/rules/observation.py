@@ -18,8 +18,8 @@ una entrada de la estrategia abre una posición paper de observación.
 - Su "score" es el puntaje del PRE-FILTRO (escala 0-100, determinista), no el
   puntaje ponderado del Consolidador: son escalas distintas, por eso se miden
   como SERIE APARTE y nunca se mezclan con la de la estrategia al validar.
-- Tamaño fijo de 100 USD, sin aprobación manual, cupos propios (4 abiertas y 3
-  por día), fuera del equity y de la pausa por drawdown de la estrategia.
+- Tamaño fijo de 100 USD, sin aprobación manual, cupos propios (20 abiertas y 5
+  por día desde el 2026-10-26; antes 4 y 3), fuera del equity y de la pausa por drawdown de la estrategia.
   Salen por las mismas reglas del monitor (stop -8 %, TP +12 % con trailing).
 
 ## Trazabilidad (P3, sección 14 del master prompt)
