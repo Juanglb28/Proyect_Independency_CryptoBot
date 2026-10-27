@@ -900,3 +900,55 @@ class TestJobDaily:
         state = _make_state()
         _job_daily(state)
         mock_ejecutar.assert_called_once_with(state, trigger="scheduled_daily_0005")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Margen de recuperación del ciclo diario (2026-10-26)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class TestMargenDeRecuperacionDelCicloDiario:
+    """El equipo despertó de la suspensión 21 s antes de las 00:05 UTC y el ciclo se
+    descartó por el margen por defecto de APScheduler (1 s). El usuario pidió >= 4 h."""
+
+    def test_el_margen_es_de_cuatro_horas(self):
+        from app.orchestration.scheduler import CICLO_DIARIO_GRACIA_SEGUNDOS
+
+        assert CICLO_DIARIO_GRACIA_SEGUNDOS == 4 * 3600
+
+    def test_el_job_diario_se_registra_con_ese_margen(self):
+        import inspect
+
+        from app.orchestration import scheduler
+
+        codigo = inspect.getsource(scheduler.start_scheduler)
+        bloque = codigo.split('id="daily_cycle"', 1)[1].split("scheduler.add_job(", 1)[0]
+        assert "misfire_grace_time=CICLO_DIARIO_GRACIA_SEGUNDOS" in bloque
+
+    def test_apscheduler_ejecuta_dentro_del_margen_y_descarta_fuera_de_el(self):
+        """Semántica real de APScheduler con el margen configurado: llega tarde pero dentro
+        de 4 h -> corre; pasado el margen -> se descarta (EVENT_JOB_MISSED)."""
+        from apscheduler.events import EVENT_JOB_EXECUTED, EVENT_JOB_MISSED
+        from apscheduler.executors.base import run_job
+        from apscheduler.schedulers.background import BackgroundScheduler
+
+        from app.orchestration.scheduler import CICLO_DIARIO_GRACIA_SEGUNDOS
+
+        llamadas: list[int] = []
+        sched = BackgroundScheduler(timezone="UTC", job_defaults={"max_instances": 1, "coalesce": True})
+        sched.start(paused=True)  # con el scheduler iniciado, add_job devuelve un Job real
+        try:
+            job = sched.add_job(
+                lambda: llamadas.append(1),
+                trigger="cron", hour=0, minute=5,
+                misfire_grace_time=CICLO_DIARIO_GRACIA_SEGUNDOS,
+            )
+            ahora = datetime.now(timezone.utc)
+            dentro = ahora - timedelta(hours=3, minutes=59)
+            fuera = ahora - timedelta(hours=4, minutes=1)
+
+            assert run_job(job, "default", [dentro], "test")[0].code == EVENT_JOB_EXECUTED
+            assert run_job(job, "default", [fuera], "test")[0].code == EVENT_JOB_MISSED
+        finally:
+            sched.shutdown(wait=False)
+        assert llamadas == [1]

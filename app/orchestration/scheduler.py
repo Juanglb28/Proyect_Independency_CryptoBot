@@ -137,6 +137,14 @@ DAILY_BACKFILL_WINDOW_DAYS = 7
 REFRESCO_VELAS_GRACIA_SEGUNDOS = 3 * 3600
 """Si el equipo estaba dormido a las 14:30 UTC y despierta hasta 3 h después, el
 refresco corre una vez al despertar en vez de perderse hasta mañana (es idempotente)."""
+CICLO_DIARIO_GRACIA_SEGUNDOS = 4 * 3600
+"""Margen de recuperación del ciclo diario de las 00:05 UTC (decisión del usuario, 2026-10-26).
+APScheduler descarta un job cuya hora ya pasó por más de ``misfire_grace_time`` (por defecto,
+1 s). El 26/10 el equipo despertó de la suspensión 21 s antes de las 00:05 UTC y el ciclo no
+se lanzó, sin dejar alerta (causa probable: llegó tarde por más de ese segundo; no quedó
+registro que lo confirme). Con 4 h, si el equipo
+duerme a las 00:05 y despierta hasta 4 h después, el ciclo corre UNA vez al despertar
+(``coalesce=True``). Pasado ese margen sigue sin recuperarse: lo cubre el aviso de ciclo perdido."""
 RECUPERACION_VELAS_RETRASO_SEGUNDOS = 10
 RECUPERACION_VELAS_GRACIA_SEGUNDOS = 600
 """La recuperación de velas vencidas corre una vez, unos segundos después de arrancar
@@ -800,6 +808,7 @@ def start_scheduler() -> None:
         args=[state],
         id="daily_cycle",
         name="Ciclo diario (backfill + IA, 00:05 UTC)",
+        misfire_grace_time=CICLO_DIARIO_GRACIA_SEGUNDOS,
     )
 
     # Job 6: Recuperación de velas vencidas — una sola vez, poco después de arrancar

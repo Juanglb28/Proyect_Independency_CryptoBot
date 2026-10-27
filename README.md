@@ -2150,6 +2150,15 @@ scheduler** (`app/orchestration/lifecycle.py`):
    IA sin que lo pidas. Lánzalo a mano con `scripts/run_daily_cycle.py` si lo
    quieres.
 
+   **Margen de recuperación (2026-10-26).** Si el equipo estaba suspendido a las
+   00:05 UTC y el scheduler SIGUE VIVO (no se reinició), el ciclo diario corre una
+   vez al despertar siempre que sea dentro de las **4 h** siguientes
+   (`CICLO_DIARIO_GRACIA_SEGUNDOS`, `misfire_grace_time`). Antes el margen era el
+   de APScheduler por defecto (1 s): el 26/10 el equipo despertó 21 s antes de las
+   00:05, el ciclo no se lanzó y no hubo ningún aviso, porque el contenedor no se
+   reinició. Pasadas las 4 h el ciclo ya no se recupera solo. Para aplicar el cambio
+   hay que **recrear el scheduler**: `docker compose up -d --force-recreate scheduler`.
+
 Los pasos 2-4 corren cada uno en su transacción; si uno falla se registra y el
 arranque sigue (nunca se deja de vigilar las posiciones abiertas). Los avisos se
 envían a Telegram justo después.
