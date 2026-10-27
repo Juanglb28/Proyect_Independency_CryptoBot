@@ -80,7 +80,7 @@ from app.domain.rules.quantitative_score import (
     QuantitativeScore,
     calculate_quantitative_score,
 )
-from app.data.prefilter_pipeline import run_prefilter
+from app.data.prefilter_pipeline import excluir_simbolos_ocupados, run_prefilter
 from app.data.relative_strength import calculate_ratio_rsi
 from app.domain.enums import EstadoCiclo
 from app.domain.rules.entry_tier import (
@@ -113,6 +113,7 @@ from app.repositories.analysis import (
     save_propuesta,
 )
 from app.repositories.candles import get_candles
+from app.repositories.simbolos_ocupados import simbolos_ocupados
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +200,10 @@ def guardar_resultado_prefiltro(session: Session, ciclo_id: uuid.UUID, resultado
     Solo traduce `ResultadoPrefiltro` a filas; no calcula nada."""
     filas = []
     for r in clasificar_resultados(
-        list(resultado.scores), list(resultado.candidates), list(resultado.symbols_sin_datos)
+        list(resultado.scores),
+        list(resultado.candidates),
+        list(resultado.symbols_sin_datos),
+        excluidos=resultado.simbolos_excluidos,
     ):
         sc = r.score
         filas.append(
@@ -236,7 +240,9 @@ def run_daily_cycle(session: Session, settings: Settings, *, now: datetime | Non
     costo_total = Decimal(0)
 
     try:
-        resultado_prefiltro = run_prefilter(session)
+        # Los símbolos con posición abierta o entrada pendiente no se analizan con IA
+        # (decisión del 2026-10-26): el cupo pasa al siguiente y queda registrado.
+        resultado_prefiltro = excluir_simbolos_ocupados(run_prefilter(session), simbolos_ocupados(session))
         candidatos = [c.symbol for c in resultado_prefiltro.candidates]
 
         # Evidencia de lo que el pre-filtro hizo este ciclo (incluidos los

@@ -84,3 +84,53 @@ def test_la_huella_de_la_formula_exige_subir_la_version_si_cambia_algo():
         "La fórmula del pre-filtro cambió: sube PREFILTER_FORMULA_VERSION y actualiza HUELLA_ESPERADA. "
         f"Huella actual: {huella}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Símbolos con posición abierta o entrada pendiente (decisión del 2026-10-26)
+# ---------------------------------------------------------------------------
+
+
+def _clasificar_excluyendo(scores, excluidos, sin_datos=()):
+    candidatos = select_candidates(scores, excluir=frozenset(excluidos))
+    return clasificar_resultados(scores, candidatos, list(sin_datos), excluidos=frozenset(excluidos))
+
+
+def test_select_candidates_sin_excluir_es_igual_que_siempre():
+    scores = [_score(f"S{i}", str(90 - i * 5)) for i in range(7)]
+    assert select_candidates(scores) == select_candidates(scores, excluir=frozenset())
+    assert [c.symbol for c in select_candidates(scores)] == ["S0", "S1", "S2", "S3", "S4"]
+
+
+def test_un_simbolo_excluido_no_es_candidato_y_su_cupo_pasa_al_siguiente():
+    # 7 símbolos >= 45: sin exclusión caen por tope S5 y S6. S0 está ocupado: S5 entra y solo S6 cae.
+    scores = [_score(f"S{i}", str(90 - i * 5)) for i in range(7)]
+    elegidos = [c.symbol for c in select_candidates(scores, excluir=frozenset({"S0"}))]
+    assert elegidos == ["S1", "S2", "S3", "S4", "S5"]
+
+
+def test_clasificar_marca_al_excluido_como_posicion_abierta_y_no_como_tope():
+    scores = [_score(f"S{i}", str(90 - i * 5)) for i in range(7)]
+    res = {r.symbol: r for r in _clasificar_excluyendo(scores, {"S0"})}
+
+    assert res["S0"].estado == EstadoPrefiltro.DESCARTADO_POR_POSICION_ABIERTA
+    assert [res[f"S{i}"].estado for i in range(1, 6)] == [EstadoPrefiltro.CANDIDATO] * 5
+    assert res["S6"].estado == EstadoPrefiltro.DESCARTADO_POR_TOPE
+    # El puntaje y el ranking del excluido se conservan: la evidencia no se altera.
+    assert res["S0"].ranking == 1 and res["S0"].score is not None and res["S0"].score.score_final == Decimal(90)
+
+
+def test_un_ocupado_bajo_el_minimo_sigue_siendo_descartado_por_puntaje():
+    scores = [_score("OCUPADO", "30"), _score("OK", "70")]
+    res = {r.symbol: r for r in _clasificar_excluyendo(scores, {"OCUPADO"})}
+    assert res["OCUPADO"].estado == EstadoPrefiltro.DESCARTADO_POR_PUNTAJE
+    assert res["OK"].estado == EstadoPrefiltro.CANDIDATO
+
+
+def test_un_ocupado_sin_datos_sigue_siendo_sin_datos():
+    (r,) = _clasificar_excluyendo([], {"X"}, sin_datos=["X"])
+    assert r.estado == EstadoPrefiltro.SIN_DATOS and r.score is None
+
+
+def test_el_estado_nuevo_cabe_en_la_columna_de_32_caracteres():
+    assert len(EstadoPrefiltro.DESCARTADO_POR_POSICION_ABIERTA.value) <= 32

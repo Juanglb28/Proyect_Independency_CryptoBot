@@ -81,6 +81,7 @@ from app.domain.rules.scoring import SCORE_MINIMO_PREFILTRO
 from app.db.session import session_scope
 from app.domain.symbols import ALLOWED_SYMBOLS
 from app.repositories.analysis import list_ciclos_recientes, list_prefiltro_de_ciclo
+from app.repositories.simbolos_ocupados import simbolos_ocupados
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +213,8 @@ def _get_ultimo_ciclo_exitoso(
 def _detectar_candidatos_nuevos(
     prefilter_result: PrefilterRunResult,
     scores_ultimo_ciclo: dict[str, Decimal | None],
+    *,
+    ocupados: frozenset[str] = frozenset(),
 ) -> list[NewCandidate]:
     """Compara scores actuales con los del último ciclo exitoso.
 
@@ -224,12 +227,18 @@ def _detectar_candidatos_nuevos(
     Esto detecta símbolos que CRUZARON el umbral desde el último
     análisis — no los que ya estaban arriba y siguen arriba (esos ya
     fueron analizados por el ciclo que generó la referencia).
+
+    Los símbolos `ocupados` (posición abierta o entrada pendiente) nunca son
+    "nuevos": no se pueden analizar de nuevo ni entrar (decisión del 2026-10-26),
+    así que no deben disparar un ciclo de IA.
     """
     nuevos: list[NewCandidate] = []
     umbral = SCORE_MINIMO_PREFILTRO
 
     for score in prefilter_result.scores:
         if score.score_final is None or score.score_final < umbral:
+            continue
+        if score.symbol in ocupados:
             continue
 
         # ¿Era candidato en el último ciclo?
@@ -351,7 +360,7 @@ def run_hourly_cycle(
         new_candidates: list[NewCandidate] = []
     else:
         new_candidates = _detectar_candidatos_nuevos(
-            prefilter_result, scores_ultimo
+            prefilter_result, scores_ultimo, ocupados=simbolos_ocupados(session)
         )
         if new_candidates:
             logger.info(

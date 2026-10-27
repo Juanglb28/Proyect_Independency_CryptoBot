@@ -12,6 +12,7 @@ _ETIQUETA_ESTADO = {
     "CANDIDATO": "Candidato",
     "DESCARTADO_POR_PUNTAJE": "Descartado: puntaje bajo el mínimo",
     "DESCARTADO_POR_TOPE": "Descartado: fuera del tope de candidatos",
+    "DESCARTADO_POR_POSICION_ABIERTA": "Descartado: ya tiene posición abierta o entrada pendiente",
     "SIN_DATOS": "Sin datos suficientes",
 }
 

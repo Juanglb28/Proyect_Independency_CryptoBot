@@ -42,6 +42,9 @@ class PrefilterRunResult:
     scores: tuple[PrefilterScore, ...]
     candidates: tuple[PrefilterScore, ...]
     symbols_sin_datos: tuple[str, ...]
+    simbolos_excluidos: frozenset[str] = frozenset()
+    """Símbolos que se quitaron de los candidatos por tener posición abierta o entrada
+    pendiente (`excluir_simbolos_ocupados`). Vacío si no se aplicó ninguna exclusión."""
 
 
 def _value_at(rows: list[IndicatorRow], indicator_name: str, calculated_at) -> Decimal | None:
@@ -116,4 +119,27 @@ def run_prefilter(session: Session) -> PrefilterRunResult:
         scores=tuple(scores),
         candidates=tuple(candidates),
         symbols_sin_datos=tuple(symbols_sin_datos),
+    )
+
+
+def excluir_simbolos_ocupados(resultado: PrefilterRunResult, ocupados: frozenset[str]) -> PrefilterRunResult:
+    """Quita de los candidatos los símbolos con posición abierta o entrada pendiente.
+
+    Decisión del 2026-10-26: el sistema no aumenta posiciones (la validación de riesgo
+    rechaza con `SIMBOLO_YA_ABIERTO` cualquier entrada sobre un símbolo ocupado), así
+    que analizar con IA un símbolo ocupado es un gasto sin salida posible. La exclusión
+    se hace ANTES del corte a los mejores `MAX_CANDIDATOS_PREFILTRO`: el cupo pasa al
+    siguiente. Los puntajes NO cambian; solo cambian los candidatos y queda anotado
+    qué símbolos se excluyeron (para registrar `DESCARTADO_POR_POSICION_ABIERTA`).
+
+    Función pura: no consulta nada; quien llama entrega los símbolos ocupados. Si
+    ninguno de ellos tiene puntaje, devuelve el resultado tal cual."""
+    afectados = frozenset(s.symbol for s in resultado.scores) & ocupados
+    if not afectados:
+        return resultado
+    return PrefilterRunResult(
+        scores=resultado.scores,
+        candidates=tuple(select_candidates(list(resultado.scores), excluir=afectados)),
+        symbols_sin_datos=resultado.symbols_sin_datos,
+        simbolos_excluidos=afectados,
     )

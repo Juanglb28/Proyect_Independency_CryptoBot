@@ -99,6 +99,10 @@ class EstadoPrefiltro(str, Enum):
     """Tuvo puntaje, pero por debajo del mínimo del pre-filtro."""
     DESCARTADO_POR_TOPE = "DESCARTADO_POR_TOPE"
     """Superó el mínimo, pero había más símbolos mejores que el tope de candidatos."""
+    DESCARTADO_POR_POSICION_ABIERTA = "DESCARTADO_POR_POSICION_ABIERTA"
+    """Superó el mínimo, pero el símbolo ya tiene una posición abierta o una entrada
+    pendiente (de cualquier serie): no se vuelve a analizar con IA, porque el sistema
+    no aumenta posiciones (decisión del 2026-10-26). No consume cupo de candidatos."""
     SIN_DATOS = "SIN_DATOS"
     """Faltaba algún dato (velas, SMA, volumen relativo o distancia a 90d): no
     recibió puntaje (P3: nada de valores de relleno)."""

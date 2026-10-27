@@ -175,9 +175,14 @@ def calculate_prefilter_score(
     )
 
 
-def select_candidates(scores: list[PrefilterScore]) -> list[PrefilterScore]:
+def select_candidates(scores: list[PrefilterScore], *, excluir: frozenset[str] = frozenset()) -> list[PrefilterScore]:
     """Filtra por `SCORE_MINIMO_PREFILTRO` y se queda con los mejores
     `MAX_CANDIDATOS_PREFILTRO` (sección 19 del plan).
+
+    `excluir` son símbolos que no pueden ser candidatos (hoy: los que ya tienen una
+    posición abierta o una entrada pendiente). Se quitan ANTES del corte a los mejores,
+    así que el cupo que ocupaban pasa al siguiente (decisión del 2026-10-26). Por
+    defecto no excluye nada: el resultado es el de siempre.
 
     Puede devolver una lista vacía: un día de mercado débil, sin ningún
     símbolo por encima del umbral, es un resultado válido y esperado
@@ -189,7 +194,7 @@ def select_candidates(scores: list[PrefilterScore]) -> list[PrefilterScore]:
     corridas (sección 15 del plan) en vez de depender del orden de
     llegada o de un sort inestable.
     """
-    candidates = [s for s in scores if s.score_final >= SCORE_MINIMO_PREFILTRO]
+    candidates = [s for s in scores if s.score_final >= SCORE_MINIMO_PREFILTRO and s.symbol not in excluir]
     candidates.sort(key=lambda s: (-s.score_final, s.symbol))
     return candidates[:MAX_CANDIDATOS_PREFILTRO]
 
@@ -210,7 +215,11 @@ class ResultadoPrefiltro:
 
 
 def clasificar_resultados(
-    scores: list[PrefilterScore], candidates: list[PrefilterScore], symbols_sin_datos: list[str]
+    scores: list[PrefilterScore],
+    candidates: list[PrefilterScore],
+    symbols_sin_datos: list[str],
+    *,
+    excluidos: frozenset[str] = frozenset(),
 ) -> list[ResultadoPrefiltro]:
     """Une el resultado del pre-filtro en una lista por símbolo, lista para
     persistir. Función pura: no decide nada nuevo; solo etiqueta lo que
@@ -228,6 +237,8 @@ def clasificar_resultados(
             estado = EstadoPrefiltro.CANDIDATO
         elif score.score_final < SCORE_MINIMO_PREFILTRO:
             estado = EstadoPrefiltro.DESCARTADO_POR_PUNTAJE
+        elif score.symbol in excluidos:
+            estado = EstadoPrefiltro.DESCARTADO_POR_POSICION_ABIERTA
         else:
             estado = EstadoPrefiltro.DESCARTADO_POR_TOPE
         resultados.append(ResultadoPrefiltro(score.symbol, estado, posicion, score))

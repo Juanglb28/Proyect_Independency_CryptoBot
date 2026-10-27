@@ -378,13 +378,25 @@ de su transacción (mismo patrón que los tests de `trade_results`).
 Tabla nueva (aprobada por el usuario, 2026-10-07; migración `a3c2e5195411`),
 **solo-agregar** (un trigger rechaza UPDATE y DELETE) y única por
 `(ciclo, símbolo)`. Una fila por cada símbolo del universo y por cada ciclo, con
-su estado (`CANDIDATO`, `DESCARTADO_POR_PUNTAJE`, `DESCARTADO_POR_TOPE` o
-`SIN_DATOS`), su ranking, la vela diaria usada, los valores crudos
+su estado (`CANDIDATO`, `DESCARTADO_POR_PUNTAJE`, `DESCARTADO_POR_TOPE`,
+`DESCARTADO_POR_POSICION_ABIERTA` o `SIN_DATOS`), su ranking, la vela diaria usada, los valores crudos
 (tendencia, volumen relativo, distancia a 90 días), los sub-puntajes, el puntaje
 final y la **versión de la fórmula** (`PREFILTER_FORMULA_VERSION`; un test con
 una huella obliga a subirla si cambian los límites, el umbral o el tope). Un
 símbolo sin datos se guarda con los números vacíos, nunca con un valor de
 relleno. Se guarda aunque el ciclo termine sin candidatos.
+
+**Símbolos con posición abierta o entrada pendiente (2026-10-26).** El sistema no
+aumenta posiciones: la validación de riesgo rechaza con `SIMBOLO_YA_ABIERTO` cualquier
+entrada sobre un símbolo ocupado. Por eso el ciclo diario ya no lo analiza con IA: lo
+quita de los candidatos **antes** del corte a los 5 mejores (el cupo pasa al siguiente)
+y lo guarda como `DESCARTADO_POR_POSICION_ABIERTA`, con su puntaje y su ranking
+intactos. "Ocupado" = posición `OPEN` de cualquier serie o entrada `PENDING_APPROVAL`
+(`app/repositories/simbolos_ocupados.py`; un test comprueba que coincide con los cupos
+de `build_cupos`). El ciclo horario tampoco lo cuenta como "candidato nuevo". No cambia
+la fórmula ni la versión del pre-filtro (`PREFILTER_FORMULA_VERSION`). Los ciclos
+anteriores no se tocan. Para aplicarlo hay que **recrear el scheduler**:
+`docker compose up -d --force-recreate scheduler`.
 
 Los ciclos anteriores a esta tabla **no se rellenan**: no hay forma honesta de
 saber qué sabía el sistema ese día, y recalcular con los datos de hoy mezclaría
