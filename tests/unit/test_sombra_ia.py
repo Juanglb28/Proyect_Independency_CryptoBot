@@ -95,6 +95,17 @@ class TestUnidadesBase:
         pref = [FilaPrefiltroS1("otro-ciclo", "AAAUSDT", "CANDIDATO", D("60"))]
         assert construir_unidades_base([c], pref, []) == []
 
+    def test_propuestas_antiguas_sin_tier_fuera_del_universo_se_ignoran(self):
+        """Caso real: ciclos anteriores al registro de candidatos tienen propuestas con tier
+        vacío y llamada al Consolidador, pero ningún candidato del pre-filtro."""
+        c = _ciclo(0)
+        antiguas = [PropuestaS1(c.ciclo_id, "AAAUSDT", None, D("48"))]
+        assert construir_unidades_base([c], [], antiguas) == []
+        # y una propuesta sobre un símbolo que NO es candidato ese ciclo tampoco cuenta
+        pref = [FilaPrefiltroS1(c.ciclo_id, "BBBUSDT", "CANDIDATO", D("60"))]
+        (u,) = construir_unidades_base([c], pref, antiguas)
+        assert u.symbol == "BBBUSDT" and u.nivel == NivelIA.NO_INCLUIDO
+
     def test_una_propuesta_con_tier_vacio_sobre_un_candidato_es_inconsistencia(self):
         c = _ciclo(0)
         pref = [FilaPrefiltroS1(c.ciclo_id, "AAAUSDT", "CANDIDATO", D("60"))]

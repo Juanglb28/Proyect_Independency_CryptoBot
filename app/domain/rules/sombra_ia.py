@@ -159,17 +159,20 @@ def construir_unidades_base(
       en el universo y se ignora (no debería existir).
     """
     por_ciclo = {c.ciclo_id: c for c in ciclos}
+    candidatos = {(f.ciclo_id, f.symbol) for f in prefiltro if f.estado == _ESTADO_CANDIDATO}
     mejor: dict[tuple[str, str], tuple[NivelIA, Decimal]] = {}
     for p in propuestas:
-        if p.ciclo_id not in por_ciclo or p.tier == _TIER_OBSERVACION:
-            continue
         clave = (p.ciclo_id, p.symbol)
+        # Solo cuentan propuestas de la IA sobre candidatos del pre-filtro de un ciclo con
+        # Consolidador. Las de ciclos antiguos (anteriores al registro de candidatos, con tier
+        # vacío) quedan fuera del universo y NO se interpretan.
+        if p.ciclo_id not in por_ciclo or clave not in candidatos or p.tier == _TIER_OBSERVACION:
+            continue
         nivel = nivel_de_tier(p.tier)
         actual = mejor.get(clave)
         if actual is None or (nivel, p.puntaje_ponderado) > actual:
             mejor[clave] = (nivel, p.puntaje_ponderado)
 
-    candidatos = {(f.ciclo_id, f.symbol) for f in prefiltro if f.estado == _ESTADO_CANDIDATO}
     unidades: list[UnidadBase] = []
     for f in prefiltro:
         ciclo = por_ciclo.get(f.ciclo_id)
