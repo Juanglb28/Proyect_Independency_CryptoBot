@@ -2439,6 +2439,29 @@ quita la tarea con `... instalar_k1_noche.ps1 -Quitar`. Comprobar:
 **Qué no hace todavía:** K2 (sombra hacia delante), K3 (lectura final) ni una página en la
 interfaz.
 
+## Métrica a la sombra del análisis de IA (S1, 2026-10-29)
+
+Pregunta: entre los candidatos que el pre-filtro entrega a la IA en un mismo ciclo, ¿los que
+el Consolidador **incluye** en sus opciones tienen un desenlace simulado mejor que los que
+**no incluye**? Es un estudio de **sombra** y de **solo lectura**: no abre posiciones, no
+escribe en la base, no llama a la IA y no cambia el score, el pre-filtro ni ninguna regla de
+riesgo. El protocolo está congelado en `docs/protocolo-metrica-sombra-ia.md` (huella SHA-256
+en `data/sombra_ia/protocolo_sha256.txt`; el script se niega a trabajar si el texto cambia).
+
+```powershell
+docker compose run --rm app python -m scripts.estudio_sombra_ia
+```
+
+- **Modo conteo** (mientras no haya 30 días con ciclo pareado, 30 ciclos pareados y 30
+  candidatos incluidos): imprime cuánta muestra hay y cuánto falta. **No lee velas
+  posteriores ni calcula ningún desenlace** (una prueba lo garantiza).
+- **Evaluación**: se corre una sola vez al cumplirse los mínimos (`evaluacion-primaria-*.json`);
+  las corridas siguientes se guardan como `actualizacion-*.json` y no la sustituyen.
+- Limitación declarada: «omitido por el Consolidador» y «excluido por calidad de datos» no se
+  pueden separar hoy (ambos quedan sin propuesta).
+- Código: reglas puras en `app/domain/rules/sombra_ia.py`, desenlaces en
+  `app/experiments/sombra_ia.py`, lectura en `app/repositories/sombra_ia.py`.
+
 ## Tarea diaria programada (Windows)
 
 > **Estado (2026-10-15): tarea DESACTIVADA, reemplazada por el scheduler.** Desde el Paso 11b

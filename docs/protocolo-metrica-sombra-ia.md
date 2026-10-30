@@ -1,6 +1,6 @@
 # Protocolo pre-registrado — S1: métrica a la sombra del análisis de IA (¿acierta la IA al proponer y al descartar?) — v1
 
-- **v1 (BORRADOR)** — 2026-10-29, redactado **antes de calcular ningún desenlace** de esta pregunta. Pasa a *congelado* cuando el usuario lo apruebe; el script de evaluación calculará la huella SHA-256 de este archivo (saltos de línea normalizados), la imprimirá con el informe y se negará a producir resultados si el texto cambió respecto a la huella registrada.
+- **v1** — 2026-10-29, redactado **antes de calcular ningún desenlace** de esta pregunta. **Aprobado por el usuario el 2026-10-29 y congelado.** La huella SHA-256 de este archivo (saltos de línea normalizados) está registrada en `data/sombra_ia/protocolo_sha256.txt`; `scripts/estudio_sombra_ia.py` la imprime con cada informe y se niega a trabajar si el texto cambió.
 
 Cualquier cambio posterior es un experimento NUEVO, no un ajuste de este. Es un estudio de **sombra, solo lectura**: no abre posiciones, no escribe en ninguna tabla, no modifica el score, los prompts, el pre-filtro, las compras ni ninguna regla de riesgo.
 
@@ -29,7 +29,7 @@ Entre los candidatos que el pre-filtro entrega a la IA en un mismo ciclo, ¿los 
 
 - **Decisión:** `started_at` del ciclo. **Entrada:** cierre de la última vela de 1 h cerrada en o antes de esa hora (misma regla que `observaciones_de_simbolo`). Solo velas posteriores a la entrada determinan el desenlace; nada futuro entra a la decisión.
 - **Desenlace:** `retorno_neto` de `simular_salida` con las reglas del motor paper (stop −8 %, 50 % en +12 %, trailing 6 %, 0,1 % por lado), `SIN_FRICCION`, `MAXIMO_PRIMERO`, sin resolvedor de 1 minuto (la lectura de todos los resultados publicados).
-- **Censura (primaria):** una unidad aún abierta al corte de datos se valora a mercado al cierre de la última vela de 1 h disponible (`retorno_marcado_a_mercado`), con el mismo corte para todas. La comparación es emparejada por ciclo, así que ambas partes de cada par tienen la misma antigüedad. **Sensibilidad:** solo unidades con salida resuelta.
+- **Censura (primaria):** una unidad aún abierta al corte de datos se valora a mercado al cierre de la última vela de 1 h **cerrada** disponible en la base al correr el script (`retorno_marcado_a_mercado`), con el mismo corte para todas. La comparación es emparejada por ciclo, así que ambas partes de cada par tienen la misma antigüedad. **Sensibilidad:** solo unidades con salida resuelta.
 
 ## Contraste primario (único)
 
@@ -68,7 +68,7 @@ Cambiar la definición de nivel, el criterio `INCLUIDO`, el universo, la regla d
 
 ## Operación (sin efecto estadístico)
 
-- Script de solo lectura `scripts/estudio_sombra_ia.py` (a escribir tras la aprobación): lee `ciclos_analisis`, `prefiltro_resultados`, `propuestas`, `llamadas_ia` y velas; reutiliza `simular_salida`, `retorno_marcado_a_mercado` y `bootstrap_bloques`. Sin tablas nuevas, sin escrituras, sin red ni IA.
+- Script de solo lectura `scripts/estudio_sombra_ia.py` (transacción READ ONLY): lee `ciclos_analisis`, `prefiltro_resultados`, `propuestas`, `llamadas_ia` y velas; reutiliza `simular_salida`, `retorno_marcado_a_mercado` y `bootstrap_bloques`. Sin tablas nuevas, sin escrituras, sin red ni IA.
 - Cualquier cambio de lo que se guarda (p. ej. una fila por candidato con propuesto/omitido/excluido) es una decisión aparte y no forma parte de este protocolo.
 
 ## Limitaciones declaradas de antemano
@@ -83,4 +83,4 @@ Cambiar la definición de nivel, el criterio `INCLUIDO`, el universo, la regla d
 
 ## Estado
 
-Borrador pendiente de aprobación. Ningún desenlace calculado. Resultados: pendientes.
+Aprobado y congelado el 2026-10-29 (decisiones del usuario: bloque de 3 días, valoración a mercado de las abiertas, mínimos de 30 días / 30 ciclos pareados / 30 incluidos, congelar sin cambios al texto). Implementación: reglas puras en `app/domain/rules/sombra_ia.py`, desenlaces en `app/experiments/sombra_ia.py`, lectura en `app/repositories/sombra_ia.py` y el script `scripts/estudio_sombra_ia.py`. Ningún desenlace calculado. Resultados: pendientes.
