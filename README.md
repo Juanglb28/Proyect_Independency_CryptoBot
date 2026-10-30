@@ -2176,6 +2176,13 @@ scheduler** (`app/orchestration/lifecycle.py`):
    reinició. Pasadas las 4 h el ciclo ya no se recupera solo. Para aplicar el cambio
    hay que **recrear el scheduler**: `docker compose up -d --force-recreate scheduler`.
 
+   **Ciclo horario (2026-10-29).** También se recupera: `CICLO_HORARIO_GRACIA_SEGUNDOS`
+   = 1 h. Se pidió igualarlo a 4 h «o una mejor propuesta»: con `coalesce=True` solo se
+   evalúa la ejecución perdida más reciente, que nunca pasa de 1 h de atraso, así que 1 h
+   y 4 h se comportan igual (tras cualquier suspensión corre UNA vez al despertar, en
+   lugar de esperar al siguiente minuto 5). El `_daily_cycle_lock` evita que un ciclo con
+   IA lanzado por el horario coincida con el diario. Requiere recrear el scheduler.
+
 Los pasos 2-4 corren cada uno en su transacción; si uno falla se registra y el
 arranque sigue (nunca se deja de vigilar las posiciones abiertas). Los avisos se
 envían a Telegram justo después.

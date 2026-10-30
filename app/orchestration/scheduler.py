@@ -145,6 +145,15 @@ se lanzó, sin dejar alerta (causa probable: llegó tarde por más de ese segund
 registro que lo confirme). Con 4 h, si el equipo
 duerme a las 00:05 y despierta hasta 4 h después, el ciclo corre UNA vez al despertar
 (``coalesce=True``). Pasado ese margen sigue sin recuperarse: lo cubre el aviso de ciclo perdido."""
+CICLO_HORARIO_GRACIA_SEGUNDOS = 3600
+"""Margen de recuperación del ciclo horario (minuto 5), decisión del usuario 2026-10-29: pidió
+igualarlo a 4 h «o una mejor propuesta». Con ``coalesce=True`` APScheduler junta todas las
+ejecuciones perdidas en UNA (la más reciente) y solo a esa le aplica el margen; como el job es
+horario, esa ejecución nunca tiene más de 1 h de atraso, así que cualquier margen >= 1 h
+(4 h incluido) se comporta igual: tras una suspensión de cualquier duración corre UNA vez al
+despertar. Se fija en 1 h (el periodo) porque es el mínimo que lo garantiza. Antes (1 s por
+defecto) esperaba al siguiente minuto 5. Si esa ejecución detecta candidatos nuevos y lanza un
+ciclo con IA, el ``_daily_cycle_lock`` evita que corra a la vez que el diario."""
 RECUPERACION_VELAS_RETRASO_SEGUNDOS = 10
 RECUPERACION_VELAS_GRACIA_SEGUNDOS = 600
 """La recuperación de velas vencidas corre una vez, unos segundos después de arrancar
@@ -799,6 +808,7 @@ def start_scheduler() -> None:
         args=[state],
         id="hourly_cycle",
         name="Ciclo horario (ingesta + detección, minuto 5)",
+        misfire_grace_time=CICLO_HORARIO_GRACIA_SEGUNDOS,
     )
 
     # Job 3: Ciclo diario — 00:05 UTC

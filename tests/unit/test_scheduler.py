@@ -952,3 +952,63 @@ class TestMargenDeRecuperacionDelCicloDiario:
         finally:
             sched.shutdown(wait=False)
         assert llamadas == [1]
+
+
+class TestMargenDeRecuperacionDelCicloHorario:
+    """Decisión del 2026-10-29: el ciclo horario también se recupera tras una suspensión.
+    Con coalesce solo cuenta la ejecución perdida MÁS RECIENTE, que nunca pasa de 1 h."""
+
+    def test_el_margen_es_el_periodo_del_job(self):
+        from app.orchestration.scheduler import CICLO_HORARIO_GRACIA_SEGUNDOS
+
+        assert CICLO_HORARIO_GRACIA_SEGUNDOS == 3600
+
+    def test_el_job_horario_se_registra_con_ese_margen(self):
+        import inspect
+
+        from app.orchestration import scheduler
+
+        codigo = inspect.getsource(scheduler.start_scheduler)
+        bloque = codigo.split('id="hourly_cycle"', 1)[1].split("scheduler.add_job(", 1)[0]
+        assert "misfire_grace_time=CICLO_HORARIO_GRACIA_SEGUNDOS" in bloque
+
+    def test_tras_una_suspension_larga_la_ejecucion_a_recuperar_nunca_pasa_de_una_hora(self):
+        """Con 10 h de suspensión hay 10 ejecuciones perdidas; coalesce se queda con la última,
+        y esa tiene menos de 1 h de atraso: por eso 1 h basta (4 h daría lo mismo)."""
+        from apscheduler.schedulers.background import BackgroundScheduler
+
+        from app.orchestration.scheduler import CICLO_HORARIO_GRACIA_SEGUNDOS
+
+        sched = BackgroundScheduler(timezone="UTC", job_defaults={"max_instances": 1, "coalesce": True})
+        sched.start(paused=True)
+        try:
+            ahora = datetime.now(timezone.utc)
+            job = sched.add_job(
+                lambda: None, trigger="cron", minute=5,
+                misfire_grace_time=CICLO_HORARIO_GRACIA_SEGUNDOS,
+                next_run_time=(ahora - timedelta(hours=10)).replace(second=0, microsecond=0),
+            )
+            perdidas = job._get_run_times(ahora)
+            assert len(perdidas) >= 9
+            assert ahora - perdidas[-1] <= timedelta(seconds=CICLO_HORARIO_GRACIA_SEGUNDOS)
+        finally:
+            sched.shutdown(wait=False)
+
+    def test_apscheduler_ejecuta_dentro_del_margen_y_descarta_fuera_de_el(self):
+        from apscheduler.events import EVENT_JOB_EXECUTED, EVENT_JOB_MISSED
+        from apscheduler.executors.base import run_job
+        from apscheduler.schedulers.background import BackgroundScheduler
+
+        from app.orchestration.scheduler import CICLO_HORARIO_GRACIA_SEGUNDOS
+
+        sched = BackgroundScheduler(timezone="UTC", job_defaults={"max_instances": 1, "coalesce": True})
+        sched.start(paused=True)
+        try:
+            job = sched.add_job(
+                lambda: None, trigger="cron", minute=5, misfire_grace_time=CICLO_HORARIO_GRACIA_SEGUNDOS
+            )
+            ahora = datetime.now(timezone.utc)
+            assert run_job(job, "default", [ahora - timedelta(minutes=59)], "test")[0].code == EVENT_JOB_EXECUTED
+            assert run_job(job, "default", [ahora - timedelta(minutes=61)], "test")[0].code == EVENT_JOB_MISSED
+        finally:
+            sched.shutdown(wait=False)
