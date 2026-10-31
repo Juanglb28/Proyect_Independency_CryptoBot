@@ -86,6 +86,35 @@ class AgentCallResult:
     cache_read_input_tokens: int = 0
 
 
+class LlaveIARechazada(Exception):
+    """Anthropic rechazó la llave de API (401 o 403: vencida, revocada, inválida o sin
+    permiso). El mensaje nunca incluye la llave."""
+
+
+def verificar_llave(settings: Settings, *, model: str) -> None:
+    """Llamada MÍNIMA (1 token de salida, ~10 de entrada: una fracción de centavo) para
+    saber si la llave sirve ANTES de gastar minutos de backfill e indicadores en un ciclo.
+
+    - Llave aceptada: devuelve `None`.
+    - 401/403: lanza `LlaveIARechazada`.
+    - Cualquier otro fallo (red, 429, 5xx, saturación) se propaga tal cual: no prueba que
+      la llave esté mal, y quien llama decide. Sin reintentos y con tiempo límite corto.
+
+    No se registra en `llamadas_ia` (el costo es despreciable y no es un agente)."""
+    if not settings.anthropic_api_key:
+        raise LlaveIARechazada("ANTHROPIC_API_KEY no está configurada en el .env")
+    client = anthropic.Anthropic(api_key=settings.anthropic_api_key, max_retries=0, timeout=30.0)
+    try:
+        client.messages.create(model=model, max_tokens=1, messages=[{"role": "user", "content": "ok"}])
+    except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as exc:
+        solicitud = getattr(exc, "request_id", None)
+        raise LlaveIARechazada(
+            f"Anthropic rechazó la llave (HTTP {exc.status_code}"
+            + (f", solicitud {solicitud}" if solicitud else "")
+            + ")"
+        ) from None
+
+
 def call_agent(
     settings: Settings,
     *,

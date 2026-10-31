@@ -297,10 +297,12 @@ class TestEjecutarCicloDiario:
         tope lo sobrescriben con su propio patch)."""
         with patch("app.orchestration.scheduler.verificar_presupuesto_ia", return_value=True) as guardia, \
              patch("app.orchestration.scheduler.verificar_saldo_ia", return_value=True) as saldo, \
+             patch("app.orchestration.scheduler.verificar_llave_ia", return_value=True) as llave, \
              patch("app.orchestration.scheduler.registrar_resumen_ciclo") as resumen, \
              patch("app.orchestration.scheduler.registrar_ciclo_fallido") as fallido:
             self.guardia = guardia
             self.saldo = saldo
+            self.llave = llave
             self.resumen = resumen
             self.fallido = fallido
             yield
@@ -377,6 +379,57 @@ class TestEjecutarCicloDiario:
         self.fallido.assert_not_called()
         assert _daily_cycle_lock.acquire(blocking=False), "el lock debe quedar libre"
         _daily_cycle_lock.release()
+
+    @patch("app.orchestration.scheduler._despachar_alertas")
+    @patch("app.orchestration.scheduler.run_daily_cycle")
+    @patch("app.orchestration.scheduler.calculate_indicators_for_all")
+    @patch("app.orchestration.scheduler.backfill_all")
+    def test_con_la_llave_rechazada_no_inicia_nada_y_avisa(
+        self, mock_backfill, mock_indicators, mock_daily, mock_despacho
+    ):
+        """Incidente del 2026-10-30: la llave venció y el ciclo gastó ~17 min de backfill e
+        indicadores antes de descubrirlo. Ahora se detiene antes de tocar nada."""
+        from app.orchestration.scheduler import _daily_cycle_lock, _ejecutar_ciclo_diario
+
+        self.llave.return_value = False
+        state = _make_state()
+
+        _ejecutar_ciclo_diario(state, trigger="hourly_new_candidates")
+
+        mock_backfill.assert_not_called()
+        mock_indicators.assert_not_called()
+        mock_daily.assert_not_called()
+        mock_despacho.assert_called_once()  # el aviso de la llave se envía por Telegram
+        assert self.llave.call_args.args[0] is state.session_factory
+        assert self.llave.call_args.args[1] is state.settings
+        self.resumen.assert_not_called()
+        self.fallido.assert_not_called()  # no es un ciclo fallido: nunca empezó
+        assert _daily_cycle_lock.acquire(blocking=False), "el lock debe quedar libre"
+        _daily_cycle_lock.release()
+
+    @patch("app.orchestration.scheduler._despachar_alertas")
+    @patch("app.orchestration.scheduler.backfill_all")
+    def test_la_llave_se_verifica_despues_de_tope_y_saldo_y_antes_del_backfill(self, mock_backfill, mock_despacho):
+        from app.orchestration.scheduler import _ejecutar_ciclo_diario
+
+        orden: list[str] = []
+        self.guardia.side_effect = lambda *a, **k: orden.append("tope") or True
+        self.saldo.side_effect = lambda *a, **k: orden.append("saldo") or True
+        self.llave.side_effect = lambda *a, **k: orden.append("llave") or False
+        mock_backfill.side_effect = lambda *a, **k: orden.append("backfill")
+
+        _ejecutar_ciclo_diario(_make_state(), trigger="scheduled_daily_0005")
+
+        assert orden == ["tope", "saldo", "llave"]
+
+    @patch("app.orchestration.scheduler._despachar_alertas")
+    def test_la_llave_solo_se_revisa_si_tope_y_saldo_pasan(self, mock_despacho):
+        from app.orchestration.scheduler import _ejecutar_ciclo_diario
+
+        self.saldo.return_value = False
+        _ejecutar_ciclo_diario(_make_state(), trigger="scheduled_daily_0005")
+
+        self.llave.assert_not_called()
 
     @patch("app.orchestration.scheduler._despachar_alertas")
     def test_el_saldo_solo_se_revisa_si_el_tope_diario_pasa(self, mock_despacho):

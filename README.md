@@ -664,6 +664,31 @@ ANTHROPIC_SALDO_DECLARADO_EN=2026-10-11T17:30:00+00:00   # la hora (UTC) a la qu
   (`docker compose up -d --force-recreate scheduler`; las variables se leen al arrancar).
   Hora UTC actual en PowerShell: `(Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss+00:00")`.
 
+### Verificación previa de la llave de IA (decisión del usuario, 2026-10-30)
+
+El 30/10 la API key venció (se había creado con fecha de expiración). El ciclo diario
+gastó ~17 minutos de backfill e indicadores antes de descubrirlo en la primera llamada de
+IA (`401 invalid x-api-key`), y el ciclo horario lo reintentó cada hora. Ahora, antes de
+empezar un ciclo **automático**, se hace una llamada mínima (1 token de salida, modelo del
+auditor; una fracción de centavo) para comprobar la llave:
+
+- **Aceptada**: el ciclo sigue como siempre.
+- **Rechazada (401/403, o sin llave en el `.env`)**: el ciclo NO arranca (no se crea ni
+  siquiera el ciclo en la base ni se hace el backfill) y llega UN aviso por día UTC por
+  Telegram (`LLAVE_IA_RECHAZADA`) que explica qué hacer. Los reintentos del ciclo
+  horario no repiten el aviso. El aviso nunca incluye la llave.
+- **Cualquier otro fallo** (red caída, límite de uso, caída de Anthropic): el ciclo sigue;
+  no demuestra que la llave esté mal y bloquear por una caída pasajera perdería ciclos válidos.
+- Se revisa DESPUÉS del tope diario y de la guardia de saldo, y antes de tocar nada
+  (`app/orchestration/ai_budget.py::verificar_llave_ia`; la llamada, en
+  `app/ai/client.py::verificar_llave`).
+- **No cubre el ciclo manual** (`scripts/run_daily_cycle.py`): ahí el error 401 sigue saliendo
+  en la primera llamada de IA.
+- **Prevención**: al crear la llave en la consola de Anthropic, elige sin expiración o
+  apunta la fecha. La API no permite consultarla desde el sistema.
+- Al arreglarla: pon la llave nueva en `ANTHROPIC_API_KEY` (`.env`) y recrea el scheduler
+  (`docker compose up -d --force-recreate scheduler`; las variables se leen al arrancar).
+
 ## Segunda ronda: entradas "de mayor riesgo" (decisión del usuario, 2026-10-04)
 
 **Por qué existe.** El ciclo del 2026-10-03 no produjo ninguna propuesta

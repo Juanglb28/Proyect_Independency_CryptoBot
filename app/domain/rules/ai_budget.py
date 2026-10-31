@@ -66,3 +66,21 @@ def mensaje_saldo_ia_insuficiente(dia: date, *, saldo_estimado: Decimal, minimo_
         f"Cuando recargues: pon el saldo real de la consola en ANTHROPIC_SALDO_DECLARADO_USD y la hora en "
         f"ANTHROPIC_SALDO_DECLARADO_EN (.env) y reinicia el scheduler. Es una estimación: puede diferir de la consola."
     )
+
+
+# ── Verificación previa de la LLAVE (decisión del usuario, 2026-10-30) ─────
+#
+# El 30/10 la llave de API venció (se había creado con fecha de expiración) y el
+# ciclo diario gastó ~17 minutos de backfill e indicadores antes de descubrirlo en la
+# primera llamada de IA; el ciclo horario lo reintentó cada hora. Ahora se verifica la
+# llave con una llamada mínima ANTES de empezar. El aviso nunca incluye la llave.
+
+
+def mensaje_llave_ia_rechazada(dia: date, *, detalle: str) -> str:
+    return (
+        f"LLAVE DE IA RECHAZADA ({dia.isoformat()} UTC): {detalle}. "
+        f"No se inician ciclos automáticos con IA hasta que se arregle. El monitor y los stops siguen "
+        f"funcionando (no usan IA). Qué hacer: crea una llave nueva en la consola de Anthropic (revisa su "
+        f"fecha de expiración), ponla en ANTHROPIC_API_KEY en el .env y recrea el scheduler "
+        f"(docker compose up -d --force-recreate scheduler). Un ciclo manual tampoco funcionará hasta entonces."
+    )

@@ -13,15 +13,20 @@ ciegas es peor que perder un ciclo, que se puede lanzar a mano.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.ai.client import LlaveIARechazada, verificar_llave
+from app.ai.models import MODEL_AUDITOR
+from app.config import Settings
 from app.db.session import session_scope
 from app.domain.enums import TipoAlerta
 from app.domain.rules.ai_budget import (
+    mensaje_llave_ia_rechazada,
     mensaje_presupuesto_ia_agotado,
     mensaje_saldo_ia_insuficiente,
     presupuesto_diario_agotado,
@@ -178,6 +183,75 @@ def verificar_saldo_ia(
         "saldo de IA INSUFICIENTE: estimado %s USD, mínimo %s; el ciclo NO se inicia (aviso nuevo: %s)",
         saldo,
         minimo_por_ciclo_usd,
+        creado,
+        extra={"component": _COMPONENT},
+    )
+    return False
+
+
+# ── Verificación previa de la LLAVE (2026-10-30) ───────────────────────────
+
+
+def verificar_llave_ia(
+    session_factory: sessionmaker[Session],
+    settings: Settings,
+    *,
+    now: datetime,
+    verificador: Callable[[Settings], None] | None = None,
+) -> bool:
+    """`True` si se puede iniciar un ciclo automático con IA según la llave.
+
+    - Llave aceptada: `True`.
+    - Rechazada (401/403 o sin configurar): `False` y UN aviso por día UTC (idempotente por
+      `dedup_key`; el ciclo horario que reintenta cada hora no lo repite). No se crea ningún
+      ciclo ni se gasta backfill.
+    - Cualquier otro fallo (red, límite de uso, caída de Anthropic): `True`. No demuestra que
+      la llave esté mal y el ciclo tiene su propio manejo de errores; bloquear aquí por una
+      caída pasajera haría perder ciclos válidos.
+
+    `verificador` existe para las pruebas; por defecto hace la llamada mínima real."""
+    comprobar = verificador or (lambda s: verificar_llave(s, model=MODEL_AUDITOR))
+    try:
+        comprobar(settings)
+    except LlaveIARechazada as exc:
+        detalle = str(exc)
+    except Exception as exc:  # noqa: BLE001 - un fallo pasajero no bloquea, ver el docstring
+        logger.warning(
+            "llave de IA: no se pudo verificar (%s); el ciclo sigue y su manejo de errores decide",
+            type(exc).__name__,
+            extra={"component": _COMPONENT},
+        )
+        return True
+    else:
+        logger.info("llave de IA: aceptada", extra={"component": _COMPONENT})
+        return True
+
+    creado: bool | None = None
+    try:
+        with session_scope(session_factory) as session:
+            dia = inicio_del_dia_utc(now).date()
+            creado = append_alerta(
+                session,
+                AlertaRow(
+                    tipo=TipoAlerta.LLAVE_IA_RECHAZADA,
+                    subject="SISTEMA",
+                    dedup_key=f"llave-ia-rechazada:{dia.isoformat()}",
+                    occurred_at=now,
+                    message=mensaje_llave_ia_rechazada(dia, detalle=detalle),
+                    observed_value=None,
+                    threshold=None,
+                ),
+            )
+    except Exception:  # noqa: BLE001 - la llave está mal igual; el ciclo NO se inicia
+        logger.error(
+            "llave de IA RECHAZADA y no se pudo guardar el aviso; el ciclo NO se inicia",
+            exc_info=True,
+            extra={"component": _COMPONENT},
+        )
+        return False
+    logger.warning(
+        "llave de IA RECHAZADA (%s); el ciclo NO se inicia (aviso nuevo: %s)",
+        detalle,
         creado,
         extra={"component": _COMPONENT},
     )

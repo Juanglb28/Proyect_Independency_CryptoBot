@@ -238,6 +238,12 @@ class TipoAlerta(str, Enum):
     - `SALDO_IA_INSUFICIENTE`: el saldo estimado de Anthropic no alcanza para un
       ciclo; no se inician ciclos automáticos con IA. Un aviso por día UTC.
 
+    Y uno de la verificación previa de la llave de IA (decisión del 2026-10-30, tras el
+    incidente de la llave vencida):
+    - `LLAVE_IA_RECHAZADA`: Anthropic rechazó la llave (401/403: vencida, revocada o
+      inválida) al verificarla antes de iniciar un ciclo; no se inician ciclos automáticos
+      con IA. Un aviso por día UTC. No afecta al monitor ni a los stops.
+
     Y dos del resumen de cada ciclo de análisis (decisión del 2026-10-11):
     - `RESUMEN_CICLO`: el ciclo terminó; cuenta candidatos, propuestas, costo y
       gasto de IA del día. Uno por ciclo. Solo informa.
@@ -262,6 +268,7 @@ class TipoAlerta(str, Enum):
     CICLO_DIARIO_PERDIDO = "CICLO_DIARIO_PERDIDO"
     PRESUPUESTO_IA_AGOTADO = "PRESUPUESTO_IA_AGOTADO"
     SALDO_IA_INSUFICIENTE = "SALDO_IA_INSUFICIENTE"
+    LLAVE_IA_RECHAZADA = "LLAVE_IA_RECHAZADA"
     RESUMEN_CICLO = "RESUMEN_CICLO"
     CICLO_FALLIDO = "CICLO_FALLIDO"
     POSICION_ABIERTA = "POSICION_ABIERTA"

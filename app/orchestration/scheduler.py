@@ -111,7 +111,7 @@ from app.notifications.deadman import ping_deadman
 from app.notifications.dispatcher import dispatch_pending_alerts
 from app.notifications.telegram import Sender, build_sender
 from app.domain.rules.cycle_summary import OrigenCiclo
-from app.orchestration.ai_budget import verificar_presupuesto_ia, verificar_saldo_ia
+from app.orchestration.ai_budget import verificar_llave_ia, verificar_presupuesto_ia, verificar_saldo_ia
 from app.orchestration.cycle_summary import registrar_ciclo_fallido, registrar_resumen_ciclo
 from app.orchestration.daily_cycle import run_daily_cycle
 from app.orchestration.entry_opening import abrir_entradas_del_ciclo
@@ -474,6 +474,18 @@ def _ejecutar_ciclo_diario(state: _SharedState, *, trigger: str) -> None:
             _despachar_alertas(state, now)
             logger.warning(
                 "Ciclo diario: NO se inicia por saldo de IA insuficiente (trigger=%s)",
+                trigger,
+                extra={"component": _COMPONENT, "trigger": trigger},
+            )
+            return
+
+        # Verificación previa de la llave de IA (2026-10-30): una llamada mínima ANTES del
+        # backfill. El 30/10 la llave venció y el ciclo gastó ~17 min antes de descubrirlo;
+        # el horario lo reintentaba cada hora. Con la llave rechazada no se crea ningún ciclo.
+        if not verificar_llave_ia(state.session_factory, state.settings, now=now):
+            _despachar_alertas(state, now)
+            logger.warning(
+                "Ciclo diario: NO se inicia porque Anthropic rechazó la llave (trigger=%s)",
                 trigger,
                 extra={"component": _COMPONENT, "trigger": trigger},
             )
