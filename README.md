@@ -1738,6 +1738,21 @@ Remove-Item Env:SOURCE_DATABASE_URL, Env:DEST_DATABASE_URL, Env:DATABASE_URL
 
 #### Sincronización diaria sin ventana (20:00 hora de Windows)
 
+> **SUSPENDIDA el 2026-11-10 (costo).** La memoria de la base en Railway (~2,5–3 GB
+> permanentes, picos de 5–6 GB) duplicó la factura mensual (de 20 a 40,69 USD). Se
+> desactivó la tarea (`Disable-ScheduledTask -TaskName CryptoTradingPlatform_SyncRailway`)
+> y se quitó el despliegue de `timescaledb` en Railway (el volumen `timescaledb-data`
+> se conserva). La base local es ahora la única copia. **Para reactivar:** Redeploy del
+> servicio en el panel de Railway → `powershell -ExecutionPolicy Bypass -File scripts\sync_railway.ps1`
+> (copia incremental, ~15 min) → `Enable-ScheduledTask -TaskName CryptoTradingPlatform_SyncRailway`.
+> Mientras esté apagada, `ui-railway` no funciona. Decisión en `claude/decisiones-suspension-railway.md`.
+> **Respaldo local (2026-11-10):** `pg_dump -Fc` de la base (1,4 GB → 110 MB) guardado en
+> `F:\Respaldos_Trading\crypto_trading_20261110_2148.dump`, con SHA-256 verificado contra el
+> original y `pg_restore --list` correcto. Para repetirlo: `docker exec crypto_trading_postgres pg_dump -U crypto -d crypto_trading -Fc -f /tmp/<archivo>.dump`
+> y luego `docker cp` hacia F:\ (se puede hacer con el scheduler encendido). Restaurar en una base
+> TimescaleDB nueva exige `SELECT timescaledb_pre_restore();` antes y `SELECT timescaledb_post_restore();`
+> después del `pg_restore`. Ver «Respaldo local de la base» más abajo (scripts de respaldo programado y prueba de restauración).
+
 Una sola vez, en PowerShell, en la carpeta del proyecto:
 
 ```powershell
@@ -1770,6 +1785,41 @@ Tests: `tests/integration/test_copy_database.py` (primera sincronización con
 identidades, simulación, re-ejecución idempotente, UPSERT propaga cambios de filas
 mutables, velas solo cerradas, migraciones distintas, fallo a mitad = nada escrito).
 Decisión en `claude/decisiones-copia-incremental-railway.md`.
+
+## Respaldo local de la base (2026-11-10)
+
+Desde que se suspendió la copia en Railway (ver arriba), el respaldo externo es un `pg_dump`
+de la base local guardado en otra unidad. Solo LEE la base: se puede correr con el scheduler
+encendido.
+
+- **A mano:** `powershell -ExecutionPolicy Bypass -File scripts\respaldo_local.ps1`
+  (opciones: `-Destino "F:\Respaldos_Trading"`, `-Conservar 8`). Hace `pg_dump -Fc` dentro del
+  contenedor, lo copia al destino como `.partial`, compara el SHA-256 con el original, comprueba
+  que `pg_restore --list` lo lee y solo entonces lo renombra a `crypto_trading_<fecha>_<hora>.dump`.
+  Conserva los 8 más recientes (rota solo archivos `crypto_trading_*.dump` de esa carpeta). Si
+  falla (unidad F: desconectada, Docker, hash distinto) no deja un `.dump` a medias, avisa UNA vez
+  por Telegram y termina con código 1. Registro: `logs\respaldo_local_<fecha>.log`; éxito:
+  `logs\respaldo_local_ultimo_ok.txt`.
+- **Programado (una sola vez):** `powershell -ExecutionPolicy Bypass -File scripts\instalar_respaldo_local.ps1`
+  registra `CryptoTradingPlatform_RespaldoLocal`: domingo 21:00 (hora de Windows), sin ventana, y
+  se pone al día si el equipo estaba apagado (`-Dia`, `-Hora`, `-Quitar`). No guarda contraseñas.
+  Comprobar: `(Get-ScheduledTaskInfo -TaskName CryptoTradingPlatform_RespaldoLocal).LastTaskResult`
+  (0 = bien) y `Get-Content logs\respaldo_local_ultimo_ok.txt`.
+- **Probar que sirve:** `powershell -ExecutionPolicy Bypass -File scripts\probar_restauracion.ps1`
+  restaura el último respaldo en una base TEMPORAL `restore_test` (receta TimescaleDB:
+  `CREATE EXTENSION` → `timescaledb_pre_restore()` → `pg_restore` → `timescaledb_post_restore()`),
+  compara las filas de cada tabla con la base viva (solo lectura) y borra `restore_test`. Falla si
+  una tabla falta, si la restaurada tiene MÁS filas que la viva o está vacía, o si cambia el
+  número de hipertablas; las diferencias a favor de la viva (siguió escribiendo) se muestran y se
+  aceptan. La base real nunca se escribe.
+- **Restaurar de verdad** en una base nueva: crear la base, `CREATE EXTENSION timescaledb;`,
+  `SELECT timescaledb_pre_restore();`, `pg_restore -U crypto -d <base> --no-owner <archivo>`,
+  `SELECT timescaledb_post_restore();`.
+- **Verificado el 2026-11-10:** `respaldo_local.ps1` terminó con código 0 (SHA-256 verificado,
+  104,6 MB) y `probar_restauracion.ps1` terminó con «RESTAURACION VERIFICADA: todas las tablas e
+  hipertablas coinciden». El contenido de los scripts se vigila además con
+  `tests/unit/test_launcher_files.py` (incluye una prueba contra `"$variable: texto"`, error de
+  PowerShell encontrado en la primera corrida).
 
 ## Avisos por Telegram (Paso 11a-1, 2026-10-07)
 
