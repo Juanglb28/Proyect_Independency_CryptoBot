@@ -2544,6 +2544,26 @@ docker compose run --rm app python -m scripts.estudio_sombra_ia
 - Código: reglas puras en `app/domain/rules/sombra_ia.py`, desenlaces en
   `app/experiments/sombra_ia.py`, lectura en `app/repositories/sombra_ia.py`.
 
+
+## Estudio D1: distancia a la media de 200 periodos (4 h) en BTCUSDT (2026-11-17)
+
+Pregunta del usuario: ¿el precio de BTC oscila de forma acotada alrededor de la media de 200 periodos de 4 h (hasta ~+19 % por encima y ~−25 % por debajo), y estar en un extremo anticipa algo? **Estudio exploratorio de solo lectura** con protocolo pre-registrado y congelado (`docs/protocolo-distancia-ma200-4h.md`, v1; huella en `data/distancia_ma200/protocolo_sha256.txt`). **No toca el score, el pre-filtro, los prompts ni ninguna regla de riesgo**; incorporar la distancia como indicador exigiría una enmienda nueva.
+
+- **Datos:** velas de 1 h cerradas de BTCUSDT agrupadas a 4 h (bloques UTC); un bloque con una hora faltante no existe y se cuenta. SMA primaria y EMA de comprobación, desde la vela 600 de cada tramo continuo.
+- **Parte A (descripción):** distribución de la distancia (total y por año), cuántas veces y cuándo se superaron +19 % y −25 %, y qué fracción de las ventanas móviles de 365 días no contiene ninguna ruptura.
+- **Parte B (predicción):** percentil móvil con datos solo pasados (ventana creciente, calentada de 1.080 velas); colas ≤ 5 y ≥ 95 frente al centro; retorno bruto a 18 velas (3 días) como contraste primario (hipótesis de reversión a la media), 6 y 42 velas, EMA, mitades y umbrales fijos como secundarios exploratorios. IC95 por bootstrap de bloques de 14 días (1.000 iteraciones, semilla 20261005); mínimo de 10 episodios por cola.
+- **Controles de validez:** la vela de 4 h agregada debe coincidir exactamente con la de 4 h guardada; sin información futura (pruebas que truncan y alteran las velas posteriores).
+
+```powershell
+docker compose run --rm app python -m scripts.estudio_distancia_ma200 --solo-contar   # cobertura y control; sin distancias ni retornos
+docker compose run --rm app python -m scripts.estudio_distancia_ma200                  # evaluación
+```
+
+Solo lee (transacción READ ONLY), sin IA ni red. La primera evaluación se guarda como `evaluacion-primaria-*.json` y las siguientes como `actualizacion-*.json`. Código de salida 2 si el control de agregación falla o no hay datos; 3 si el protocolo cambió. Pruebas: `tests/unit/test_distancia_ma.py` y `tests/unit/test_estudio_distancia_ma200.py`. Calibración informal con 30 paseos aleatorios sintéticos: 4 de 60 contrastes primarios salieron «en la dirección esperada» por azar (≈ 6,7 % frente al 2,5 % nominal), así que el intervalo es algo optimista; es una de las cautelas del protocolo.
+
+
+**Resultado (evaluación primaria del 2026-11-17, `data/distancia_ma200/evaluacion-primaria-20261117-1709.json`).** Control de agregación cumplido (4.734 de 4.734 velas). 11.168 velas de 4 h (2021-10-13 → 2026-11-17), 9.970 observaciones elegibles, 8.890 clasificables. **Parte A:** la distancia a la SMA 200 de 4 h tuvo P5 −14,4 % y P95 +16,4 % (mín −36,3 %, máx +33,6 %); superó +19 % en el 3,4 % de las velas (11 episodios) y bajó de −25 % en el 0,5 % (3 episodios: mayo y junio de 2022 y 5-6 de febrero de 2026); solo el 5,2 % de las ventanas móviles de un año no contiene ninguna ruptura de [−25 %, +19 %] (la ventana limpia fue del 26/11/2024 al 4/2/2026); el P95 anual varió entre +9,9 % (2022) y +24,9 % (2024). **Parte B:** los dos contrastes primarios (SMA, retorno a 3 días) dieron `SIN_EVIDENCIA` (cola baja +0,06 pp [−1,35; +2,63]; cola alta +1,05 pp [−0,12; +2,32], signo contrario a la hipótesis de reversión), con 11 y 12 episodios. Los secundarios son exploratorios: dos con EMA rozaron `EN_CONTRA` (límite inferior +0,07 y +0,01 pp) y los umbrales fijos y las mitades no alcanzan los 10 episodios. Lectura completa en `claude/resultados-distancia-ma200-4h.md` del proyecto. No se cambió nada de la plataforma.
+
 ## Tarea diaria programada (Windows)
 
 > **Estado (2026-10-15): tarea DESACTIVADA, reemplazada por el scheduler.** Desde el Paso 11b
